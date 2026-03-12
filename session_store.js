@@ -84,7 +84,6 @@ class SessionStore {
             );
         `);
 
-        // Safe migrations for existing databases
         const safeMigrations = [
             "ALTER TABLE sessions ADD COLUMN thread_open INTEGER DEFAULT 1",
             "ALTER TABLE sessions ADD COLUMN subscribers TEXT DEFAULT '[]'",
@@ -100,8 +99,6 @@ class SessionStore {
         }
         try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_owner ON sessions(owner_id)'); } catch (_) { }
     }
-
-    // ── Sessions ───────────────────────────────────────────────
 
     createSession(id, userPhone, task, claudeSessionId, workingDir, ownerId = null, model = 'opus') {
         this.db.prepare(
@@ -124,7 +121,6 @@ class SessionStore {
     }
 
     getCurrentThread(userPhone) {
-        // Find the most recently active open thread owned by this phone
         const phoneParam = String(userPhone);
         return this.db.prepare(
             `SELECT * FROM sessions
@@ -163,7 +159,6 @@ class SessionStore {
     }
 
     getSessionsForUser(userId, limit = 20, offset = 0) {
-        // Returns ALL sessions for logged-in users (any role), with is_mine flag
         return this.db.prepare(
             `SELECT s.*,
                     u.display_name as owner_name,
@@ -190,10 +185,9 @@ class SessionStore {
     }
 
     setSessionStatus(id, status) {
-        this.db.prepare(
-            'UPDATE sessions SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?'
-        ).run(status, id);
+        this.db.prepare('UPDATE sessions SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(status, id);
     }
+
     closeThreadsForPhone(userPhone) {
         const phoneParam = String(userPhone);
         const likeParam = `%"${phoneParam}"%`;
@@ -203,50 +197,32 @@ class SessionStore {
         ).run(phoneParam, likeParam);
     }
 
-    closeThread(userPhone) {
-        this.closeThreadsForPhone(userPhone);
-    }
+    closeThread(userPhone) { this.closeThreadsForPhone(userPhone); }
 
     cleanOrphanedSessions() {
-        return this.db.prepare(
-            `UPDATE sessions SET status = 'stopped' WHERE status = 'running'`
-        ).run().changes;
+        return this.db.prepare(`UPDATE sessions SET status = 'stopped' WHERE status = 'running'`).run().changes;
     }
 
     incrementCost(id, delta) {
-        this.db.prepare(
-            'UPDATE sessions SET cost_usd = cost_usd + ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?'
-        ).run(delta, id);
+        this.db.prepare('UPDATE sessions SET cost_usd = cost_usd + ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(delta, id);
     }
 
-    // ── Messages ───────────────────────────────────────────────
-
     addMessage(sessionId, role, content) {
-        this.db.prepare(
-            'INSERT INTO messages (session_id, role, content) VALUES (?, ?, ?)'
-        ).run(sessionId, role, content);
+        this.db.prepare('INSERT INTO messages (session_id, role, content) VALUES (?, ?, ?)').run(sessionId, role, content);
     }
 
     upsertLastAssistantMessage(sessionId, content) {
-        const lastMsg = this.db.prepare(
-            'SELECT id, role FROM messages WHERE session_id = ? ORDER BY timestamp DESC LIMIT 1'
-        ).get(sessionId);
+        const lastMsg = this.db.prepare('SELECT id, role FROM messages WHERE session_id = ? ORDER BY timestamp DESC LIMIT 1').get(sessionId);
         if (lastMsg && lastMsg.role === 'assistant') {
-            this.db.prepare(
-                'UPDATE messages SET content = ?, timestamp = CURRENT_TIMESTAMP WHERE id = ?'
-            ).run(content, lastMsg.id);
+            this.db.prepare('UPDATE messages SET content = ?, timestamp = CURRENT_TIMESTAMP WHERE id = ?').run(content, lastMsg.id);
         } else {
             this.addMessage(sessionId, 'assistant', content);
         }
     }
 
     getMessages(sessionId, limit = 20) {
-        return this.db.prepare(
-            'SELECT * FROM messages WHERE session_id = ? ORDER BY timestamp DESC LIMIT ?'
-        ).all(sessionId, limit).reverse();
+        return this.db.prepare('SELECT * FROM messages WHERE session_id = ? ORDER BY timestamp DESC LIMIT ?').all(sessionId, limit).reverse();
     }
-
-    // ── Allowed Phones ────────────────────────────────────────
 
     getAllowedPhones() {
         return this.db.prepare(
@@ -261,9 +237,7 @@ class SessionStore {
     }
 
     addAllowedPhone(phone, label = '', userId = null) {
-        this.db.prepare(
-            'INSERT OR REPLACE INTO allowed_phones (phone, label, user_id) VALUES (?, ?, ?)'
-        ).run(String(phone), label, userId);
+        this.db.prepare('INSERT OR REPLACE INTO allowed_phones (phone, label, user_id) VALUES (?, ?, ?)').run(String(phone), label, userId);
     }
 
     removeAllowedPhone(phone) {
@@ -275,11 +249,6 @@ class SessionStore {
         for (const phone of phones) insert.run(String(phone).trim(), 'seed');
     }
 
-    // ── Users ─────────────────────────────────────────────────
-
-    /**
-     * Create a user. passwordHash should already be hashed (SHA-256 hex).
-     */
     createUser({ email, phone, displayName, role = 'developer', isAdmin = 0, passwordHash = null, createdBy = null }) {
         const id = crypto.randomUUID();
         this.db.prepare(
@@ -291,25 +260,11 @@ class SessionStore {
         return this.getUserById(id);
     }
 
-    getUserById(id) {
-        return this.db.prepare('SELECT * FROM users WHERE id = ?').get(id);
-    }
-
-    getUserByEmail(email) {
-        return this.db.prepare('SELECT * FROM users WHERE email = ?').get(email?.toLowerCase().trim());
-    }
-
-    getUserByPhone(phone) {
-        return this.db.prepare('SELECT * FROM users WHERE phone = ?').get(String(phone));
-    }
-
-    updateUserPassword(userId, passwordHash) {
-        this.db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(passwordHash, userId);
-    }
-
-    deleteUser(userId) {
-        this.db.prepare('DELETE FROM users WHERE id = ?').run(userId);
-    }
+    getUserById(id) { return this.db.prepare('SELECT * FROM users WHERE id = ?').get(id); }
+    getUserByEmail(email) { return this.db.prepare('SELECT * FROM users WHERE email = ?').get(email?.toLowerCase().trim()); }
+    getUserByPhone(phone) { return this.db.prepare('SELECT * FROM users WHERE phone = ?').get(String(phone)); }
+    updateUserPassword(userId, passwordHash) { this.db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(passwordHash, userId); }
+    deleteUser(userId) { this.db.prepare('DELETE FROM users WHERE id = ?').run(userId); }
 
     linkPhoneToUser(userId, phone) {
         this.db.prepare('UPDATE users SET phone = NULL WHERE phone = ? AND id != ?').run(String(phone), userId);
@@ -327,16 +282,8 @@ class SessionStore {
         ).all();
     }
 
-    getAdmins() {
-        return this.db.prepare('SELECT * FROM users WHERE is_admin = 1').all();
-    }
+    getAdmins() { return this.db.prepare('SELECT * FROM users WHERE is_admin = 1').all(); }
 
-    // ── Password Auth ─────────────────────────────────────────
-
-    /**
-     * Hash a plain-text password using SHA-256. 
-     * For production consider bcrypt; SHA-256+salt is used here for zero-deps simplicity.
-     */
     static hashPassword(plain) {
         const salt = 'wa-engineer-salt-2025';
         return crypto.createHash('sha256').update(salt + plain).digest('hex');
@@ -350,24 +297,16 @@ class SessionStore {
         return user;
     }
 
-    // ── Session Collaborators ─────────────────────────────────
-
     addCollaborator(sessionId, userId) {
-        this.db.prepare(
-            'INSERT OR IGNORE INTO session_collaborators (session_id, user_id) VALUES (?, ?)'
-        ).run(sessionId, userId);
+        this.db.prepare('INSERT OR IGNORE INTO session_collaborators (session_id, user_id) VALUES (?, ?)').run(sessionId, userId);
     }
 
     removeCollaborator(sessionId, userId) {
-        this.db.prepare(
-            'DELETE FROM session_collaborators WHERE session_id = ? AND user_id = ?'
-        ).run(sessionId, userId);
+        this.db.prepare('DELETE FROM session_collaborators WHERE session_id = ? AND user_id = ?').run(sessionId, userId);
     }
 
     isCollaborator(sessionId, userId) {
-        return !!this.db.prepare(
-            'SELECT 1 FROM session_collaborators WHERE session_id = ? AND user_id = ?'
-        ).get(sessionId, userId);
+        return !!this.db.prepare('SELECT 1 FROM session_collaborators WHERE session_id = ? AND user_id = ?').get(sessionId, userId);
     }
 
     getCollaborators(sessionId) {
@@ -377,8 +316,6 @@ class SessionStore {
              WHERE sc.session_id = ?`
         ).all(sessionId);
     }
-
-    // ── Access Requests (Admin Notifications) ─────────────────
 
     createAccessRequest(sessionId, requesterId, requesterName, requesterEmail, note = '') {
         const id = crypto.randomUUID();
@@ -400,27 +337,19 @@ class SessionStore {
     }
 
     countPendingRequests() {
-        return this.db.prepare(
-            "SELECT COUNT(*) as count FROM access_requests WHERE status = 'pending'"
-        ).get().count;
+        return this.db.prepare("SELECT COUNT(*) as count FROM access_requests WHERE status = 'pending'").get().count;
     }
 
     resolveAccessRequest(requestId, resolvedBy, approve = true) {
         const status = approve ? 'approved' : 'rejected';
-        this.db.prepare(
-            `UPDATE access_requests SET status = ?, resolved_at = CURRENT_TIMESTAMP, resolved_by = ? WHERE id = ?`
-        ).run(status, resolvedBy, requestId);
+        this.db.prepare(`UPDATE access_requests SET status = ?, resolved_at = CURRENT_TIMESTAMP, resolved_by = ? WHERE id = ?`).run(status, resolvedBy, requestId);
         if (approve) {
             const req = this.db.prepare('SELECT * FROM access_requests WHERE id = ?').get(requestId);
             if (req) this.addCollaborator(req.session_id, req.requester_id);
         }
     }
 
-    // ── System Prompts ────────────────────────────────────────
-
-    getSystemPrompt(key) {
-        return this.db.prepare('SELECT * FROM system_prompts WHERE key = ?').get(key);
-    }
+    getSystemPrompt(key) { return this.db.prepare('SELECT * FROM system_prompts WHERE key = ?').get(key); }
 
     setSystemPrompt(key, prompt, updatedBy = null) {
         this.db.prepare(
@@ -430,9 +359,7 @@ class SessionStore {
         ).run(key, prompt, updatedBy, prompt, updatedBy);
     }
 
-    getAllSystemPrompts() {
-        return this.db.prepare('SELECT * FROM system_prompts ORDER BY key').all();
-    }
+    getAllSystemPrompts() { return this.db.prepare('SELECT * FROM system_prompts ORDER BY key').all(); }
 
     getSessionStore() { return this.db; }
 }
