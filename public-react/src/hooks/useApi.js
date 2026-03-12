@@ -4,8 +4,11 @@ import { useState, useEffect, useCallback } from 'react';
 // Internal helpers
 // ---------------------------------------------------------------------------
 
+// When served behind nginx at /sessions/, API calls need the prefix
+const API_BASE = window.location.pathname.startsWith('/sessions') ? '/sessions' : '';
+
 async function apiFetch(url, opts = {}) {
-  const res = await fetch(url, { credentials: 'include', ...opts });
+  const res = await fetch(API_BASE + url, { credentials: 'include', ...opts });
   if (!res.ok) {
     const body = await res.json().catch(() => ({ message: res.statusText }));
     throw new Error(body.message || `Request failed: ${res.status}`);

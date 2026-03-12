@@ -2,13 +2,15 @@ import { createContext, useContext, useState, useEffect, useCallback } from 'rea
 
 const AuthContext = createContext(null);
 
+const API_BASE = window.location.pathname.startsWith('/sessions') ? '/sessions' : '';
+
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
 
   const fetchMe = useCallback(async () => {
     try {
-      const res = await fetch('/api/me', { credentials: 'include' });
+      const res = await fetch(API_BASE + '/api/me', { credentials: 'include' });
       if (res.status === 401) {
         setUser(null);
         setLoading(false);
@@ -30,15 +32,15 @@ export function AuthProvider({ children }) {
   }, [fetchMe]);
 
   const login = useCallback(async (email, password) => {
-    const res = await fetch('/api/auth/login', {
+    const res = await fetch(API_BASE + '/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
       body: JSON.stringify({ email, password }),
     });
     if (!res.ok) {
-      const err = await res.json().catch(() => ({ message: 'Login failed' }));
-      throw new Error(err.message || 'Login failed');
+      const err = await res.json().catch(() => ({ error: 'Login failed' }));
+      throw new Error(err.error || err.message || 'Login failed');
     }
     const data = await res.json();
     setUser(data.user || data);
@@ -47,7 +49,7 @@ export function AuthProvider({ children }) {
 
   const logout = useCallback(async () => {
     try {
-      await fetch('/api/auth/logout', {
+      await fetch(API_BASE + '/api/auth/logout', {
         method: 'POST',
         credentials: 'include',
       });
