@@ -115,6 +115,6 @@ export function requireAdmin(req, res, next) {
 }
 
 function _deny(req, res) {
-    if (req.headers.accept?.includes('text/html')) return res.redirect(config.BASE_PATH + '/login.html');
+    if (req.headers.accept?.includes('text/html')) return res.redirect(config.BASE_PATH + '/');
     return res.status(401).json({ error: 'Unauthorized. Please log in.' });
 }

@@ -1,7 +1,9 @@
 import { useState } from 'react';
+import { useAuth } from '../context/AuthContext';
 import { Terminal, Lock, Mail, ArrowRight } from 'lucide-react';
 
 export default function Login() {
+  const { login } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -13,20 +15,7 @@ export default function Login() {
     setLoading(true);
 
     try {
-      const res = await fetch('/api/auth/login', {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
-      });
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(data.message || 'Invalid credentials');
-      }
-
-      window.location.href = '/';
+      await login(email, password);
     } catch (err) {
       setError(err.message);
     } finally {

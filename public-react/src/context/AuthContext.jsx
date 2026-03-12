@@ -11,7 +11,7 @@ export function AuthProvider({ children }) {
       const res = await fetch('/api/me', { credentials: 'include' });
       if (res.status === 401) {
         setUser(null);
-        window.location.href = '/login.html';
+        setLoading(false);
         return;
       }
       if (!res.ok) throw new Error('Failed to fetch user');
@@ -20,7 +20,6 @@ export function AuthProvider({ children }) {
     } catch (err) {
       console.error('Auth check failed:', err);
       setUser(null);
-      window.location.href = '/login.html';
     } finally {
       setLoading(false);
     }
@@ -56,7 +55,6 @@ export function AuthProvider({ children }) {
       console.error('Logout error:', err);
     }
     setUser(null);
-    window.location.href = '/login.html';
   }, []);
 
   return (

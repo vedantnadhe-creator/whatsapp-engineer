@@ -3,10 +3,14 @@ import { AuthProvider, useAuth } from './context/AuthContext'
 import { useSessions, useStats, useSessionMessages, useModels, usePhones, useUsers, useCron, useAccessRequests, startSession, sendMessage, stopSession, uploadFile, getClaudePrompt, saveClaudePrompt } from './hooks/useApi'
 import Sidebar from './components/Sidebar'
 import Workspace from './components/Workspace'
+import Login from './pages/Login'
 import { AdminModal, UsersPanel, PhonesPanel, PromptsPanel, CronPanel, AccessRequestsPanel } from './components/AdminPanels'
 
 function Dashboard() {
-  const { user, logout } = useAuth()
+  const { user, loading, logout } = useAuth()
+
+  if (loading) return <div className="h-screen flex items-center justify-center bg-bg text-text-secondary font-mono text-sm">Loading...</div>
+  if (!user) return <Login />
   const [page, setPage] = useState(1)
   const [activeSession, setActiveSession] = useState(null)
   const [isNewSession, setIsNewSession] = useState(true)
