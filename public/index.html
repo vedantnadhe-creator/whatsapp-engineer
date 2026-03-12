@@ -1,0 +1,2291 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OliBot Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script>
+        tailwind.config = {
+            darkMode: ['selector', '[data-theme="dark"]'],
+        }
+    </script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&family=Open+Sans:wght@400;500;600&display=swap');
+
+        :root {
+            --pl-primary: #3249d7;
+            --pl-primary-light: #6366f1;
+            --pl-primary-dark: #1a1f71;
+            --pl-accent: #818cf8;
+            --pl-gradient: linear-gradient(135deg, #1a1f71 0%, #3249d7 40%, #6366f1 70%, #818cf8 100%);
+        }
+
+        body {
+            font-family: 'Open Sans', sans-serif;
+            overflow: hidden;
+        }
+
+        h1,
+        h2,
+        h3,
+        h4,
+        h5,
+        h6 {
+            font-family: 'Poppins', sans-serif;
+        }
+
+        /* Dark theme */
+        [data-theme="dark"] body {
+            background-color: #0c1029;
+            color: #e2e8f0;
+        }
+
+        /* Light theme */
+        [data-theme="light"] body {
+            background-color: #f5f7fa;
+            color: #1e293b;
+        }
+
+        .bg-glass {
+            backdrop-filter: blur(10px);
+        }
+
+        /* Markdown Styles */
+        .markdown-body {
+            font-family: 'Open Sans', sans-serif;
+            font-size: 14px;
+            line-height: 1.6;
+        }
+
+        [data-theme="dark"] .markdown-body {
+            color: #cbd5e1;
+        }
+
+        [data-theme="light"] .markdown-body {
+            color: #334155;
+        }
+
+        .markdown-body h1,
+        .markdown-body h2,
+        .markdown-body h3 {
+            font-family: 'Poppins', sans-serif;
+            font-weight: 600;
+            margin-top: 1em;
+            margin-bottom: 0.5em;
+        }
+
+        [data-theme="dark"] .markdown-body h1,
+        [data-theme="dark"] .markdown-body h2,
+        [data-theme="dark"] .markdown-body h3 {
+            color: #f1f5f9;
+        }
+
+        [data-theme="light"] .markdown-body h1,
+        [data-theme="light"] .markdown-body h2,
+        [data-theme="light"] .markdown-body h3 {
+            color: #0f172a;
+        }
+
+        .markdown-body p {
+            margin-bottom: 0.75em;
+        }
+
+        .markdown-body ul {
+            list-style-type: disc;
+            padding-left: 1.5em;
+            margin-bottom: 0.75em;
+        }
+
+        .markdown-body ol {
+            list-style-type: decimal;
+            padding-left: 1.5em;
+            margin-bottom: 0.75em;
+        }
+
+        .markdown-body pre {
+            border-radius: 6px;
+            padding: 12px;
+            overflow-x: auto;
+            margin-top: 0.5em;
+            margin-bottom: 1em;
+        }
+
+        [data-theme="dark"] .markdown-body pre {
+            background-color: #0d1117;
+            border: 1px solid #1e3a5f;
+        }
+
+        [data-theme="light"] .markdown-body pre {
+            background-color: #f1f5f9;
+            border: 1px solid #cbd5e1;
+        }
+
+        .markdown-body code {
+            padding: 0.2em 0.4em;
+            border-radius: 4px;
+            font-size: 0.9em;
+            font-family: monospace;
+        }
+
+        [data-theme="dark"] .markdown-body code {
+            background-color: rgba(50, 73, 215, 0.15);
+            color: #818cf8;
+        }
+
+        [data-theme="light"] .markdown-body code {
+            background-color: rgba(50, 73, 215, 0.08);
+            color: #3249d7;
+        }
+
+        .markdown-body pre code {
+            background-color: transparent;
+            padding: 0;
+        }
+
+        [data-theme="dark"] .markdown-body pre code {
+            color: #e2e8f0;
+        }
+
+        [data-theme="light"] .markdown-body pre code {
+            color: #334155;
+        }
+
+        .markdown-body blockquote {
+            border-left: 4px solid var(--pl-primary);
+            padding-left: 1em;
+            margin-bottom: 0.75em;
+            font-style: italic;
+        }
+
+        [data-theme="dark"] .markdown-body blockquote {
+            color: #94a3b8;
+        }
+
+        [data-theme="light"] .markdown-body blockquote {
+            color: #64748b;
+        }
+
+        /* Custom Scrollbars */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+
+        [data-theme="dark"] ::-webkit-scrollbar-track {
+            background: rgba(0, 0, 0, 0.2);
+        }
+
+        [data-theme="light"] ::-webkit-scrollbar-track {
+            background: rgba(0, 0, 0, 0.05);
+        }
+
+        [data-theme="dark"] ::-webkit-scrollbar-thumb {
+            background: rgba(50, 73, 215, 0.4);
+            border-radius: 4px;
+        }
+
+        [data-theme="light"] ::-webkit-scrollbar-thumb {
+            background: rgba(50, 73, 215, 0.25);
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(50, 73, 215, 0.6);
+        }
+
+        /* Status colors */
+        .status-running {
+            color: #34d399;
+        }
+
+        .status-completed {
+            color: var(--pl-primary);
+        }
+
+        .status-stopped {
+            color: #fbbf24;
+        }
+
+        .status-failed {
+            color: #f87171;
+        }
+
+        /* Brand gradient background */
+        .pl-gradient {
+            background: var(--pl-gradient);
+        }
+
+        /* Theme toggle */
+        .theme-toggle {
+            position: relative;
+            width: 44px;
+            height: 24px;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: background-color 0.2s ease;
+        }
+
+        [data-theme="dark"] .theme-toggle {
+            background: #1e3a5f;
+        }
+
+        [data-theme="light"] .theme-toggle {
+            background: #cbd5e1;
+        }
+
+        .theme-toggle-knob {
+            position: absolute;
+            top: 2px;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            transition: transform 0.2s ease, background 0.2s ease;
+        }
+
+        [data-theme="dark"] .theme-toggle-knob {
+            transform: translateX(22px);
+            background: #818cf8;
+        }
+
+        [data-theme="light"] .theme-toggle-knob {
+            transform: translateX(2px);
+            background: #3249d7;
+        }
+
+        /* Mobile sidebar overlay */
+        @media (max-width: 767px) {
+            #sidebar {
+                position: fixed;
+                top: 0;
+                left: 0;
+                bottom: 0;
+                z-index: 50;
+                transform: translateX(-100%);
+                transition: transform 0.25s ease-in-out;
+                width: 85vw;
+                max-width: 360px;
+            }
+
+            #sidebar.open {
+                transform: translateX(0);
+            }
+
+            #sidebar-overlay {
+                display: none;
+                position: fixed;
+                inset: 0;
+                background: rgba(0, 0, 0, 0.5);
+                z-index: 40;
+            }
+
+            #sidebar-overlay.open {
+                display: block;
+            }
+
+            body {
+                overflow: auto !important;
+            }
+
+            /* Better touch targets on mobile */
+            #sessions-list>div {
+                min-height: 72px;
+            }
+
+            /* Make empty state more compact on mobile */
+            #empty-state h2 {
+                font-size: 1.125rem;
+            }
+
+            #empty-state .w-20 {
+                width: 3.5rem;
+                height: 3.5rem;
+            }
+
+            /* Full-width main area */
+            #main-area {
+                width: 100%;
+            }
+
+            /* Overlay panels responsive — full-screen on mobile */
+            #phones-panel,
+            #admin-panel,
+            #cron-panel {
+                position: fixed;
+                inset: 0;
+                z-index: 25;
+            }
+
+            /* Cron logs table: horizontal scroll on mobile */
+            #cron-logs {
+                overflow-x: auto;
+                -webkit-overflow-scrolling: touch;
+            }
+
+            #cron-logs .flex {
+                min-width: 480px;
+            }
+
+            /* System prompt textarea smaller on mobile */
+            #system-prompt-editor {
+                font-size: 12px;
+            }
+
+            /* System prompt buttons stack on small screens */
+            .sys-prompt-actions {
+                flex-direction: column;
+                gap: 0.5rem;
+            }
+        }
+
+        /* Themed utility classes */
+        .t-header {
+            transition: background-color 0.2s ease, border-color 0.2s ease;
+        }
+
+        [data-theme="dark"] .t-header {
+            background: #0e1538;
+            border-color: #1e2d5a;
+        }
+
+        [data-theme="light"] .t-header {
+            background: #ffffff;
+            border-color: #e2e8f0;
+        }
+
+        [data-theme="dark"] .t-sidebar {
+            background: #0c1029;
+            border-color: #1e2d5a;
+        }
+
+        [data-theme="light"] .t-sidebar {
+            background: #ffffff;
+            border-color: #e2e8f0;
+        }
+
+        [data-theme="dark"] .t-main {
+            background: #080d20;
+        }
+
+        [data-theme="light"] .t-main {
+            background: #f0f4f8;
+        }
+
+        [data-theme="dark"] .t-card {
+            background: #111836;
+            border-color: #1e2d5a;
+        }
+
+        [data-theme="light"] .t-card {
+            background: #ffffff;
+            border-color: #e2e8f0;
+        }
+
+        [data-theme="dark"] .t-card-hover:hover {
+            background: #162050;
+        }
+
+        [data-theme="light"] .t-card-hover:hover {
+            background: #f1f5f9;
+        }
+
+        [data-theme="dark"] .t-text-primary {
+            color: #f1f5f9;
+        }
+
+        [data-theme="light"] .t-text-primary {
+            color: #0f172a;
+        }
+
+        [data-theme="dark"] .t-text-secondary {
+            color: #94a3b8;
+        }
+
+        [data-theme="light"] .t-text-secondary {
+            color: #64748b;
+        }
+
+        [data-theme="dark"] .t-text-muted {
+            color: #475569;
+        }
+
+        [data-theme="light"] .t-text-muted {
+            color: #94a3b8;
+        }
+
+        [data-theme="dark"] .t-input {
+            background: #111836;
+            border-color: #1e2d5a;
+            color: #e2e8f0;
+        }
+
+        [data-theme="light"] .t-input {
+            background: #ffffff;
+            border-color: #cbd5e1;
+            color: #1e293b;
+        }
+
+        [data-theme="dark"] #model-select option {
+            background: #111836;
+            color: #e2e8f0;
+        }
+
+        [data-theme="light"] #model-select option {
+            background: #ffffff;
+            color: #1e293b;
+        }
+
+        [data-theme="dark"] .t-input-area-bg {
+            background: linear-gradient(to top, #080d20 60%, transparent);
+        }
+
+        [data-theme="light"] .t-input-area-bg {
+            background: linear-gradient(to top, #f0f4f8 60%, transparent);
+        }
+
+        [data-theme="dark"] .t-badge {
+            background: rgba(50, 73, 215, 0.15);
+        }
+
+        [data-theme="light"] .t-badge {
+            background: rgba(50, 73, 215, 0.08);
+        }
+    </style>
+</head>
+
+<body class="h-screen flex flex-col antialiased">
+    <!-- Header -->
+    <header class="t-header h-14 md:h-16 flex items-center px-3 md:px-6 border-b z-30 shrink-0 shadow-sm">
+        <!-- Mobile menu button -->
+        <button id="sidebar-toggle" onclick="toggleSidebar()"
+            class="md:hidden mr-2 p-2 t-text-secondary hover:text-[#3249d7] rounded-md cursor-pointer">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16">
+                </path>
+            </svg>
+        </button>
+        <div class="flex items-center space-x-2 md:space-x-3 md:w-1/3 shrink-0">
+            <div
+                class="w-7 h-7 md:w-8 md:h-8 rounded-lg pl-gradient flex items-center justify-center shadow-lg shadow-[#3249d7]/20">
+                <svg class="w-4 h-4 md:w-5 md:h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                        d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+            </div>
+            <h1 class="text-base md:text-xl font-bold tracking-tight whitespace-nowrap"
+                style="font-family: Poppins, sans-serif;">
+                <span class="hidden sm:inline"
+                    style="background: var(--pl-gradient); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">OliBot</span>
+                <span class="sm:hidden"
+                    style="background: var(--pl-gradient); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">OliBot</span>
+            </h1>
+        </div>
+        <div class="hidden md:flex flex-1 justify-center text-sm font-medium space-x-8 t-text-secondary">
+            <div class="flex flex-col items-center"><span
+                    class="t-text-muted text-[10px] uppercase tracking-wider font-bold">Total Sessions</span><span
+                    id="stat-total" class="t-text-primary text-lg font-mono">...</span></div>
+            <div class="flex flex-col items-center"><span
+                    class="t-text-muted text-[10px] uppercase tracking-wider font-bold">Active</span><span
+                    id="stat-active" class="text-[#3249d7] text-lg font-mono">...</span></div>
+            <div class="flex flex-col items-center"><span
+                    class="t-text-muted text-[10px] uppercase tracking-wider font-bold">API Cost</span><span
+                    id="stat-cost" class="t-text-primary text-lg font-mono">...</span></div>
+        </div>
+        <!-- Mobile stats (compact) -->
+        <div class="flex md:hidden flex-1 justify-center space-x-4 text-xs font-medium t-text-secondary">
+            <span id="stat-active-mobile" class="text-[#3249d7] font-mono"></span>
+            <span id="stat-cost-mobile" class="t-text-primary font-mono"></span>
+        </div>
+        <div class="shrink-0 flex items-center space-x-3 md:w-1/3 justify-end">
+            <!-- Theme Toggle -->
+            <div class="theme-toggle" onclick="toggleTheme()" title="Toggle theme">
+                <div class="theme-toggle-knob"></div>
+            </div>
+            <select id="user-phone" title="Switch your active number for this session"
+                class="hidden t-input border rounded-md text-xs md:text-sm px-2 md:px-3 py-1 md:py-1.5 focus:ring-1 focus:ring-[#3249d7] outline-none max-w-[120px] md:max-w-none cursor-pointer">
+                <!-- Dynamically populated from /api/phones -->
+            </select>
+            <!-- User Info + Logout (shown when logged in) -->
+            <div id="user-info" class="hidden items-center gap-2">
+                <div class="w-7 h-7 rounded-full bg-[#3249d7] flex items-center justify-center text-white text-xs font-bold cursor-pointer shrink-0"
+                    id="user-avatar" title="Logged in">?</div>
+                <button onclick="logout()"
+                    class="text-xs t-text-muted hover:text-red-400 transition-colors cursor-pointer font-medium"
+                    title="Sign out">Sign out</button>
+            </div>
+        </div>
+    </header>
+
+    <!-- Share Session Modal -->
+    <div id="share-modal" class="fixed inset-0 z-50 flex items-center justify-center hidden">
+        <div class="absolute inset-0 bg-black/60 backdrop-blur-sm" onclick="closeShareModal()"></div>
+        <div class="relative t-card border rounded-2xl p-6 max-w-sm w-full mx-4 shadow-2xl"
+            style="border-color:rgba(50,73,215,0.25);">
+            <h3 class="text-base font-bold t-text-primary mb-1">Share Session</h3>
+            <p class="text-xs t-text-muted mb-4" id="share-session-label">Session: —</p>
+            <!-- Tabs -->
+            <div class="flex border-b mb-4" style="border-color:rgba(50,73,215,0.15);">
+                <button class="share-tab px-3 py-2 text-xs font-semibold t-text-primary border-b-2 border-[#3249d7]"
+                    onclick="showShareTab('grant')" id="tab-grant">Grant Access</button>
+                <button class="share-tab px-3 py-2 text-xs font-semibold t-text-muted border-b-2 border-transparent"
+                    onclick="showShareTab('claim')" id="tab-claim">Claim with OTP</button>
+            </div>
+            <!-- Grant tab -->
+            <div id="share-tab-grant">
+                <p class="text-xs t-text-muted mb-3">Enter user ID or email to grant access directly (admin only):</p>
+                <input id="grant-user-id" type="text" placeholder="User ID"
+                    class="t-input border rounded-lg px-3 py-2 text-sm w-full mb-3 outline-none focus:ring-1 focus:ring-[#3249d7]"
+                    style="border-color:rgba(50,73,215,0.2);">
+                <button onclick="grantAccessById()"
+                    class="w-full px-4 py-2 bg-[#3249d7] hover:bg-[#2a3dbf] text-white rounded-lg text-sm font-semibold transition-colors cursor-pointer">Grant
+                    Access</button>
+                <hr class="my-4" style="border-color:rgba(50,73,215,0.1);">
+                <p class="text-xs t-text-muted mb-2">Or request access via WhatsApp OTP (owner will receive a WhatsApp
+                    message):</p>
+                <button onclick="requestAccessViaWA()"
+                    class="w-full px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-semibold transition-colors cursor-pointer">Request
+                    via WhatsApp →</button>
+            </div>
+            <!-- Claim OTP tab -->
+            <div id="share-tab-claim" class="hidden">
+                <p class="text-xs t-text-muted mb-3">Enter the OTP the session owner shared with you:</p>
+                <input id="claim-otp" type="number" placeholder="6-digit OTP"
+                    class="t-input border rounded-lg px-3 py-2 text-sm w-full mb-3 outline-none focus:ring-1 focus:ring-[#3249d7] font-mono tracking-widest text-center"
+                    style="border-color:rgba(50,73,215,0.2);">
+                <button onclick="claimWithOtp()"
+                    class="w-full px-4 py-2 bg-[#3249d7] hover:bg-[#2a3dbf] text-white rounded-lg text-sm font-semibold transition-colors cursor-pointer">Verify
+                    OTP & Get Access</button>
+            </div>
+            <div id="share-modal-msg" class="mt-3 text-xs font-medium text-center hidden"></div>
+            <button onclick="closeShareModal()"
+                class="absolute top-4 right-4 t-text-muted hover:text-red-400 cursor-pointer text-lg leading-none">✕</button>
+        </div>
+    </div>
+
+    <!-- App Body (Two Columns) -->
+    <div class="flex-1 flex overflow-hidden relative">
+
+        <!-- Mobile sidebar overlay -->
+        <div id="sidebar-overlay" onclick="toggleSidebar()"></div>
+
+        <!-- Left Pane: Sidebar / Session List -->
+        <aside id="sidebar" class="w-80 md:w-96 flex flex-col border-r t-sidebar z-20 shadow-xl shadow-black/20">
+            <div class="p-3 sm:p-4 border-b flex justify-between items-center t-header shadow-sm z-10"
+                style="border-color: inherit;">
+                <h2 class="text-xs uppercase tracking-widest font-bold t-text-muted shrink-0"
+                    style="font-family: Poppins, sans-serif;">Session History</h2>
+                <div class="flex items-center gap-1.5 sm:gap-2">
+                    <button onclick="showWorkspacePanel()" title="Workspace Files"
+                        class="text-[#3249d7] hover:text-white bg-[#3249d7]/10 hover:bg-[#3249d7] p-1.5 rounded-md flex items-center text-xs font-semibold transition-all border border-[#3249d7]/20 hover:border-[#3249d7] cursor-pointer">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"></path>
+                        </svg>
+                    </button>
+                    <button onclick="showPhonesPanel()" title="Manage Authorized Numbers"
+                        class="text-[#3249d7] hover:text-white bg-[#3249d7]/10 hover:bg-[#3249d7] p-1.5 rounded-md flex items-center text-xs font-semibold transition-all border border-[#3249d7]/20 hover:border-[#3249d7] cursor-pointer">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
+                        </svg>
+                    </button>
+                    <!-- Admin Panel button (shown only to admins) -->
+                    <button id="admin-panel-btn" onclick="showAdminPanel()" title="Admin Panel"
+                        class="hidden relative text-amber-400 hover:text-white bg-amber-400/10 hover:bg-amber-500 p-1.5 rounded-md flex items-center text-xs font-semibold transition-all border border-amber-400/20 hover:border-amber-500 cursor-pointer">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                        </svg>
+                        <span id="notif-badge"
+                            class="hidden absolute -top-1 -right-1 w-4 h-4 rounded-full bg-red-500 text-white text-[9px] font-bold flex items-center justify-center">0</span>
+                    </button>
+                    <button onclick="showCronPanel()" title="Cron Jobs"
+                        class="text-emerald-500 hover:text-white bg-emerald-500/10 hover:bg-emerald-500 p-1.5 rounded-md flex items-center text-xs font-semibold transition-all border border-emerald-500/20 hover:border-emerald-500 cursor-pointer">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                    </button>
+                    <button onclick="startNewSessionView()"
+                        class="text-[#3249d7] hover:text-white bg-[#3249d7]/10 hover:bg-[#3249d7] px-3 py-1.5 rounded-md flex items-center text-xs font-semibold transition-all border border-[#3249d7]/20 hover:border-[#3249d7] cursor-pointer">
+                        <svg class="w-3.5 h-3.5 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4">
+                            </path>
+                        </svg>
+                        New Task
+                    </button>
+                </div>
+            </div>
+
+            <div class="flex-1 overflow-y-auto w-full" id="sessions-list">
+                <!-- Session items listed here -->
+                <div class="p-8 text-center t-text-muted">
+                    <svg class="animate-spin w-6 h-6 mx-auto mb-3 opacity-50" viewBox="0 0 24 24" fill="none">
+                        <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" class="opacity-25">
+                        </circle>
+                        <path fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" class="opacity-75"></path>
+                    </svg>
+                    Loading sessions...
+                </div>
+            </div>
+
+            <div class="p-3 border-t flex justify-between items-center t-header text-xs" id="pagination-controls"
+                style="border-color: inherit;">
+                <!-- Pagination -->
+            </div>
+        </aside>
+
+        <!-- Right Pane: Active View Workspace -->
+        <main class="flex-1 relative t-main flex flex-col h-full items-center justify-center" id="main-area">
+
+            <!-- Default Empty State -->
+            <div id="empty-state"
+                class="absolute inset-0 flex flex-col items-center justify-center t-text-secondary z-0 t-main">
+                <div
+                    class="w-14 h-14 sm:w-20 sm:h-20 rounded-full t-card flex items-center justify-center mb-4 sm:mb-6 shadow-2xl border">
+                    <svg class="w-10 h-10 t-text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+                            d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z">
+                        </path>
+                    </svg>
+                </div>
+                <h2 class="text-lg sm:text-xl font-medium t-text-primary mb-2"
+                    style="font-family: Poppins, sans-serif;">No Session
+                    Selected</h2>
+                <p class="text-xs sm:text-sm t-text-secondary px-4">Select a session from the history or start a new
+                    task.</p>
+                <button onclick="startNewSessionView()"
+                    class="mt-6 sm:mt-8 px-6 py-2.5 bg-[#3249d7] hover:bg-[#2a3dbf] text-white font-medium rounded-lg shadow-lg shadow-[#3249d7]/30 transition-colors cursor-pointer">
+                    Start New Task
+                </button>
+            </div>
+
+            <!-- Phone Management Panel (sibling to empty-state, inside main) -->
+            <div id="phones-panel" class="absolute inset-0 z-20 t-main overflow-y-auto hidden">
+                <div class="max-w-2xl mx-auto px-3 sm:px-4 py-4 sm:py-8">
+                    <div class="flex items-center justify-between mb-6">
+                        <h2 class="text-xl font-bold t-text-primary" style="font-family: Poppins, sans-serif;">
+                            Authorized Numbers</h2>
+                        <button onclick="hidePhonesPanel()"
+                            class="t-text-muted hover:text-red-400 transition-colors cursor-pointer">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M6 18L18 6M6 6l12 12" />
+                            </svg>
+                        </button>
+                    </div>
+                    <!-- Add Phone Form -->
+                    <div class="t-card rounded-xl p-4 border mb-6" style="border-color: rgba(50,73,215,0.2);">
+                        <p class="text-xs t-text-muted uppercase tracking-wider font-bold mb-3">Add Number</p>
+                        <div class="flex flex-col sm:flex-row gap-2">
+                            <input id="new-phone-number" type="text" placeholder="e.g. 919970870091"
+                                class="t-input border rounded-lg px-3 py-2 text-sm flex-1 outline-none focus:ring-1 focus:ring-[#3249d7]"
+                                style="border-color: rgba(50,73,215,0.2);">
+                            <input id="new-phone-label" type="text" placeholder="Label (e.g. Dev 1)"
+                                class="t-input border rounded-lg px-3 py-2 text-sm sm:w-32 outline-none focus:ring-1 focus:ring-[#3249d7]"
+                                style="border-color: rgba(50,73,215,0.2);">
+                            <button onclick="addPhone()"
+                                class="px-4 py-2 bg-[#3249d7] hover:bg-[#2a3dbf] text-white rounded-lg text-sm font-semibold transition-colors cursor-pointer whitespace-nowrap">Add
+                                &amp; Save</button>
+                        </div>
+                        <p class="text-[10px] t-text-muted mt-2">Country code, no + sign. e.g. 919970870091</p>
+                    </div>
+                    <!-- Phone List -->
+                    <div id="phones-list" class="space-y-2">
+                        <div class="text-center t-text-muted text-sm py-8">Loading...</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Admin Users Panel -->
+            <div id="admin-panel" class="absolute inset-0 z-20 t-main overflow-y-auto hidden">
+                <div class="max-w-3xl mx-auto px-3 sm:px-4 py-4 sm:py-8">
+                    <div class="flex items-center justify-between mb-6">
+                        <h2 class="text-xl font-bold t-text-primary" style="font-family:Poppins,sans-serif;">Admin
+                            Panel</h2>
+                        <button onclick="hideAdminPanel()"
+                            class="t-text-muted hover:text-red-400 transition-colors cursor-pointer"><svg
+                                class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M6 18L18 6M6 6l12 12" />
+                            </svg></button>
+                    </div>
+
+                    <!-- Access Requests section -->
+                    <div id="access-requests-section" class="mb-6">
+                        <p class="text-xs t-text-muted uppercase tracking-wider font-bold mb-3">Pending Access
+                            Requests</p>
+                        <div id="access-requests-list" class="space-y-2">
+                            <div class="text-center t-text-muted text-sm py-4">Loading...</div>
+                        </div>
+                    </div>
+
+                    <!-- Add User Form -->
+                    <div class="t-card rounded-xl p-4 border mb-6" style="border-color:rgba(50,73,215,0.2);">
+                        <p class="text-xs t-text-muted uppercase tracking-wider font-bold mb-3">Add User</p>
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-2">
+                            <input id="new-user-name" type="text" placeholder="Display Name"
+                                class="t-input border rounded-lg px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-[#3249d7]"
+                                style="border-color:rgba(50,73,215,0.2);">
+                            <input id="new-user-email" type="email" placeholder="Email address"
+                                class="t-input border rounded-lg px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-[#3249d7]"
+                                style="border-color:rgba(50,73,215,0.2);">
+                            <select id="new-user-role"
+                                class="t-input border rounded-lg px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-[#3249d7]"
+                                style="border-color:rgba(50,73,215,0.2);">
+                                <option value="developer">Developer</option>
+                                <option value="admin">Admin</option>
+                                <option value="viewer">Viewer</option>
+                            </select>
+                            <button onclick="addUser()"
+                                class="px-4 py-2 bg-[#3249d7] hover:bg-[#2a3dbf] text-white rounded-lg text-sm font-semibold transition-colors cursor-pointer">Create
+                                &amp; Email Password</button>
+                        </div>
+                        <p class="text-[10px] t-text-muted">An email will be sent to the user with their auto-generated
+                            password.</p>
+                    </div>
+
+                    <!-- Users Table -->
+                    <div id="users-list" class="space-y-2">
+                        <div class="text-center t-text-muted text-sm py-8">Loading...</div>
+                    </div>
+
+                    <!-- Claude System Prompt Editor (CLAUDE.md) -->
+                    <div class="mt-8">
+                        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
+                            <div>
+                                <p class="text-xs t-text-muted uppercase tracking-wider font-bold">Claude System Prompt</p>
+                                <p class="text-[10px] t-text-muted mt-0.5 font-mono" id="claude-prompt-path"></p>
+                            </div>
+                            <div class="flex gap-2 shrink-0">
+                                <button onclick="saveClaudePrompt()"
+                                    class="px-3 py-1.5 text-[11px] bg-[#3249d7] hover:bg-[#2a3dbf] text-white rounded-md font-semibold transition-colors cursor-pointer">Save</button>
+                            </div>
+                        </div>
+                        <div class="t-card border rounded-xl p-2 sm:p-3" style="border-color:rgba(50,73,215,0.2);">
+                            <textarea id="system-prompt-editor"
+                                class="w-full t-input border-0 bg-transparent text-xs sm:text-sm outline-none resize-y font-mono leading-relaxed"
+                                rows="14"
+                                placeholder="Loading CLAUDE.md..."></textarea>
+                        </div>
+                        <div id="system-prompt-status" class="mt-2 text-xs t-text-muted"></div>
+                        <p class="text-[10px] t-text-muted mt-1">This is the CLAUDE.md file that Claude Code reads as its system instructions. New sessions will use the updated prompt automatically.</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Cron Jobs Panel -->
+            <div id="cron-panel" class="absolute inset-0 z-20 t-main overflow-y-auto hidden">
+                <div class="max-w-4xl mx-auto px-3 sm:px-4 py-4 sm:py-8">
+                    <div class="flex items-center justify-between mb-6">
+                        <h2 class="text-xl font-bold t-text-primary" style="font-family: Poppins, sans-serif;">Scheduled
+                            Jobs</h2>
+                        <button onclick="hideCronPanel()"
+                            class="t-text-muted hover:text-red-400 transition-colors cursor-pointer">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M6 18L18 6M6 6l12 12" />
+                            </svg>
+                        </button>
+                    </div>
+
+                    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                        <!-- Left: Add/Edit Form -->
+                        <div class="lg:col-span-1 space-y-4">
+                            <div class="t-card rounded-xl p-4 border" style="border-color: rgba(16, 185, 129, 0.2);">
+                                <p class="text-xs t-text-muted uppercase tracking-wider font-bold mb-3">Add / Edit Job
+                                </p>
+                                <div class="space-y-3">
+                                    <div>
+                                        <label class="block text-[10px] t-text-muted uppercase font-bold mb-1">Job ID
+                                            (Unique)</label>
+                                        <input id="cron-id" type="text" placeholder="e.g. daily_report"
+                                            class="t-input border rounded-lg px-3 py-2 text-sm w-full outline-none focus:ring-1 focus:ring-emerald-500"
+                                            style="border-color: rgba(16, 185, 129, 0.2);">
+                                    </div>
+                                    <div>
+                                        <label class="block text-[10px] t-text-muted uppercase font-bold mb-1">Cron
+                                            Expression</label>
+                                        <input id="cron-schedule" type="text" placeholder="e.g. 0 9 * * *"
+                                            class="t-input border rounded-lg px-3 py-2 text-sm w-full outline-none focus:ring-1 focus:ring-emerald-500"
+                                            style="border-color: rgba(16, 185, 129, 0.2);">
+                                        <p class="text-[10px] t-text-muted mt-1">Min | Hour | DOM | Mon | DOW</p>
+                                    </div>
+                                    <div>
+                                        <label class="block text-[10px] t-text-muted uppercase font-bold mb-1">Task
+                                            Content</label>
+                                        <textarea id="cron-task" placeholder="What should Claude do?"
+                                            class="t-input border rounded-lg px-3 py-2 text-sm w-full h-24 resize-none outline-none focus:ring-1 focus:ring-emerald-500"
+                                            style="border-color: rgba(16, 185, 129, 0.2);"></textarea>
+                                    </div>
+                                    <div>
+                                        <label class="block text-[10px] t-text-muted uppercase font-bold mb-1">Target
+                                            Phone (Opt)</label>
+                                        <input id="cron-phone" type="text" placeholder="e.g. 919876543210"
+                                            class="t-input border rounded-lg px-3 py-2 text-sm w-full outline-none focus:ring-1 focus:ring-emerald-500"
+                                            style="border-color: rgba(16, 185, 129, 0.2);">
+                                    </div>
+                                    <button onclick="saveCron()"
+                                        class="w-full py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-semibold transition-colors cursor-pointer">Save
+                                        Job</button>
+                                </div>
+                            </div>
+
+                            <div class="t-card rounded-xl p-4 border" style="border-color: rgba(50, 73, 215, 0.1);">
+                                <p class="text-[10px] t-text-muted leading-relaxed italic">
+                                    Jobs are stored in <code>cron_jobs.json</code>. The <code>CronManager</code> watches
+                                    this file and updates schedulers automatically.
+                                </p>
+                            </div>
+                        </div>
+
+                        <!-- Right: List & Logs -->
+                        <div class="lg:col-span-2 space-y-6">
+                            <!-- Jobs List -->
+                            <div>
+                                <p
+                                    class="text-xs t-text-muted uppercase tracking-wider font-bold mb-3 flex items-center justify-between">
+                                    <span>Active Schedulers</span>
+                                    <button onclick="fetchCrons()"
+                                        class="text-emerald-500 hover:underline">Refresh</button>
+                                </p>
+                                <div id="cron-list" class="space-y-2">
+                                    <div class="text-center t-text-muted text-sm py-4">No jobs configured.</div>
+                                </div>
+                            </div>
+
+                            <!-- Logs Section -->
+                            <div>
+                                <p
+                                    class="text-xs t-text-muted uppercase tracking-wider font-bold mb-3 flex items-center justify-between">
+                                    <span>Recent Executions</span>
+                                    <button onclick="fetchCronLogs()" class="text-emerald-500 hover:underline">Refresh
+                                        Logs</button>
+                                </p>
+                                <div id="cron-logs" class="t-card border rounded-xl overflow-hidden text-xs"
+                                    style="border-color:rgba(50,73,215,0.1);">
+                                    <div class="bg-black/5 dark:bg-white/5 px-3 py-2 font-bold flex border-b"
+                                        style="border-color:inherit;">
+                                        <div class="w-1/4">Time</div>
+                                        <div class="w-1/4">Job ID</div>
+                                        <div class="w-1/4">Status</div>
+                                        <div class="w-1/4 text-right">Details</div>
+                                    </div>
+                                    <div id="cron-logs-list" class="divide-y max-h-64 overflow-y-auto"
+                                        style="border-color:inherit;">
+                                        <div class="p-4 text-center t-text-muted">No logs available.</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+
+            <div id="workspace-header"
+                class="absolute top-0 left-0 right-0 h-12 md:h-14 px-3 md:px-6 border-b flex items-center justify-between t-header backdrop-blur-md z-20 hidden shadow-sm">
+                <div class="flex items-center space-x-2 md:space-x-4 w-full min-w-0">
+                    <span id="workspace-status-dot" class="w-2.5 h-2.5 rounded-full bg-slate-500 shrink-0"></span>
+                    <h2 id="workspace-title" class="font-semibold t-text-primary truncate flex-1 text-xs md:text-base"
+                        style="font-family: Poppins, sans-serif;"></h2>
+                    <span id="workspace-id"
+                        class="text-[10px] md:text-xs font-mono font-medium t-text-secondary t-badge px-1.5 md:px-2.5 py-0.5 md:py-1 rounded border shrink-0 hidden sm:inline-block"
+                        style="border-color: rgba(50,73,215,0.2);"></span>
+                    <span id="workspace-model-badge"
+                        class="text-[9px] md:text-[10px] font-mono font-bold uppercase px-1.5 py-0.5 rounded shrink-0 hidden sm:inline-block"
+                        style="color: #3249d7; background: rgba(50,73,215,0.1);"></span>
+                </div>
+            </div>
+
+            <!-- Logs / Chat Area -->
+            <div id="workspace-content"
+                class="absolute inset-0 overflow-y-auto px-3 md:px-8 pt-16 md:pt-20 pb-36 md:pb-40 hidden scroll-smooth w-full">
+                <!-- Generated content injected here -->
+            </div>
+
+            <!-- Sticky Input Area -->
+            <div id="workspace-input-area"
+                class="absolute bottom-0 left-0 right-0 p-3 md:p-6 t-input-area-bg pt-6 md:pt-12 z-30 hidden pointer-events-none">
+                <div class="max-w-4xl mx-auto">
+                    <!-- Image Preview Grid (multiple images) -->
+                    <div id="image-preview-bar" class="hidden mb-2 pointer-events-auto">
+                        <div id="image-preview-grid" class="flex flex-wrap gap-2 items-end"></div>
+                        <p class="text-[10px] t-text-muted mt-1">Images will be sent with your message</p>
+                    </div>
+                    <!-- Input Row -->
+                    <div
+                        class="relative rounded-xl shadow-2xl t-card pointer-events-auto border focus-within:border-[#3249d7]/50 focus-within:ring-2 focus-within:ring-[#3249d7]/20 transition-all">
+                        <!-- Workspace Files Explorer Panel -->
+                        <div id="workspace-panel"
+                            class="hidden flex-1 overflow-y-auto w-full max-h-screen bg-[#f8f9fa] dark:bg-gray-900 fixed md:absolute inset-0 z-30 flex flex-col pt-0">
+                            <div
+                                class="sticky top-0 z-10 px-3 sm:px-6 md:px-10 py-3 sm:py-5 bg-white/95 dark:bg-[#1a1c23]/95 backdrop-blur-sm border-b shadow-sm t-border t-card flex justify-between items-center">
+                                <div>
+                                    <h2 class="text-lg sm:text-xl md:text-2xl font-bold t-text-primary mb-1 tracking-tight"
+                                        style="font-family: Inter, Poppins, sans-serif;">
+                                        Workspace Files
+                                    </h2>
+                                    <p
+                                        class="text-[10px] sm:text-xs md:text-sm t-text-muted font-medium flex items-center gap-1.5">
+                                        <span id="current-dir-path"
+                                            class="font-mono bg-gray-100 dark:bg-gray-800 px-2 py-0.5 rounded text-gray-600 dark:text-gray-300 truncate max-w-[200px] sm:max-w-none">/home/ubuntu</span>
+                                    </p>
+                                </div>
+                                <button onclick="hideWorkspacePanel()" title="Close Browser"
+                                    class="text-gray-500 hover:text-gray-900 dark:hover:text-white p-2 rounded-lg bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 transition">
+                                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                            d="M6 18L18 6M6 6l12 12"></path>
+                                    </svg>
+                                </button>
+                            </div>
+                            <!-- Content / Files Grid -->
+                            <div class="p-3 sm:p-6 md:p-10 max-w-5xl w-full mx-auto">
+                                <div id="files-list"
+                                    class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2 sm:gap-4">
+                                    <!-- populated via JS -->
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Hidden file input -->
+                        <input id="image-file-input" type="file" accept="*" multiple class="hidden"
+                            onchange="[...this.files].forEach(f => handleFile(f)); this.value=''">
+                        <!-- Model selector bar -->
+                        <div class="flex items-center gap-2 px-3 md:px-5 pt-2 pb-0">
+                            <label class="text-[10px] uppercase tracking-wider font-bold t-text-muted shrink-0">Model</label>
+                            <select id="model-select"
+                                class="bg-transparent text-xs t-text-secondary font-mono outline-none cursor-pointer py-0.5 px-1 rounded border-0 hover:text-[#3249d7] transition-colors"
+                                style="background: transparent;">
+                                <option value="opus" selected>Opus 4.6</option>
+                                <option value="sonnet">Sonnet 4.6</option>
+                                <option value="haiku">Haiku 4.5</option>
+                            </select>
+                        </div>
+                        <textarea id="chat-textarea" rows="1" placeholder="Type a message… or paste/drop an image"
+                            class="w-full bg-transparent px-3 md:px-5 py-1.5 md:py-3 pr-20 md:pr-24 resize-none outline-none overflow-y-auto max-h-36 md:max-h-48 leading-relaxed font-medium text-sm md:text-base t-text-primary"
+                            style="color: inherit;"></textarea>
+                        <!-- Attach Image Button -->
+                        <button onclick="document.getElementById('image-file-input').click()" title="Attach file"
+                            class="absolute right-[4.5rem] md:right-[5.5rem] bottom-2 md:bottom-2.5 p-2 t-text-muted hover:text-[#3249d7] rounded-lg transition-colors cursor-pointer">
+                            <svg class="w-4 h-4 md:w-5 md:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                                stroke-width="2">
+                                <path stroke-linecap="round" stroke-linejoin="round"
+                                    d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
+                            </svg>
+                        </button>
+                        <!-- Voice Record Button -->
+                        <button id="mic-btn" onclick="toggleRecording()" title="Record voice message"
+                            class="absolute right-10 md:right-12 bottom-2 md:bottom-2.5 p-2 t-text-muted hover:text-[#3249d7] rounded-lg transition-colors cursor-pointer">
+                            <svg id="mic-icon" class="w-4 h-4 md:w-5 md:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                                stroke-width="2">
+                                <path stroke-linecap="round" stroke-linejoin="round"
+                                    d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z" />
+                                <path stroke-linecap="round" stroke-linejoin="round"
+                                    d="M19 10v2a7 7 0 01-14 0v-2" />
+                                <line x1="12" y1="19" x2="12" y2="23" stroke-linecap="round" />
+                                <line x1="8" y1="23" x2="16" y2="23" stroke-linecap="round" />
+                            </svg>
+                            <svg id="mic-icon-recording" class="w-4 h-4 md:w-5 md:h-5 hidden" fill="currentColor" viewBox="0 0 24 24">
+                                <rect x="6" y="6" width="12" height="12" rx="2" />
+                            </svg>
+                        </button>
+                        <button id="chat-stop-btn" onclick="stopSession()" title="Stop running session"
+                            class="absolute right-2 md:right-3 bottom-2 md:bottom-2.5 p-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors shadow-sm hidden cursor-pointer">
+                            <svg class="w-4 h-4 md:w-5 md:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                                stroke-width="2">
+                                <rect x="6" y="6" width="12" height="12" fill="currentColor"></rect>
+                            </svg>
+                        </button>
+                        <button id="chat-send-btn"
+                            class="absolute right-2 md:right-3 bottom-2 md:bottom-2.5 p-2 bg-[#3249d7] hover:bg-[#2a3dbf] text-white rounded-lg transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer">
+                            <svg class="w-4 h-4 md:w-5 md:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                                stroke-width="2">
+                                <path stroke-linecap="round" stroke-linejoin="round"
+                                    d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8">
+                                </path>
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="mt-2 text-center pointer-events-auto">
+                        <span
+                            class="text-[10px] font-medium t-text-muted uppercase tracking-widest hidden sm:inline-block t-badge px-3 py-1 rounded-full border"
+                            style="border-color: rgba(50,73,215,0.15);">Shift + Enter for newline. Press Enter to send.
+                            Ctrl+V to paste image.</span>
+                    </div>
+                </div>
+            </div>
+
+        </main>
+    </div>
+
+    <script>
+        let currentSessionId = null;
+        let isCreatingNew = false;
+        let loopInterval = null;
+        // Multi-image queue: array of { token, dataUrl, name }
+        let pendingImages = [];
+
+        // Voice recording state
+        let mediaRecorder = null;
+        let audioChunks = [];
+        let isRecording = false;
+
+        async function toggleRecording() {
+            if (isRecording) {
+                stopRecording();
+            } else {
+                startRecording();
+            }
+        }
+
+        async function startRecording() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
+                audioChunks = [];
+
+                mediaRecorder.ondataavailable = (e) => {
+                    if (e.data.size > 0) audioChunks.push(e.data);
+                };
+
+                mediaRecorder.onstop = async () => {
+                    stream.getTracks().forEach(t => t.stop());
+                    const blob = new Blob(audioChunks, { type: 'audio/webm' });
+                    await transcribeAudio(blob);
+                };
+
+                mediaRecorder.start();
+                isRecording = true;
+                const micBtn = document.getElementById('mic-btn');
+                micBtn.classList.add('text-red-500');
+                micBtn.classList.remove('t-text-muted');
+                document.getElementById('mic-icon').classList.add('hidden');
+                document.getElementById('mic-icon-recording').classList.remove('hidden');
+            } catch (err) {
+                alert('Microphone access denied. Please allow microphone access.');
+                console.error('Mic error:', err);
+            }
+        }
+
+        function stopRecording() {
+            if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                mediaRecorder.stop();
+            }
+            isRecording = false;
+            const micBtn = document.getElementById('mic-btn');
+            micBtn.classList.remove('text-red-500');
+            micBtn.classList.add('t-text-muted');
+            document.getElementById('mic-icon').classList.remove('hidden');
+            document.getElementById('mic-icon-recording').classList.add('hidden');
+        }
+
+        async function transcribeAudio(blob) {
+            const textarea = document.getElementById('chat-textarea');
+            const originalPlaceholder = textarea.placeholder;
+            textarea.placeholder = 'Transcribing audio...';
+            textarea.disabled = true;
+
+            try {
+                const arrayBuffer = await blob.arrayBuffer();
+                const res = await fetch('/api/transcribe', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'audio/webm' },
+                    body: arrayBuffer
+                });
+                const data = await res.json();
+                if (data.success && data.transcript) {
+                    textarea.value = textarea.value
+                        ? textarea.value + ' ' + data.transcript
+                        : data.transcript;
+                    textarea.dispatchEvent(new Event('input'));
+                    textarea.focus();
+                } else {
+                    alert('Could not transcribe audio. Please try again.');
+                }
+            } catch (err) {
+                console.error('Transcription error:', err);
+                alert('Transcription failed. Please try again.');
+            } finally {
+                textarea.disabled = false;
+                textarea.placeholder = originalPlaceholder;
+            }
+        }
+
+        // Theme Management
+        function getTheme() {
+            return localStorage.getItem('pl-theme') || 'dark';
+        }
+
+        function setTheme(theme) {
+            document.documentElement.setAttribute('data-theme', theme);
+            localStorage.setItem('pl-theme', theme);
+        }
+
+        function toggleTheme() {
+            const current = getTheme();
+            setTheme(current === 'dark' ? 'light' : 'dark');
+        }
+
+        // Apply saved theme on load
+        setTheme(getTheme());
+
+        function toggleSidebar() {
+            document.getElementById('sidebar').classList.toggle('open');
+            document.getElementById('sidebar-overlay').classList.toggle('open');
+        }
+
+        function closeSidebar() {
+            document.getElementById('sidebar').classList.remove('open');
+            document.getElementById('sidebar-overlay').classList.remove('open');
+        }
+
+        // Marked.js Configuration
+        marked.setOptions({ breaks: true, gfm: true });
+
+        // Auto-resize textarea
+        const textarea = document.getElementById('chat-textarea');
+        const sendBtn = document.getElementById('chat-send-btn');
+
+        textarea.addEventListener('input', function () {
+            this.style.height = 'auto';
+            this.style.height = (this.scrollHeight) + 'px';
+            if (this.value === '') this.style.height = 'auto';
+            sendBtn.disabled = this.value.trim().length === 0;
+        });
+
+        textarea.addEventListener('keydown', function (e) {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                if (!sendBtn.disabled) sendMessage();
+            }
+        });
+
+        sendBtn.addEventListener('click', () => {
+            if (!sendBtn.disabled) sendMessage();
+        });
+
+        async function fetchStats() {
+            try {
+                const res = await fetch('/api/stats');
+                const data = await res.json();
+                document.getElementById('stat-cost').innerText = `$${data.totalCost.toFixed(4)}`;
+                document.getElementById('stat-active').innerText = data.activeCount;
+                document.getElementById('stat-total').innerText = data.totalSessions;
+                document.getElementById('stat-active-mobile').innerText = `${data.activeCount} active`;
+                document.getElementById('stat-cost-mobile').innerText = `$${data.totalCost.toFixed(2)}`;
+            } catch (err) { }
+        }
+
+        let currentSessionPage = 1;
+
+        async function fetchSessions(page = 1) {
+            currentSessionPage = page;
+            try {
+                const res = await fetch(`/api/sessions?page=${page}&limit=15`);
+                const data = await res.json();
+
+                const list = document.getElementById('sessions-list');
+                list.innerHTML = '';
+
+                if (page === 1 && data.sessions.length > 0 && !isCreatingNew) {
+                    window._lastKnownTopSession = data.sessions[0].id;
+                }
+
+                if (data.sessions.length === 0) {
+                    list.innerHTML = '<div class="p-8 text-center t-text-muted text-sm">No sessions yet.</div>';
+                }
+
+                data.sessions.forEach(s => {
+                    const div = document.createElement('div');
+                    const isActive = s.id === currentSessionId;
+
+                    div.className = `p-4 border-b cursor-pointer transition-all t-card-hover group relative overflow-hidden ${isActive ? 't-card' : ''}`;
+                    div.style.borderColor = 'inherit';
+
+                    // Active indicator bar
+                    if (isActive) {
+                        const activeBar = document.createElement('div');
+                        activeBar.className = 'absolute left-0 top-0 bottom-0 w-1 shadow-[0_0_10px_rgba(50,73,215,0.5)]';
+                        activeBar.style.background = 'var(--pl-primary)';
+                        div.appendChild(activeBar);
+                    }
+
+                    const time = new Date(s.updated_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                    const statusColor = s.status === 'running' ? 'text-emerald-400' : (s.status === 'failed' ? 'text-red-400' : 't-text-muted');
+
+                    div.innerHTML += `
+                        <div class="flex justify-between items-center mb-1.5 ml-1">
+                            <span class="text-[11px] font-mono font-medium t-text-secondary transition-colors">${s.id.substring(0, 12)}...</span>
+                            <span class="text-[9px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded-sm t-badge ${statusColor}">${s.status}</span>
+                        </div>
+                        <div class="text-[13px] font-medium t-text-primary line-clamp-2 leading-relaxed mb-2.5 ml-1 select-none">
+                            ${(() => { const words = (s.task || '').trim().split(/\s+/); const title = words.slice(0, 7).join(' '); return escapeHtml(title + (words.length > 7 ? '…' : '')) || '<span class="italic opacity-50 t-text-muted">No task description</span>'; })()}
+                        </div>
+                        <div class="flex justify-between items-center text-xs t-text-muted ml-1 font-medium">
+                            <span class="${s.cost_usd > 0 ? 'text-[#3249d7]' : ''}">\$${(s.cost_usd || 0).toFixed(4)}</span>
+                            <span>${time}</span>
+                        </div>
+                    `;
+                    div.onclick = () => { closeSidebar(); loadSession(s.id, s.task, s.status, s.model); };
+                    list.appendChild(div);
+                });
+
+                // Pagination
+                const pag = document.getElementById('pagination-controls');
+                pag.innerHTML = `
+                    <button onclick="fetchSessions(${data.page - 1})" ${data.page <= 1 ? 'disabled class="opacity-30"' : 'class="hover:text-[#3249d7] t-text-secondary transition-colors cursor-pointer"'}><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path></svg></button>
+                    <span class="font-medium t-text-secondary">Page ${data.page} / ${data.totalPages}</span>
+                    <button onclick="fetchSessions(${data.page + 1})" ${data.page >= data.totalPages ? 'disabled class="opacity-30"' : 'class="hover:text-[#3249d7] t-text-secondary transition-colors cursor-pointer"'}><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg></button>
+                `;
+            } catch (err) { }
+        }
+
+        function startNewSessionView() {
+            closeSidebar();
+            currentSessionId = null;
+            isCreatingNew = true;
+
+            ['empty-state', 'phones-panel', 'admin-panel', 'cron-panel'].forEach(id => document.getElementById(id)?.classList.add('hidden'));
+            document.getElementById('workspace-header').classList.remove('hidden');
+            document.getElementById('workspace-content').classList.remove('hidden');
+            document.getElementById('workspace-input-area').classList.remove('hidden');
+
+            document.getElementById('workspace-title').innerText = "Create New Session";
+            document.getElementById('workspace-title').style.color = '#3249d7';
+            document.getElementById('workspace-id').innerText = "NEW";
+            document.getElementById('workspace-status-dot').className = "w-2.5 h-2.5 rounded-full animate-pulse shadow-[0_0_8px_rgba(50,73,215,0.6)]";
+            document.getElementById('workspace-status-dot').style.background = '#3249d7';
+
+            const phoneOptions = document.getElementById('user-phone').innerHTML;
+            const content = document.getElementById('workspace-content');
+            content.innerHTML = `
+                <div class="max-w-3xl mx-auto py-8 sm:py-12 md:py-16 text-center px-4 animate-[fadeIn_0.5s_ease-out]">
+                    <div class="w-14 h-14 sm:w-20 sm:h-20 rounded-2xl sm:rounded-3xl mx-auto flex items-center justify-center mb-6 border shadow-2xl" style="background: rgba(50,73,215,0.1); border-color: rgba(50,73,215,0.2); box-shadow: 0 25px 50px rgba(50,73,215,0.1); color: #3249d7;">
+                        <svg class="w-7 h-7 sm:w-10 sm:h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+                    </div>
+                    <h2 class="text-xl sm:text-3xl font-bold t-text-primary mb-3 tracking-tight" style="font-family: Poppins, sans-serif;">Let's build something.</h2>
+                    <p class="t-text-secondary text-sm sm:text-base max-w-xl mx-auto mb-6 leading-relaxed">Describe your feature or bug fix. Gemini will plan it, spawn a Claude Code session, and execute the changes on the server.</p>
+                    
+                    <div class="mx-auto max-w-sm text-left bg-white/50 dark:bg-[#1a1c23]/50 p-4 border rounded-xl" style="border-color: rgba(50,73,215,0.15)">
+                        <label class="block text-xs font-bold t-text-primary uppercase tracking-wider mb-2">Map task to phone</label>
+                        <select id="new-task-phone" class="t-input border rounded-lg text-sm px-3 py-2 w-full focus:ring-1 focus:ring-[#3249d7] outline-none bg-white dark:bg-[#1a1c23]">
+                            ${phoneOptions}
+                        </select>
+                        <p class="text-[10px] t-text-muted mt-2 italic">This session will be exclusively mapped to your email and this number. Others must request access.</p>
+                    </div>
+                </div>
+            `;
+
+            textarea.value = '';
+            textarea.disabled = false;
+            sendBtn.disabled = true;
+            textarea.style.height = 'auto';
+            textarea.focus();
+
+            if (loopInterval) clearInterval(loopInterval);
+            fetchSessions(1);
+        }
+
+        async function loadSession(id, taskTitle, status, model) {
+            currentSessionId = id;
+            isCreatingNew = false;
+            closeSidebar();
+
+            ['empty-state', 'phones-panel', 'admin-panel', 'cron-panel'].forEach(id => document.getElementById(id)?.classList.add('hidden'));
+            document.getElementById('workspace-header').classList.remove('hidden');
+            document.getElementById('workspace-content').classList.remove('hidden');
+            document.getElementById('workspace-input-area').classList.remove('hidden');
+
+            const titleWords = (taskTitle || '').trim().split(/\s+/);
+            const shortTitle = titleWords.slice(0, 7).join(' ') + (titleWords.length > 7 ? '…' : '');
+            document.getElementById('workspace-title').innerText = shortTitle || 'Session Details';
+            document.getElementById('workspace-title').style.color = '';
+            document.getElementById('workspace-id').innerText = id;
+            const modelBadge = document.getElementById('workspace-model-badge');
+            if (model) {
+                modelBadge.textContent = model;
+                modelBadge.classList.remove('hidden');
+                modelBadge.classList.add('sm:inline-block');
+            } else {
+                modelBadge.classList.add('hidden');
+            }
+
+            let color = '#64748b';
+            let shadow = '';
+            let pulse = '';
+            if (status === 'running') {
+                color = '#34d399';
+                pulse = 'animate-pulse';
+                shadow = 'shadow-[0_0_10px_rgba(52,211,153,0.5)]';
+            } else if (status === 'failed') {
+                color = '#f87171';
+            } else if (status === 'completed') {
+                color = '#3249d7';
+            }
+            const dot = document.getElementById('workspace-status-dot');
+            dot.className = `w-2.5 h-2.5 rounded-full ${pulse} ${shadow}`;
+            dot.style.background = color;
+
+            const content = document.getElementById('workspace-content');
+            content.innerHTML = `
+                <div class="text-center t-text-muted mt-32 flex flex-col items-center">
+                    <svg class="w-6 h-6 animate-spin mb-4" style="color: rgba(50,73,215,0.5);" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" class="opacity-25"></circle><path fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" class="opacity-75"></path></svg>
+                    <span class="text-sm font-medium tracking-wide uppercase">Parsing Logs...</span>
+                </div>
+            `;
+
+            fetchSessions(1);
+            await pollMessages();
+
+            if (loopInterval) clearInterval(loopInterval);
+            loopInterval = setInterval(pollMessages, 3000);
+
+            if (status === 'running') {
+                textarea.disabled = true;
+                textarea.placeholder = "Session is currently running...";
+                document.getElementById('chat-stop-btn').classList.remove('hidden');
+                sendBtn.classList.add('hidden');
+            } else {
+                textarea.disabled = false;
+                textarea.placeholder = "Type a message… or paste/drop an image";
+                document.getElementById('chat-stop-btn').classList.add('hidden');
+                sendBtn.classList.remove('hidden');
+            }
+
+            textarea.value = '';
+            sendBtn.disabled = true;
+            textarea.style.height = 'auto';
+        }
+
+        let isPollingMessages = false;
+        async function pollMessages() {
+            if (!currentSessionId || isPollingMessages) return;
+            isPollingMessages = true;
+            try {
+                const res = await fetch(`/api/sessions/${currentSessionId}/messages`);
+                const messages = await res.json();
+                renderMessages(messages);
+            } catch (err) {
+                console.error("Polling error", err);
+            } finally {
+                isPollingMessages = false;
+            }
+        }
+
+        let lastMessageCount = 0;
+        let lastMessageLength = 0;
+
+        function renderMessages(messages) {
+            const content = document.getElementById('workspace-content');
+
+            const currentLastLen = messages.length > 0 ? messages[messages.length - 1].content.length : 0;
+
+            if (messages.length === lastMessageCount && currentLastLen === lastMessageLength && content.querySelector('.max-w-4xl')) {
+                return;
+            }
+
+            lastMessageCount = messages.length;
+            lastMessageLength = currentLastLen;
+
+            if (messages.length === 0) {
+                content.innerHTML = `
+                    <div class="max-w-3xl mx-auto py-24 text-center px-4">
+                        <div class="w-16 h-16 t-card rounded-2xl mx-auto flex items-center justify-center mb-6 border">
+                            <svg class="w-8 h-8 t-text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+                        </div>
+                        <h2 class="text-lg font-medium t-text-primary mb-2" style="font-family: Poppins, sans-serif;">No logs found.</h2>
+                        <p class="t-text-secondary text-sm">The session has started but no output has been recorded yet.</p>
+                    </div>
+                `;
+                return;
+            }
+
+            const isAtBottom = content.scrollHeight - content.scrollTop <= content.clientHeight + 100;
+            content.innerHTML = '';
+
+            const maxW = document.createElement('div');
+            maxW.className = "max-w-4xl mx-auto space-y-6";
+            content.appendChild(maxW);
+
+            messages.forEach((msg, index) => {
+                const isUser = msg.role === 'user';
+                const div = document.createElement('div');
+                div.className = `flex flex-col w-full ${isUser ? 'items-end' : 'items-start'}`;
+
+                const inner = document.createElement('div');
+
+                if (isUser) {
+                    inner.className = 'max-w-[85%] md:max-w-[70%] rounded-2xl px-5 py-3.5 text-white shadow-md break-words';
+                    inner.style.background = 'var(--pl-primary)';
+                    inner.style.boxShadow = '0 4px 14px rgba(50,73,215,0.25)';
+                    const textBody = document.createElement('div');
+                    textBody.className = 'whitespace-pre-wrap font-medium text-[15px] leading-relaxed';
+                    textBody.textContent = msg.content;
+                    inner.appendChild(textBody);
+                } else {
+                    inner.className = 'w-full max-w-[95%] md:max-w-[90%] bg-transparent py-2';
+
+                    const header = document.createElement('div');
+                    header.className = 'flex items-center space-x-2 mb-3';
+                    header.innerHTML = `
+                        <div class="w-6 h-6 rounded t-card border flex items-center justify-center shrink-0 shadow-sm">
+                            <svg class="w-3.5 h-3.5" style="color: #3249d7;" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>
+                        </div>
+                        <span class="text-xs font-semibold t-text-secondary">Claude Code</span>
+                    `;
+                    inner.appendChild(header);
+
+                    const textBody = document.createElement('div');
+                    textBody.className = 'markdown-body pl-8';
+                    textBody.innerHTML = marked.parse(msg.content);
+                    inner.appendChild(textBody);
+                }
+
+                div.appendChild(inner);
+                maxW.appendChild(div);
+            });
+
+            if (isAtBottom) {
+                setTimeout(() => {
+                    content.scrollTo({ top: content.scrollHeight, behavior: 'auto' });
+                }, 50);
+            }
+        }
+
+        async function sendMessage() {
+            const val = textarea.value.trim();
+            if (!val && !pendingImages.length) return;   // need text OR image
+
+            let phone = document.getElementById('user-phone').value;
+            if (isCreatingNew) {
+                const newDropdown = document.getElementById('new-task-phone');
+                if (newDropdown && newDropdown.value) {
+                    phone = newDropdown.value;
+                }
+            }
+
+            if (!phone) {
+                alert("Please add an authorized phone number first in the 'Manage numbers' section.");
+                return;
+            }
+
+            textarea.value = '';
+            textarea.style.height = 'auto';
+            textarea.disabled = true;
+            sendBtn.disabled = true;
+
+            try {
+                if (isCreatingNew) {
+                    document.getElementById('workspace-content').innerHTML = `
+                        <div class="max-w-3xl mx-auto py-24 text-center px-4">
+                            <div class="inline-flex space-x-2 items-center px-5 py-2.5 rounded-full mb-6 border shadow-inner" style="color: #3249d7; background: rgba(50,73,215,0.1); border-color: rgba(50,73,215,0.2);">
+                                <svg class="animate-spin w-4 h-4" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" class="opacity-25" fill="none"></circle><path fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" class="opacity-75"></path></svg>
+                                <span class="text-sm font-semibold tracking-wide">Orchestrator dispatching...</span>
+                            </div>
+                            <h2 class="text-xl font-semibold t-text-primary mb-2" style="font-family: Poppins, sans-serif;">Analyzing your task</h2>
+                            <p class="t-text-secondary text-sm">Please wait while Gemini spawns a Claude engine wrapper...</p>
+                        </div>
+                    `;
+
+                    const imageTokens = pendingImages.map(p => p.token).filter(Boolean);
+                    clearAllImages();
+
+                    const selectedModel = document.getElementById('model-select').value;
+                    const resAPI = await fetch('/api/sessions/start', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ phone, text: val, imageTokens, model: selectedModel })
+                    });
+                    const result = await resAPI.json();
+
+                    if (result.sessionId) {
+                        isCreatingNew = false;
+                        // Pre-emptively load the session by ID even if it hasn't loaded in fetchSessions yet
+                        loadSession(result.sessionId, val, 'running');
+                        fetchSessions(1);
+                        pollMessages();
+                    } else {
+                        // Fallback if orchestrator didn't return an ID for some reason
+                        setTimeout(() => {
+                            isCreatingNew = false;
+                            fetchSessions(1);
+                        }, 2000);
+                    }
+
+                } else if (currentSessionId) {
+                    const content = document.getElementById('workspace-content');
+                    const maxW = content.querySelector('.max-w-4xl');
+                    if (maxW) {
+                        const div = document.createElement('div');
+                        div.className = "flex flex-col w-full items-end opacity-70 animate-[slideUp_0.2s_ease-out]";
+                        // Build image grid html
+                        const imgs = pendingImages.map(p => {
+                            if (p.isImage) return `<img src="${p.dataUrl}" class="w-24 h-24 object-cover rounded-xl border border-white/20 shadow-md" alt="attached" title="${escapeHtml(p.name)}">`;
+                            return `<div class="w-24 h-24 p-2 rounded-xl flex flex-col items-center justify-center border border-white/30 bg-white/10 shadow-md text-white overflow-hidden text-center" title="${escapeHtml(p.name)}"><svg class="w-8 h-8 mb-1 opacity-80" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"></path></svg><span class="text-[9px] break-all leading-tight opacity-90 w-full truncate">${escapeHtml(p.name)}</span></div>`;
+                        }).join('');
+                        const imgBar = pendingImages.length ? `<div class="flex flex-wrap gap-1.5 mb-2">${imgs}</div>` : '';
+                        div.innerHTML = `<div class="max-w-[85%] md:max-w-[70%] rounded-2xl px-5 py-3.5 text-white shadow-md break-words" style="background: var(--pl-primary); box-shadow: 0 4px 14px rgba(50,73,215,0.25);">${imgBar}${val ? `<div class="whitespace-pre-wrap font-medium text-[15px] leading-relaxed">${escapeHtml(val)}</div>` : ''}</div>`;
+                        maxW.appendChild(div);
+                        content.scrollTo({ top: content.scrollHeight, behavior: 'smooth' });
+                    }
+
+                    const imageTokens = pendingImages.map(p => p.token).filter(Boolean);
+                    clearAllImages();
+
+                    await fetch(`/api/sessions/${currentSessionId}/message`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ phone, text: `[resume ${currentSessionId}] ${val || '(image)'}`, imageTokens })
+                    });
+
+                    pollMessages();
+                }
+            } catch (e) {
+                alert("Network error: " + e.message);
+            } finally {
+                textarea.disabled = false;
+                textarea.focus();
+            }
+        }
+
+        async function stopSession() {
+            if (!currentSessionId) return;
+            const stopBtn = document.getElementById('chat-stop-btn');
+            stopBtn.disabled = true;
+            stopBtn.classList.add('opacity-50');
+            try {
+                const res = await fetch(`/api/sessions/${currentSessionId}/stop`, { method: 'POST' });
+                const data = await res.json();
+                if (data.success) {
+                    textarea.disabled = false;
+                    textarea.placeholder = "Type a message… or paste/drop an image";
+                    stopBtn.classList.add('hidden');
+                    sendBtn.classList.remove('hidden');
+                    fetchSessions(currentSessionPage);
+                    pollMessages();
+                } else {
+                    alert('Error stopping session: ' + data.error);
+                }
+            } catch (err) {
+                console.error('Failed to stop session', err);
+            } finally {
+                stopBtn.disabled = false;
+                stopBtn.classList.remove('opacity-50');
+            }
+        }
+
+        function escapeHtml(unsafe) {
+            if (!unsafe) return '';
+            return String(unsafe)
+                .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+        }
+
+        // ── File Handling (multi-file) ────────────────────────────────
+        async function handleFile(file) {
+            if (!file) return;
+
+            const isImage = file.type.startsWith('image/');
+            const entry = { token: null, dataUrl: null, name: file.name || 'file', isImage };
+            const idx = pendingImages.length;
+            pendingImages.push(entry);
+
+            if (isImage) {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    entry.dataUrl = e.target.result;
+                    renderImagePreviews();
+                };
+                reader.readAsDataURL(file);
+            } else {
+                renderImagePreviews(); // render document icon
+            }
+
+            // Upload to server
+            try {
+                const buf = await file.arrayBuffer();
+                // Send custom header X-File-Name (ASCII-safe encoding) to preserve original doc name
+                const safeName = encodeURIComponent(file.name || 'file');
+                const res = await fetch('/api/upload-file', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/octet-stream', 'X-Mime-Type': file.type, 'X-File-Name': safeName },
+                    body: buf
+                });
+                const data = await res.json();
+                if (data.token) entry.token = data.token;
+                else console.error('Upload failed', data);
+            } catch (e) {
+                console.error('Upload error', e);
+            }
+            renderImagePreviews(); // re-render to strip 'uploading...' tag
+        }
+
+        function renderImagePreviews() {
+            const grid = document.getElementById('image-preview-grid');
+            const bar = document.getElementById('image-preview-bar');
+            if (!pendingImages.length) { bar.classList.add('hidden'); return; }
+            bar.classList.remove('hidden');
+            grid.innerHTML = '';
+            pendingImages.forEach((p, i) => {
+                const wrap = document.createElement('div');
+                wrap.className = 'relative group w-20 h-20 rounded-xl border t-card shadow-md flex items-center justify-center overflow-hidden';
+                wrap.style.borderColor = 'rgba(50,73,215,0.25)';
+
+                if (p.isImage && p.dataUrl) {
+                    wrap.innerHTML = `<img src="${p.dataUrl}" alt="${escapeHtml(p.name)}" class="w-full h-full object-cover transition-all group-hover:opacity-80">`;
+                } else {
+                    wrap.innerHTML = `<div class="flex flex-col items-center justify-center w-full h-full p-1 bg-gray-50 dark:bg-gray-800 text-gray-500 overflow-hidden text-center"><svg class="w-6 h-6 mb-1 opacity-70" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"></path></svg><span class="text-[8px] leading-tight w-full break-words truncate px-1">${escapeHtml(p.name)}</span></div>`;
+                }
+
+                wrap.innerHTML += `
+                    <span class="absolute top-1 right-1 w-5 h-5 flex items-center justify-center rounded-full bg-red-500 text-white text-xs cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity leading-none" onclick="removeImage(${i})" title="Remove">×</span>
+                    ${!p.token ? '<span class="absolute bottom-1 left-1 text-[9px] bg-black/60 text-white px-1 rounded backdrop-blur-sm">uploading…</span>' : ''}
+                `;
+                grid.appendChild(wrap);
+            });
+        }
+
+        function removeImage(idx) {
+            pendingImages.splice(idx, 1);
+            renderImagePreviews();
+        }
+
+        function clearAllImages() {
+            pendingImages = [];
+            document.getElementById('image-preview-bar').classList.add('hidden');
+            document.getElementById('image-preview-grid').innerHTML = '';
+            document.getElementById('image-file-input').value = '';
+        }
+
+        // Clipboard paste support — Ctrl+V pastes image/files from clipboard
+        document.addEventListener('paste', (e) => {
+            if (!document.getElementById('workspace-input-area').classList.contains('hidden')) {
+                // If there are files (like screenshots) in the clipboard
+                const items = [...(e.clipboardData?.items || [])].filter(i => i.kind === 'file');
+                if (items.length) {
+                    e.preventDefault();
+                    items.forEach(i => handleFile(i.getAsFile()));
+                }
+            }
+        });
+
+        // CSS animations
+        const animStyle = document.createElement('style');
+        animStyle.innerHTML = `
+            @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+            @keyframes slideUp { from { opacity: 0; transform: translateY(5px); } to { opacity: 0.7; transform: translateY(0); } }
+            @keyframes pulse-recording { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+            #mic-btn.text-red-500 { animation: pulse-recording 1s ease-in-out infinite; }
+        `;
+        document.head.appendChild(animStyle);
+
+        // Core Init
+        checkAuth();
+        fetchPhones().then(() => {
+            fetchStats();
+            fetchSessions(1);
+        });
+        setInterval(fetchStats, 10000);
+        setInterval(() => fetchSessions(currentSessionPage), 10000);
+        // ── Phone Management ──────────────────────────────────
+        function showPhonesPanel() {
+            closeSidebar();
+            ['empty-state', 'workspace-header', 'workspace-content', 'workspace-input-area', 'admin-panel', 'cron-panel'].forEach(id => document.getElementById(id)?.classList.add('hidden'));
+            document.getElementById('phones-panel').classList.remove('hidden');
+            fetchPhones();
+        }
+
+        function hidePhonesPanel() {
+            document.getElementById('phones-panel').classList.add('hidden');
+            // Only show empty-state if no session is selected
+            if (!currentSessionId) {
+                document.getElementById('empty-state').classList.remove('hidden');
+            } else {
+                ['workspace-header', 'workspace-content', 'workspace-input-area'].forEach(id => {
+                    document.getElementById(id)?.classList.remove('hidden');
+                });
+            }
+        }
+
+        // ── Workspace Files Management ──────────────────────────
+        let currentWorkspaceDir = '';
+        function showWorkspacePanel() {
+            closeSidebar();
+            ['empty-state', 'phones-panel', 'admin-panel', 'cron-panel', 'workspace-header', 'workspace-content', 'workspace-input-area'].forEach(id => document.getElementById(id)?.classList.add('hidden'));
+            document.getElementById('workspace-panel').classList.remove('hidden');
+            fetchWorkspaceFiles(currentWorkspaceDir);
+        }
+
+        function hideWorkspacePanel() {
+            document.getElementById('workspace-panel').classList.add('hidden');
+            if (!currentSessionId) {
+                document.getElementById('empty-state').classList.remove('hidden');
+            } else {
+                ['workspace-header', 'workspace-content', 'workspace-input-area'].forEach(id => {
+                    document.getElementById(id)?.classList.remove('hidden');
+                });
+            }
+        }
+
+        async function fetchWorkspaceFiles(dir = '') {
+            currentWorkspaceDir = dir;
+            const list = document.getElementById('files-list');
+            document.getElementById('current-dir-path').textContent = '/home/ubuntu' + (dir ? '/' + dir : '');
+
+            list.innerHTML = '<div class="col-span-full py-10 text-center text-gray-400">Loading files...</div>';
+
+            try {
+                const res = await fetch(`/api/workspace/files?dir=${encodeURIComponent(dir)}`);
+                const files = await res.json();
+
+                if (files.error) {
+                    list.innerHTML = `<div class="col-span-full py-10 text-center text-red-500">${files.error}</div>`;
+                    return;
+                }
+
+                list.innerHTML = '';
+
+                // Add up-dir option if not root
+                if (dir) {
+                    const upDir = dir.includes('/') ? dir.substring(0, dir.lastIndexOf('/')) : '';
+                    const wrap = document.createElement('div');
+                    wrap.className = 't-card border rounded-xl p-3 flex items-center gap-3 cursor-pointer hover:bg-[#3249d7]/5 transition-all w-full';
+                    wrap.style.borderColor = 'rgba(50,73,215,0.1)';
+                    wrap.onclick = () => fetchWorkspaceFiles(upDir);
+                    wrap.innerHTML = `
+                        <div class="w-10 h-10 rounded-lg bg-gray-100 flex items-center justify-center shrink-0">
+                            <svg class="w-5 h-5 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg>
+                        </div>
+                        <div class="flex-1 overflow-hidden font-semibold t-text-primary tracking-tight">.. (up dir)</div>
+                    `;
+                    list.appendChild(wrap);
+                }
+
+                if (!files.length && !dir) {
+                    list.innerHTML = '<div class="col-span-full text-center t-text-muted py-8">No files generated yet.</div>';
+                    return;
+                }
+
+                files.forEach(f => {
+                    const wrap = document.createElement('div');
+                    wrap.className = 't-card border rounded-xl p-3 flex items-center gap-3 transition-all hover:bg-[#3249d7]/5 group relative w-full overflow-hidden';
+                    wrap.style.borderColor = 'rgba(50,73,215,0.15)';
+
+                    const icon = f.isDirectory ? '<svg class="w-4 h-4 inline-block mr-1 text-[#3249d7] align-text-bottom" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg>' : '<svg class="w-4 h-4 inline-block mr-1 t-text-muted align-text-bottom" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>';
+                    const downloadBtn = !f.isDirectory ? `
+                        <a href="/api/workspace/download?path=${encodeURIComponent(f.path)}" target="_blank" download class="absolute right-3 top-1/2 -translate-y-1/2 p-2 rounded-lg bg-[#3249d7] text-white opacity-100 md:opacity-0 group-hover:opacity-100 transition shadow-lg cursor-pointer flex items-center gap-1.5 text-xs font-semibold z-10">
+                           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg> <span class="hidden sm:inline">Download</span>
+                        </a>
+                    ` : '';
+
+                    wrap.innerHTML = `
+                        <div class="w-10 h-10 rounded-lg bg-[#3249d7]/10 flex items-center justify-center shrink-0">
+                            <span class="text-xl opacity-80">${icon}</span>
+                        </div>
+                        <div class="flex-1 min-w-0 pr-24 relative z-0">
+                            <div class="font-medium text-sm t-text-primary truncate block hover:clip-none hover:whitespace-normal group-hover:pr-0 cursor-pointer" onclick="${f.isDirectory ? `fetchWorkspaceFiles('${f.path}')` : `window.open('/api/workspace/download?path=${encodeURIComponent(f.path)}', '_blank')`}" title="${escapeHtml(f.name)}">
+                                ${escapeHtml(f.name)}
+                            </div>
+                            ${f.isDirectory ? '' : `<div class="text-[10px] t-text-muted mt-0.5 truncate uppercase tracking-widest">${(f.size / 1024).toFixed(1)} KB &bull; ${new Date(f.lastModified).toLocaleString()}</div>`}
+                        </div>
+                        ${downloadBtn}
+                    `;
+                    list.appendChild(wrap);
+                });
+            } catch (e) {
+                list.innerHTML = '<div class="col-span-full text-center text-red-400 py-8">Network error loading files.</div>';
+            }
+        }
+
+        async function fetchPhones() {
+            const list = document.getElementById('phones-list');
+            try {
+                const res = await fetch('/api/phones');
+                const phones = await res.json();
+
+                // Update dropdown
+                const select = document.getElementById('user-phone');
+                const currentVal = select.value;
+                select.innerHTML = '';
+                if (!phones.length) {
+                    select.innerHTML = '<option value="">No numbers added</option>';
+                } else {
+                    phones.forEach(p => {
+                        const opt = document.createElement('option');
+                        opt.value = p.phone;
+                        opt.textContent = p.label ? `${p.label} (${p.phone})` : p.phone;
+                        select.appendChild(opt);
+                    });
+                    if (phones.find(p => p.phone === currentVal)) select.value = currentVal;
+                }
+
+                if (!phones.length) {
+                    list.innerHTML = '<div class="text-center t-text-muted text-sm py-8">No authorized numbers yet. Add one above!</div>';
+                    return;
+                }
+                list.innerHTML = '';
+                phones.forEach(p => {
+                    const row = document.createElement('div');
+                    row.className = 't-card border rounded-xl px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3';
+                    row.style.borderColor = 'rgba(50,73,215,0.15)';
+                    row.innerHTML = `
+                        <div class="flex-1 min-w-0">
+                            <div class="font-mono text-sm t-text-primary font-semibold">${escapeHtml(p.phone)}</div>
+                            <div class="text-xs t-text-muted">${escapeHtml(p.label || 'No label')} &bull; Added ${new Date(p.added_at).toLocaleDateString()}</div>
+                        </div>
+                        <div class="flex items-center gap-2 shrink-0">
+                            <button onclick="pingPhone('${escapeHtml(p.phone)}')" title="Send verification ping"
+                                class="px-3 py-1.5 text-xs font-semibold rounded-lg border transition-all cursor-pointer hover:bg-emerald-500/10 hover:border-emerald-400 hover:text-emerald-400 t-text-secondary"
+                                style="border-color:rgba(50,73,215,0.2);">Ping</button>
+                            <button onclick="removePhone('${escapeHtml(p.phone)}')" title="Remove number"
+                                class="px-3 py-1.5 text-xs font-semibold rounded-lg border transition-all cursor-pointer hover:bg-red-500/10 hover:border-red-400 hover:text-red-400 t-text-secondary"
+                                style="border-color:rgba(50,73,215,0.2);">Remove</button>
+                        </div>`;
+                    list.appendChild(row);
+                });
+            } catch (e) {
+                list.innerHTML = '<div class="text-center text-red-400 text-sm py-8">Failed to load phones.</div>';
+            }
+        }
+
+        async function addPhone() {
+            const phone = document.getElementById('new-phone-number').value.trim();
+            const label = document.getElementById('new-phone-label').value.trim();
+            if (!phone) return alert('Please enter a phone number.');
+            try {
+                const res = await fetch('/api/phones', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ phone, label })
+                });
+                const data = await res.json();
+                if (data.error) return alert('Error: ' + data.error);
+                document.getElementById('new-phone-number').value = '';
+                document.getElementById('new-phone-label').value = '';
+                fetchPhones();
+            } catch (e) {
+                alert('Network error: ' + e.message);
+            }
+        }
+
+        async function pingPhone(phone) {
+            try {
+                const res = await fetch(`/api/phones/${phone}/ping`, { method: 'POST' });
+                const data = await res.json();
+                if (data.error) return alert('Ping failed: ' + data.error);
+                alert(`Verification ping sent to ${phone}.`);
+            } catch (e) {
+                alert('Network error: ' + e.message);
+            }
+        }
+
+        async function removePhone(phone) {
+            if (!confirm(`Remove ${phone} from the authorized list?`)) return;
+            try {
+                await fetch(`/api/phones/${phone}`, { method: 'DELETE' });
+            } catch (e) {
+                alert('Network error: ' + e.message);
+            }
+        }
+
+
+        // ── Share Session Modal ───────────────────────────────
+        let shareSessionId = null;
+
+        function openShareModal(sessionId) {
+            shareSessionId = sessionId;
+            document.getElementById('share-session-label').textContent = 'Session: ' + sessionId;
+            document.getElementById('share-modal').classList.remove('hidden');
+            document.getElementById('share-modal-msg').classList.add('hidden');
+            document.getElementById('grant-user-id').value = '';
+            document.getElementById('claim-otp').value = '';
+            showShareTab('grant');
+        }
+
+        function closeShareModal() {
+            document.getElementById('share-modal').classList.add('hidden');
+            shareSessionId = null;
+        }
+
+        function showShareTab(tab) {
+            ['grant', 'claim'].forEach(t => {
+                document.getElementById('share-tab-' + t).classList.toggle('hidden', t !== tab);
+                const btn = document.getElementById('tab-' + t);
+                btn.classList.toggle('t-text-primary', t === tab);
+                btn.classList.toggle('border-[#3249d7]', t === tab);
+                btn.classList.toggle('t-text-muted', t !== tab);
+                btn.classList.toggle('border-transparent', t !== tab);
+            });
+        }
+
+        function showShareMsg(msg, isError = false) {
+            const el = document.getElementById('share-modal-msg');
+            el.textContent = msg;
+            el.className = `mt-3 text-xs font-medium text-center ${isError ? 'text-red-400' : 'text-emerald-400'}`;
+            el.classList.remove('hidden');
+        }
+
+        async function grantAccessById() {
+            const userId = document.getElementById('grant-user-id').value.trim();
+            if (!userId) return showShareMsg('Please enter a User ID.', true);
+            try {
+                const res = await fetch(`/api/sessions/${shareSessionId}/grant-access`, {
+                    method: 'POST', credentials: 'include',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ userId })
+                });
+                const d = await res.json();
+                if (d.error) return showShareMsg(d.error, true);
+                showShareMsg('Access granted.');
+            } catch (e) { showShareMsg('Network error', true); }
+        }
+
+        async function requestAccessViaWA() {
+            try {
+                const res = await fetch(`/api/sessions/${shareSessionId}/request-access`, {
+                    method: 'POST', credentials: 'include',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                const d = await res.json();
+                if (d.error) return showShareMsg(d.error, true);
+                showShareMsg('Request sent. The owner will receive a WhatsApp OTP message.');
+            } catch (e) { showShareMsg('Network error', true); }
+        }
+
+        async function claimWithOtp() {
+            const otp = document.getElementById('claim-otp').value.trim();
+            if (!otp) return showShareMsg('Enter the 6-digit OTP.', true);
+            try {
+                const res = await fetch(`/api/sessions/${shareSessionId}/claim-access`, {
+                    method: 'POST', credentials: 'include',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ otp })
+                });
+                const d = await res.json();
+                if (d.error) return showShareMsg(d.error, true);
+                showShareMsg('Access granted. Reload to see the session.');
+            } catch (e) { showShareMsg('Network error', true); }
+        }
+
+        // ── Auth ──────────────────────────────────────────────
+        let currentUser = null;
+
+        async function checkAuth() {
+            try {
+                const res = await fetch('/api/me', { credentials: 'include' });
+                if (res.ok) {
+                    currentUser = await res.json();
+                    const info = document.getElementById('user-info');
+                    info.classList.remove('hidden');
+                    info.classList.add('flex');
+                    const initials = (currentUser.displayName || currentUser.email || '?')[0].toUpperCase();
+                    document.getElementById('user-avatar').textContent = initials;
+                    document.getElementById('user-avatar').title = `${currentUser.displayName || ''} (${currentUser.role || ''})`;
+                    // Show admin button
+                    if (currentUser.isAdmin) {
+                        document.getElementById('admin-panel-btn').classList.remove('hidden');
+                        fetchNotifCount();
+                    }
+                }
+            } catch (_) { }
+        }
+
+        async function fetchNotifCount() {
+            try {
+                const r = await fetch('/api/stats', { credentials: 'include' });
+                const d = await r.json();
+                const badge = document.getElementById('notif-badge');
+                if (d.pendingRequests > 0) {
+                    badge.textContent = d.pendingRequests;
+                    badge.classList.remove('hidden');
+                } else {
+                    badge.classList.add('hidden');
+                }
+            } catch (_) { }
+        }
+
+        async function logout() {
+            await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
+            window.location.href = window.location.pathname.replace(/\/[^/]*$/, '/') + 'login.html';
+        }
+
+        // ── Admin Panel ───────────────────────────────────────
+        function showAdminPanel() {
+            closeSidebar();
+            ['empty-state', 'workspace-header', 'workspace-content', 'workspace-input-area', 'phones-panel', 'cron-panel'].forEach(id => document.getElementById(id)?.classList.add('hidden'));
+            document.getElementById('admin-panel').classList.remove('hidden');
+            fetchUsers();
+            fetchPendingRequests();
+            fetchNotifCount();
+            fetchSystemPrompt();
+        }
+
+        function hideAdminPanel() {
+            document.getElementById('admin-panel').classList.add('hidden');
+            document.getElementById('empty-state').classList.remove('hidden');
+        }
+
+        async function fetchUsers() {
+            try {
+                const res = await fetch('/api/admin/users', { credentials: 'include' });
+                const users = await res.json();
+                const el = document.getElementById('users-list');
+                if (!Array.isArray(users) || users.length === 0) { el.innerHTML = '<div class="text-center t-text-muted text-sm py-4">No users yet.</div>'; return; }
+                el.innerHTML = '<p class="text-xs t-text-muted uppercase tracking-wider font-bold mb-2">Team Members</p>' + users.map(u => `
+                    <div class="t-card border rounded-xl px-4 py-3 flex items-center justify-between gap-3" style="border-color:rgba(50,73,215,0.15);">
+                        <div class="flex items-center gap-3 min-w-0">
+                            <div class="w-8 h-8 rounded-full bg-[#3249d7] flex items-center justify-center text-white text-xs font-bold shrink-0">${(u.display_name || u.email || '?')[0].toUpperCase()}</div>
+                            <div class="min-w-0">
+                                <p class="text-sm font-semibold t-text-primary truncate">${escapeHtml(u.display_name || '')}</p>
+                                <p class="text-xs t-text-muted truncate">${escapeHtml(u.email || '')} · <span class="capitalize">${u.role || 'developer'}</span>${u.is_admin ? ' · <span class="text-amber-400 font-semibold">Admin</span>' : ''}</p>
+                            </div>
+                        </div>
+                        <div class="flex gap-1 shrink-0">
+                            <button onclick="resetPassword('${u.id}')" class="px-2 py-1 text-xs t-text-muted hover:text-[#3249d7] border border-current/20 rounded-md transition-colors cursor-pointer" title="Reset Password">Reset Pwd</button>
+                            ${currentUser?.id !== u.id ? `<button onclick="deleteUser('${u.id}')" class="px-2 py-1 text-xs t-text-muted hover:text-red-400 border border-current/20 rounded-md transition-colors cursor-pointer" title="Remove User">Remove</button>` : ''}
+                        </div>
+                    </div>`).join('');
+            } catch (e) { document.getElementById('users-list').innerHTML = '<div class="text-red-400 text-sm py-2">Error loading users.</div>'; }
+        }
+
+        async function addUser() {
+            const name = document.getElementById('new-user-name').value.trim();
+            const email = document.getElementById('new-user-email').value.trim();
+            const role = document.getElementById('new-user-role').value;
+            if (!email) return alert('Email is required.');
+            try {
+                const res = await fetch('/api/admin/users', {
+                    method: 'POST', credentials: 'include',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, displayName: name || email.split('@')[0], role, isAdmin: role === 'admin' })
+                });
+                const d = await res.json();
+                if (d.error) return alert('Error: ' + d.error);
+                document.getElementById('new-user-name').value = '';
+                document.getElementById('new-user-email').value = '';
+                alert(`User created. A password has been emailed to ${email}.`);
+                fetchUsers();
+            } catch (e) { alert('Network error'); }
+        }
+
+        async function deleteUser(userId) {
+            if (!confirm('Remove this user? They will no longer be able to log in.')) return;
+            try {
+                await fetch(`/api/admin/users/${userId}`, { method: 'DELETE', credentials: 'include' });
+                fetchUsers();
+            } catch (e) { alert('Error'); }
+        }
+
+        async function resetPassword(userId) {
+            if (!confirm("Reset this user's password? A new password will be emailed to them.")) return;
+            try {
+                const res = await fetch(`/api/admin/users/${userId}/reset-password`, { method: 'POST', credentials: 'include' });
+                const d = await res.json();
+                if (d.error) return alert('Error: ' + d.error);
+                alert('Password reset and emailed to the user.');
+            } catch (e) { alert('Error'); }
+        }
+
+        async function fetchPendingRequests() {
+            try {
+                const res = await fetch('/api/admin/access-requests', { credentials: 'include' });
+                const requests = await res.json();
+                const el = document.getElementById('access-requests-list');
+                if (!Array.isArray(requests) || requests.length === 0) { el.innerHTML = '<div class="text-center t-text-muted text-sm py-2">No pending requests.</div>'; return; }
+                el.innerHTML = requests.map(r => `
+                    <div class="t-card border rounded-xl px-4 py-3 flex items-center justify-between gap-3" style="border-color:rgba(255,180,0,0.2);">
+                        <div class="min-w-0">
+                            <p class="text-sm font-semibold t-text-primary">${escapeHtml(r.requester_name || '')} <span class="text-xs t-text-muted font-normal">${escapeHtml(r.requester_email || '')}</span></p>
+                            <p class="text-xs t-text-muted">Requesting access to: <span class="font-mono">${r.session_id.substring(0, 12)}…</span></p>
+                            <p class="text-xs t-text-muted italic">${escapeHtml(r.session_task || '')}</p>
+                        </div>
+                        <div class="flex gap-1 shrink-0">
+                            <button onclick="resolveRequest('${r.id}', true)" class="px-3 py-1 text-xs bg-emerald-600 hover:bg-emerald-700 text-white rounded-md font-semibold transition-colors cursor-pointer">Approve</button>
+                            <button onclick="resolveRequest('${r.id}', false)" class="px-3 py-1 text-xs bg-red-600 hover:bg-red-700 text-white rounded-md font-semibold transition-colors cursor-pointer">Reject</button>
+                        </div>
+                    </div>`).join('');
+            } catch (e) { }
+        }
+
+        async function resolveRequest(requestId, approve) {
+            try {
+                await fetch(`/api/admin/access-requests/${requestId}/resolve`, {
+                    method: 'POST', credentials: 'include',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ approve })
+                });
+                fetchPendingRequests();
+                fetchNotifCount();
+            } catch (e) { alert('Error'); }
+        }
+
+        // ── System Prompt Management ─────────────────────────
+        async function fetchSystemPrompt() {
+            try {
+                const res = await fetch('/api/admin/claude-prompt', { credentials: 'include' });
+                const data = await res.json();
+                const editor = document.getElementById('system-prompt-editor');
+                const status = document.getElementById('system-prompt-status');
+                const pathEl = document.getElementById('claude-prompt-path');
+                if (data.prompt !== undefined) {
+                    editor.value = data.prompt;
+                    if (pathEl) pathEl.textContent = data.path || '';
+                    status.textContent = 'Loaded from disk';
+                }
+            } catch (e) {
+                document.getElementById('system-prompt-status').textContent = 'Error loading prompt.';
+            }
+        }
+
+        async function saveClaudePrompt() {
+            const prompt = document.getElementById('system-prompt-editor').value;
+            const status = document.getElementById('system-prompt-status');
+            status.textContent = 'Saving...';
+            try {
+                const res = await fetch('/api/admin/claude-prompt', {
+                    method: 'PUT', credentials: 'include',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ prompt })
+                });
+                const d = await res.json();
+                if (d.error) { status.textContent = 'Error: ' + d.error; return; }
+                status.innerHTML = '<span class="text-emerald-400">CLAUDE.md saved. New sessions will use this prompt.</span>';
+                setTimeout(() => { status.textContent = `Last saved: ${new Date().toLocaleString()}`; }, 3000);
+            } catch (e) { status.textContent = 'Network error saving prompt.'; }
+        }
+
+        // ── Request Access (non-owner sessions) ───────────────
+        async function requestSessionAccess(sessionId) {
+            try {
+                const res = await fetch(`/api/sessions/${sessionId}/request-access`, {
+                    method: 'POST', credentials: 'include',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                const d = await res.json();
+                if (d.error) return alert('Error: ' + d.error);
+                alert('Request sent. The admin will be notified and will review your request.');
+            } catch (e) { alert('Network error'); }
+        }
+
+        // ── Cron Management ───────────────────────────────────
+        function showCronPanel() {
+            closeSidebar();
+            ['empty-state', 'workspace-header', 'workspace-content', 'workspace-input-area', 'phones-panel', 'admin-panel'].forEach(id => document.getElementById(id)?.classList.add('hidden'));
+            document.getElementById('cron-panel').classList.remove('hidden');
+            fetchCrons();
+            fetchCronLogs();
+        }
+
+        function hideCronPanel() {
+            document.getElementById('cron-panel').classList.add('hidden');
+            if (!currentSessionId) document.getElementById('empty-state').classList.remove('hidden');
+            else {
+                ['workspace-header', 'workspace-content', 'workspace-input-area'].forEach(id => document.getElementById(id)?.classList.remove('hidden'));
+            }
+        }
+
+        async function fetchCrons() {
+            const list = document.getElementById('cron-list');
+            try {
+                const res = await fetch('/api/cron');
+                const crons = await res.json();
+                if (!Array.isArray(crons) || crons.length === 0) {
+                    list.innerHTML = '<div class="text-center t-text-muted text-sm py-8 border rounded-xl border-dashed">No jobs yet. Create one on the left!</div>';
+                    return;
+                }
+                list.innerHTML = crons.map(c => `
+                    <div class="t-card border rounded-xl px-4 py-3 flex items-center justify-between gap-3 group" style="border-color:rgba(16, 185, 129, 0.15);">
+                        <div class="min-w-0 flex-1">
+                            <div class="flex items-center gap-2">
+                                <span class="text-xs px-1.5 py-0.5 bg-emerald-500/10 text-emerald-500 rounded font-mono font-bold">${escapeHtml(c.id)}</span>
+                                <span class="text-xs font-mono t-text-primary bg-black/5 dark:bg-white/5 px-1.5 py-0.5 rounded">${escapeHtml(c.schedule)}</span>
+                            </div>
+                            <p class="text-[11px] t-text-muted mt-1 truncate italic">"${escapeHtml(c.task)}"</p>
+                        </div>
+                        <div class="flex gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button onclick="editCron('${escapeHtml(JSON.stringify(c).replace(/'/g, "\\'"))}')" class="px-2 py-1 text-[10px] font-bold bg-black/5 dark:bg-white/5 hover:bg-emerald-500 hover:text-white rounded transition-colors cursor-pointer">Edit</button>
+                            <button onclick="deleteCron('${escapeHtml(c.id)}')" class="px-2 py-1 text-[10px] font-bold bg-black/5 dark:bg-white/5 hover:bg-red-500 hover:text-white rounded transition-colors cursor-pointer">Del</button>
+                        </div>
+                    </div>
+                `).join('');
+            } catch (e) { list.innerHTML = '<div class="text-red-400 text-sm">Error loading crons.</div>'; }
+        }
+
+        async function saveCron() {
+            const id = document.getElementById('cron-id').value;
+            const schedule = document.getElementById('cron-schedule').value;
+            const task = document.getElementById('cron-task').value;
+            const phone = document.getElementById('cron-phone').value;
+
+            if (!id || !schedule || !task) return alert('ID, Schedule, and Task are required.');
+
+            try {
+                const res = await fetch('/api/cron', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id, schedule, task, phone })
+                });
+                const data = await res.json();
+                if (data.error) return alert('Save failed: ' + data.error);
+
+                // Reset form
+                document.getElementById('cron-id').value = '';
+                document.getElementById('cron-schedule').value = '';
+                document.getElementById('cron-task').value = '';
+                document.getElementById('cron-phone').value = '';
+
+                fetchCrons();
+            } catch (e) { alert('Network error: ' + e.message); }
+        }
+
+        async function deleteCron(id) {
+            if (!confirm('Delete this cron job?')) return;
+            try {
+                await fetch(`/api/cron/${id}`, { method: 'DELETE' });
+                fetchCrons();
+            } catch (e) { alert('Error'); }
+        }
+
+        function editCron(cStr) {
+            const c = JSON.parse(cStr);
+            document.getElementById('cron-id').value = c.id;
+            document.getElementById('cron-schedule').value = c.schedule;
+            document.getElementById('cron-task').value = c.task;
+            document.getElementById('cron-phone').value = c.phone || '';
+        }
+
+        async function fetchCronLogs() {
+            const list = document.getElementById('cron-logs-list');
+            try {
+                const res = await fetch('/api/cron-logs');
+                const logs = await res.json();
+                if (logs.length === 0) {
+                    list.innerHTML = '<div class="p-4 text-center t-text-muted text-[10px]">No logs yet.</div>';
+                    return;
+                }
+                list.innerHTML = logs.map(l => {
+                    const time = new Date(l.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                    const statusClass = l.status === 'spawned' ? 'bg-emerald-500/10 text-emerald-500' : (l.status === 'failed' ? 'bg-red-500/10 text-red-500' : 'bg-blue-500/10 text-blue-500');
+                    return `
+                        <div class="px-3 py-1.5 flex items-center gap-1 hover:bg-black/5 dark:hover:bg-white/5 transition-colors">
+                            <div class="w-1/4 t-text-muted font-mono">${time}</div>
+                            <div class="w-1/4 font-semibold truncate">${escapeHtml(l.jobId)}</div>
+                            <div class="w-1/4"><span class="px-1.5 py-0.5 rounded ${statusClass} uppercase font-bold text-[8px]">${l.status}</span></div>
+                            <div class="w-1/4 text-right t-text-muted truncate" title="${l.session || l.error || ''}">${escapeHtml(l.session || l.error || '')}</div>
+                        </div>
+                    `;
+                }).join('');
+            } catch (e) { list.innerHTML = '<div class="p-4 text-red-400">Error logs.</div>'; }
+        }
+
+    </script>
+
+</body>
+
+</html>
