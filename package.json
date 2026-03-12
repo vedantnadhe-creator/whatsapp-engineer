@@ -1,0 +1,29 @@
+{
+    "name": "whatsapp-engineer",
+    "version": "1.0.0",
+    "type": "module",
+    "description": "WhatsApp AI Engineer - Gemini orchestrator + Claude Code execution",
+    "main": "index.js",
+    "scripts": {
+        "start": "node index.js",
+        "dev": "node --watch index.js",
+        "test": "node test_modules.js"
+    },
+    "dependencies": {
+        "@google/genai": "^1.0.0",
+        "@whiskeysockets/baileys": "^6.7.17",
+        "better-sqlite3": "^11.0.0",
+        "cookie-parser": "*",
+        "cors": "^2.8.6",
+        "express": "^5.2.1",
+        "jsonwebtoken": "*",
+        "node-cron": "^4.2.1",
+        "node-pty": "^1.0.0",
+        "nodemailer": "*",
+        "pino": "^9.0.0",
+        "qrcode-terminal": "^0.12.0"
+    },
+    "devDependencies": {
+        "node-gyp": "^10.0.0"
+    }
+}
