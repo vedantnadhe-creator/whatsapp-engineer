@@ -24,19 +24,19 @@ export default function Login() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-[#000000] px-4">
+    <div className="min-h-screen flex items-center justify-center bg-bg px-4">
       <div className="w-full max-w-sm">
-        <div className="rounded-xl border border-[#222222] bg-[#0a0a0a] p-8">
+        <div className="rounded-xl border border-border bg-surface p-8">
           {/* Logo */}
           <div className="flex items-center justify-center gap-2 mb-1">
-            <Terminal className="h-5 w-5 text-[#3b82f6]" strokeWidth={2} />
-            <span className="font-mono text-2xl font-bold text-white tracking-tight">
+            <Terminal className="h-5 w-5 text-accent" strokeWidth={2} />
+            <span className="font-mono text-2xl font-bold text-text-primary tracking-tight">
               OliBot
             </span>
           </div>
 
           {/* Subtitle */}
-          <p className="text-center text-sm text-[#888888] mb-8">
+          <p className="text-center text-sm text-text-secondary mb-8">
             Engineering Dashboard
           </p>
 
@@ -45,7 +45,7 @@ export default function Login() {
             {/* Email */}
             <div className="relative">
               <Mail
-                className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[#555555]"
+                className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-text-muted"
                 strokeWidth={1.5}
               />
               <input
@@ -55,14 +55,14 @@ export default function Login() {
                 placeholder="Email"
                 required
                 autoComplete="email"
-                className="w-full rounded-lg border border-[#222222] bg-[#111111] py-2.5 pl-10 pr-4 text-sm text-white placeholder-[#555555] outline-none transition-colors focus:border-[#3b82f6]"
+                className="w-full rounded-lg border border-border bg-surface-2 py-2.5 pl-10 pr-4 text-sm text-text-primary placeholder-text-muted outline-none transition-colors focus:border-accent"
               />
             </div>
 
             {/* Password */}
             <div className="relative">
               <Lock
-                className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[#555555]"
+                className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-text-muted"
                 strokeWidth={1.5}
               />
               <input
@@ -72,7 +72,7 @@ export default function Login() {
                 placeholder="Password"
                 required
                 autoComplete="current-password"
-                className="w-full rounded-lg border border-[#222222] bg-[#111111] py-2.5 pl-10 pr-4 text-sm text-white placeholder-[#555555] outline-none transition-colors focus:border-[#3b82f6]"
+                className="w-full rounded-lg border border-border bg-surface-2 py-2.5 pl-10 pr-4 text-sm text-text-primary placeholder-text-muted outline-none transition-colors focus:border-accent"
               />
             </div>
 
@@ -85,7 +85,7 @@ export default function Login() {
             <button
               type="submit"
               disabled={loading}
-              className="flex w-full items-center justify-center gap-2 rounded-lg bg-[#3b82f6] py-2.5 text-sm font-medium text-white transition-colors hover:bg-[#2563eb] disabled:opacity-50 disabled:cursor-not-allowed"
+              className="flex w-full items-center justify-center gap-2 rounded-lg bg-accent py-2.5 text-sm font-medium text-white transition-colors hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {loading ? (
                 'Signing in...'

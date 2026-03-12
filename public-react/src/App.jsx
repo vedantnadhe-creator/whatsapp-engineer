@@ -5,6 +5,7 @@ import Sidebar from './components/Sidebar'
 import Workspace from './components/Workspace'
 import Login from './pages/Login'
 import { AdminModal, UsersPanel, PhonesPanel, PromptsPanel, CronPanel, AccessRequestsPanel } from './components/AdminPanels'
+import { ThemeProvider } from './context/ThemeContext'
 
 function Dashboard() {
   const { user, loading, logout } = useAuth()
@@ -173,8 +174,10 @@ function Dashboard() {
 
 export default function App() {
   return (
-    <AuthProvider>
-      <Dashboard />
-    </AuthProvider>
+    <ThemeProvider>
+      <AuthProvider>
+        <Dashboard />
+      </AuthProvider>
+    </ThemeProvider>
   )
 }

@@ -11,25 +11,18 @@ import {
 } from 'lucide-react';
 
 const colors = {
-  bg: '#000000',
-  surface: '#0a0a0a',
-  surface2: '#111111',
-  surface3: '#1a1a1a',
-  border: '#222222',
-  text: '#e5e5e5',
-  textSecondary: '#888888',
-  accent: '#3b82f6',
+  bg: 'var(--c-bg)',
+  surface: 'var(--c-surface)',
+  surface2: 'var(--c-surface-2)',
+  surface3: 'var(--c-surface-3)',
+  border: 'var(--c-border)',
+  text: 'var(--c-text)',
+  textSecondary: 'var(--c-text-secondary)',
+  accent: 'var(--c-accent)',
 };
 
 function StatusDot({ status }) {
-  const color =
-    status === 'running'
-      ? '#22c55e'
-      : status === 'completed'
-        ? '#3b82f6'
-        : status === 'error'
-          ? '#ef4444'
-          : '#888888';
+  const color = status === 'running' ? 'var(--c-status-running)' : status === 'completed' ? 'var(--c-status-completed)' : status === 'error' ? 'var(--c-status-failed)' : 'var(--c-text-secondary)';
   return (
     <span
       className="inline-block w-2 h-2 rounded-full flex-shrink-0"
@@ -143,7 +136,7 @@ function MessageBubble({ message }) {
         {message.timestamp && (
           <div
             className={`text-[10px] font-mono mt-1 ${isUser ? 'text-right' : 'text-left'}`}
-            style={{ color: '#555555' }}
+            style={{ color: 'var(--c-text-muted)' }}
           >
             {formatTime(message.timestamp)}
           </div>
@@ -438,7 +431,7 @@ export default function Workspace({
           <button
             onClick={onStop}
             className="p-1.5 rounded-full flex-shrink-0 cursor-pointer hover:opacity-80"
-            style={{ backgroundColor: '#ef4444' }}
+            style={{ backgroundColor: 'var(--c-danger)' }}
             title="Stop session"
           >
             <Square size={16} className="text-white" fill="white" />

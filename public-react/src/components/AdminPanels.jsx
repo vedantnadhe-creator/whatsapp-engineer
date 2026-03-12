@@ -4,7 +4,7 @@ import { X, UserPlus, Trash2, KeyRound, Phone, Save, Clock, Check, XCircle } fro
 export function AdminModal({ isOpen, onClose, title, children }) {
   if (!isOpen) return null
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center backdrop-blur-sm" style={{ backgroundColor: 'var(--c-overlay)' }} onClick={onClose}>
       <div className="bg-surface border border-border rounded-xl w-full max-w-2xl max-h-[80vh] overflow-hidden flex flex-col mx-4" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between px-5 py-4 border-b border-border">
           <h2 className="text-sm font-semibold text-text-primary">{title}</h2>

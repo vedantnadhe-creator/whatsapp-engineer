@@ -13,17 +13,20 @@ import {
   Activity,
   DollarSign,
   MessageSquare,
+  Sun,
+  Moon,
 } from 'lucide-react';
+import { useTheme } from '../context/ThemeContext';
 
 const STATUS_COLORS = {
-  running: '#22c55e',
-  completed: '#3b82f6',
-  failed: '#ef4444',
-  stopped: '#555555',
+  running: 'var(--c-status-running)',
+  completed: 'var(--c-status-completed)',
+  failed: 'var(--c-status-failed)',
+  stopped: 'var(--c-text-muted)',
 };
 
 function StatusDot({ status }) {
-  const color = STATUS_COLORS[status] || '#555555';
+  const color = STATUS_COLORS[status] || 'var(--c-text-muted)';
   return (
     <span className="relative flex h-2 w-2 shrink-0">
       {status === 'running' && (
@@ -46,11 +49,11 @@ function SessionItem({ session, isActive, onSelect }) {
       onClick={() => onSelect(session)}
       className="w-full text-left px-3 py-2.5 transition-colors duration-150 cursor-pointer"
       style={{
-        backgroundColor: isActive ? '#111111' : 'transparent',
-        borderLeft: isActive ? '2px solid #3b82f6' : '2px solid transparent',
+        backgroundColor: isActive ? 'var(--c-surface-2)' : 'transparent',
+        borderLeft: isActive ? '2px solid var(--c-accent)' : '2px solid transparent',
       }}
       onMouseEnter={(e) => {
-        if (!isActive) e.currentTarget.style.backgroundColor = '#0a0a0a';
+        if (!isActive) e.currentTarget.style.backgroundColor = 'var(--c-surface)';
       }}
       onMouseLeave={(e) => {
         if (!isActive) e.currentTarget.style.backgroundColor = 'transparent';
@@ -59,10 +62,10 @@ function SessionItem({ session, isActive, onSelect }) {
       <div className="flex items-start gap-2">
         <StatusDot status={session.status} />
         <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-medium" style={{ color: '#e5e5e5' }}>
+          <div className="truncate text-sm font-medium" style={{ color: 'var(--c-text)' }}>
             {session.task || 'Untitled'}
           </div>
-          <div className="mt-0.5 font-mono text-xs" style={{ color: '#555555' }}>
+          <div className="mt-0.5 font-mono text-xs" style={{ color: 'var(--c-text-muted)' }}>
             {session.id}
           </div>
           <div className="mt-1 flex items-center gap-2">
@@ -70,15 +73,15 @@ function SessionItem({ session, isActive, onSelect }) {
               className="inline-block rounded px-1.5 py-0.5 font-mono uppercase"
               style={{
                 fontSize: '10px',
-                backgroundColor: '#1a1a1a',
-                border: '1px solid #222222',
-                color: '#888888',
+                backgroundColor: 'var(--c-surface-3)',
+                border: '1px solid var(--c-border)',
+                color: 'var(--c-text-secondary)',
               }}
             >
               {session.model || 'unknown'}
             </span>
             {session.cost_usd != null && (
-              <span className="font-mono text-xs" style={{ color: '#555555' }}>
+              <span className="font-mono text-xs" style={{ color: 'var(--c-text-muted)' }}>
                 ${Number(session.cost_usd).toFixed(2)}
               </span>
             )}
@@ -111,7 +114,7 @@ function AdminDropdown({ onShowAdmin, onClose }) {
     <div
       ref={ref}
       className="absolute bottom-full left-0 mb-1 w-40 rounded border py-1"
-      style={{ backgroundColor: '#0a0a0a', borderColor: '#222222' }}
+      style={{ backgroundColor: 'var(--c-surface)', borderColor: 'var(--c-border)' }}
     >
       {items.map(({ key, label, icon: Icon }) => (
         <button
@@ -121,11 +124,11 @@ function AdminDropdown({ onShowAdmin, onClose }) {
             onClose();
           }}
           className="flex w-full items-center gap-2 px-3 py-1.5 text-sm transition-colors duration-150 cursor-pointer"
-          style={{ color: '#e5e5e5' }}
-          onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#111111')}
+          style={{ color: 'var(--c-text)' }}
+          onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'var(--c-surface-2)')}
           onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
         >
-          <Icon size={14} style={{ color: '#888888' }} />
+          <Icon size={14} style={{ color: 'var(--c-text-secondary)' }} />
           {label}
         </button>
       ))}
@@ -146,26 +149,27 @@ function SidebarContent({
   hasMore,
 }) {
   const [adminOpen, setAdminOpen] = useState(false);
+  const { theme, toggle } = useTheme();
 
   return (
     <div
       className="flex h-full w-72 flex-col"
-      style={{ backgroundColor: '#000000', borderRight: '1px solid #222222' }}
+      style={{ backgroundColor: 'var(--c-bg)', borderRight: '1px solid var(--c-border)' }}
     >
       {/* Header */}
       <div
         className="flex items-center justify-between px-4 py-3"
-        style={{ borderBottom: '1px solid #222222' }}
+        style={{ borderBottom: '1px solid var(--c-border)' }}
       >
-        <span className="font-mono text-lg font-bold" style={{ color: '#e5e5e5' }}>
+        <span className="font-mono text-lg font-bold" style={{ color: 'var(--c-text)' }}>
           OliBot
         </span>
         <button
           onClick={onNewSession}
           className="flex items-center gap-1.5 rounded px-2.5 py-1.5 text-xs font-medium text-white transition-colors duration-150 cursor-pointer"
-          style={{ backgroundColor: '#3b82f6' }}
-          onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#2563eb')}
-          onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#3b82f6')}
+          style={{ backgroundColor: 'var(--c-accent)' }}
+          onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'var(--c-accent-hover)')}
+          onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'var(--c-accent)')}
         >
           <Plus size={14} />
           New Task
@@ -176,7 +180,7 @@ function SidebarContent({
       {stats && (
         <div
           className="flex items-center gap-3 px-4 py-2 font-mono text-xs"
-          style={{ color: '#888888', borderBottom: '1px solid #222222' }}
+          style={{ color: 'var(--c-text-secondary)', borderBottom: '1px solid var(--c-border)' }}
         >
           <span className="flex items-center gap-1">
             <DollarSign size={12} />
@@ -209,16 +213,16 @@ function SidebarContent({
               <button
                 onClick={onLoadMore}
                 className="w-full py-2 text-center font-mono text-xs transition-colors duration-150 cursor-pointer"
-                style={{ color: '#888888' }}
-                onMouseEnter={(e) => (e.currentTarget.style.color = '#e5e5e5')}
-                onMouseLeave={(e) => (e.currentTarget.style.color = '#888888')}
+                style={{ color: 'var(--c-text-secondary)' }}
+                onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--c-text)')}
+                onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--c-text-secondary)')}
               >
                 Load more
               </button>
             )}
           </>
         ) : (
-          <div className="px-4 py-8 text-center text-sm" style={{ color: '#555555' }}>
+          <div className="px-4 py-8 text-center text-sm" style={{ color: 'var(--c-text-muted)' }}>
             No sessions yet
           </div>
         )}
@@ -227,7 +231,7 @@ function SidebarContent({
       {/* Footer */}
       <div
         className="relative px-4 py-3"
-        style={{ borderTop: '1px solid #222222' }}
+        style={{ borderTop: '1px solid var(--c-border)' }}
       >
         {adminOpen && (
           <AdminDropdown
@@ -239,17 +243,17 @@ function SidebarContent({
           {/* Avatar */}
           <div
             className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-sm font-medium text-white"
-            style={{ backgroundColor: '#1a1a1a' }}
+            style={{ backgroundColor: 'var(--c-surface-3)' }}
           >
             {user?.displayName?.[0]?.toUpperCase() || '?'}
           </div>
 
           {/* Name + role */}
           <div className="min-w-0 flex-1">
-            <div className="truncate text-sm font-medium" style={{ color: '#e5e5e5' }}>
+            <div className="truncate text-sm font-medium" style={{ color: 'var(--c-text)' }}>
               {user?.displayName || 'User'}
             </div>
-            <div className="truncate text-xs" style={{ color: '#888888' }}>
+            <div className="truncate text-xs" style={{ color: 'var(--c-text-secondary)' }}>
               {user?.role || 'user'}
             </div>
           </div>
@@ -259,21 +263,32 @@ function SidebarContent({
             <button
               onClick={() => setAdminOpen((v) => !v)}
               className="p-1 transition-colors duration-150 cursor-pointer"
-              style={{ color: '#888888' }}
-              onMouseEnter={(e) => (e.currentTarget.style.color = '#e5e5e5')}
-              onMouseLeave={(e) => (e.currentTarget.style.color = '#888888')}
+              style={{ color: 'var(--c-text-secondary)' }}
+              onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--c-text)')}
+              onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--c-text-secondary)')}
             >
               <Settings size={16} />
             </button>
           )}
 
+          {/* Theme toggle */}
+          <button
+            onClick={toggle}
+            className="p-1 transition-colors duration-150 cursor-pointer"
+            style={{ color: 'var(--c-text-secondary)' }}
+            onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--c-text)')}
+            onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--c-text-secondary)')}
+          >
+            {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
+          </button>
+
           {/* Logout */}
           <button
             onClick={onLogout}
             className="p-1 transition-colors duration-150 cursor-pointer"
-            style={{ color: '#888888' }}
-            onMouseEnter={(e) => (e.currentTarget.style.color = '#e5e5e5')}
-            onMouseLeave={(e) => (e.currentTarget.style.color = '#888888')}
+            style={{ color: 'var(--c-text-secondary)' }}
+            onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--c-text)')}
+            onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--c-text-secondary)')}
           >
             <LogOut size={16} />
           </button>
@@ -292,7 +307,7 @@ export default function Sidebar(props) {
       <button
         onClick={() => setMobileOpen(true)}
         className="fixed left-3 top-3 z-40 rounded p-2 md:hidden cursor-pointer"
-        style={{ backgroundColor: '#111111', color: '#e5e5e5' }}
+        style={{ backgroundColor: 'var(--c-surface-2)', color: 'var(--c-text)' }}
       >
         <Menu size={20} />
       </button>
@@ -308,7 +323,7 @@ export default function Sidebar(props) {
           {/* Backdrop */}
           <div
             className="absolute inset-0"
-            style={{ backgroundColor: 'rgba(0,0,0,0.7)' }}
+            style={{ backgroundColor: 'var(--c-overlay)' }}
             onClick={() => setMobileOpen(false)}
           />
           {/* Sidebar */}
@@ -317,7 +332,7 @@ export default function Sidebar(props) {
             <button
               onClick={() => setMobileOpen(false)}
               className="absolute right-3 top-3 p-1 cursor-pointer"
-              style={{ color: '#888888' }}
+              style={{ color: 'var(--c-text-secondary)' }}
             >
               <X size={20} />
             </button>
