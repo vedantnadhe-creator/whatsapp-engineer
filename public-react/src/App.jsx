@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import { useSessions, useStats, useSessionMessages, useModels, usePhones, useUsers, useCron, useAccessRequests, startSession, sendMessage, stopSession, uploadFile, getClaudePrompt, saveClaudePrompt } from './hooks/useApi'
 import Sidebar from './components/Sidebar'
@@ -9,8 +9,6 @@ import { AdminModal, UsersPanel, PhonesPanel, PromptsPanel, CronPanel, AccessReq
 function Dashboard() {
   const { user, loading, logout } = useAuth()
 
-  if (loading) return <div className="h-screen flex items-center justify-center bg-bg text-text-secondary font-mono text-sm">Loading...</div>
-  if (!user) return <Login />
   const [page, setPage] = useState(1)
   const [activeSession, setActiveSession] = useState(null)
   const [isNewSession, setIsNewSession] = useState(true)
@@ -110,10 +108,14 @@ function Dashboard() {
     setPromptLoading(false)
   }, [])
 
+  // Early returns AFTER all hooks
+  if (loading) return <div className="h-screen flex items-center justify-center bg-bg text-text-secondary font-mono text-sm">Loading...</div>
+  if (!user) return <Login />
+
   const hasAccess = activeSession ? (activeSession.is_mine || activeSession.has_access || user?.isAdmin) : true
 
   return (
-    <div className="h-screen flex bg-bg font-sans">
+    <div className="h-screen flex bg-bg font-sans overflow-hidden">
       <Sidebar
         sessions={sessions}
         activeSessionId={activeSession?.id}
@@ -126,17 +128,19 @@ function Dashboard() {
         onLoadMore={() => setPage(p => Math.min(p + 1, totalPages || 1))}
         hasMore={page < (totalPages || 1)}
       />
-      <Workspace
-        session={activeSession}
-        messages={messages}
-        onSendMessage={handleSendMessage}
-        onStop={handleStop}
-        onRequestAccess={() => {}}
-        isNewSession={isNewSession}
-        onStartSession={handleStartSession}
-        models={models}
-        hasAccess={hasAccess}
-      />
+      <div className="flex-1 min-w-0 h-full">
+        <Workspace
+          session={activeSession}
+          messages={messages}
+          onSendMessage={handleSendMessage}
+          onStop={handleStop}
+          onRequestAccess={() => {}}
+          isNewSession={isNewSession}
+          onStartSession={handleStartSession}
+          models={models}
+          hasAccess={hasAccess}
+        />
+      </div>
 
       {adminPanel === 'users' && (
         <AdminModal isOpen onClose={() => setAdminPanel(null)} title="Team Members">
