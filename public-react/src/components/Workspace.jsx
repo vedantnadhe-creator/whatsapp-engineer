@@ -189,6 +189,7 @@ export default function Workspace({
   onRequestAccess,
   isNewSession = false,
   onStartSession,
+  onUploadFile,
   models = [],
   hasAccess = true,
 }) {
@@ -197,7 +198,9 @@ export default function Workspace({
     () => models.find((m) => m.default)?.id || models[0]?.id || ''
   );
   const [accessNote, setAccessNote] = useState('');
+  const [uploading, setUploading] = useState(false);
   const textareaRef = useRef(null);
+  const fileInputRef = useRef(null);
   const messagesEndRef = useRef(null);
   const messagesContainerRef = useRef(null);
 
@@ -248,6 +251,23 @@ export default function Workspace({
   const handleRequestAccess = () => {
     onRequestAccess?.(accessNote);
     setAccessNote('');
+  };
+
+  const handleFileSelect = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file || !onUploadFile) return;
+    setUploading(true);
+    try {
+      const result = await onUploadFile(file);
+      if (result?.token) {
+        setInputText((prev) => prev + (prev ? '\n' : '') + `[file: ${file.name}] ${result.token}`);
+      }
+    } catch (err) {
+      console.error('Upload failed:', err);
+    } finally {
+      setUploading(false);
+      e.target.value = '';
+    }
   };
 
   // --- Header ---
@@ -397,9 +417,17 @@ export default function Workspace({
           border: `1px solid ${colors.border}`,
         }}
       >
+        <input
+          ref={fileInputRef}
+          type="file"
+          className="hidden"
+          onChange={handleFileSelect}
+        />
         <button
-          className="p-1.5 rounded-lg hover:opacity-80 flex-shrink-0 cursor-pointer"
-          title="Attach file"
+          onClick={() => fileInputRef.current?.click()}
+          disabled={uploading}
+          className="p-1.5 rounded-lg hover:opacity-80 flex-shrink-0 cursor-pointer disabled:opacity-50"
+          title={uploading ? 'Uploading...' : 'Attach file'}
         >
           <Paperclip size={18} style={{ color: colors.textSecondary }} />
         </button>

@@ -138,6 +138,7 @@ function Dashboard() {
           onRequestAccess={() => {}}
           isNewSession={isNewSession}
           onStartSession={handleStartSession}
+          onUploadFile={uploadFile}
           models={models}
           hasAccess={hasAccess}
         />
