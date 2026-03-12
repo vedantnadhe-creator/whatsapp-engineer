@@ -2,7 +2,6 @@ import { useState, useRef, useEffect } from 'react';
 import {
   Plus,
   Menu,
-  X,
   LogOut,
   Settings,
   Users,
@@ -327,15 +326,14 @@ export default function Sidebar(props) {
             onClick={() => setMobileOpen(false)}
           />
           {/* Sidebar */}
-          <div className="relative h-full">
-            <SidebarContent {...props} />
-            <button
-              onClick={() => setMobileOpen(false)}
-              className="absolute right-3 top-3 p-1 cursor-pointer"
-              style={{ color: 'var(--c-text-secondary)' }}
-            >
-              <X size={20} />
-            </button>
+          <div className="relative h-full" onClick={(e) => e.stopPropagation()}>
+            <SidebarContent
+              {...props}
+              onSelectSession={(session) => {
+                props.onSelectSession(session);
+                setMobileOpen(false);
+              }}
+            />
           </div>
         </div>
       )}
