@@ -27,6 +27,16 @@ function Dashboard() {
   const { jobs, refresh: refreshCron, saveJob, deleteJob } = useCron()
   const { requests, refresh: refreshRequests, resolve } = useAccessRequests()
 
+  // Keep activeSession in sync with refreshed sessions list
+  useEffect(() => {
+    if (activeSession?.id && sessions.length > 0) {
+      const updated = sessions.find(s => s.id === activeSession.id)
+      if (updated && updated.status !== activeSession.status) {
+        setActiveSession(updated)
+      }
+    }
+  }, [sessions])
+
   // Poll for updates
   useEffect(() => {
     const interval = setInterval(() => {
@@ -53,10 +63,23 @@ function Dashboard() {
     try {
       const result = await startSession(text, model)
       if (result.sessionId) {
+        // Immediately switch to the new session view
+        const newSession = {
+          id: result.sessionId,
+          task: text,
+          model: model || 'opus',
+          status: 'running',
+          is_mine: true,
+        }
+        setActiveSession(newSession)
+        setIsNewSession(false)
+        setSelectedModel(model || 'opus')
+        // Refresh to get real data + messages
         setTimeout(() => {
           refreshSessions()
           refreshStats()
-        }, 1000)
+          refreshMessages()
+        }, 1500)
       }
     } catch (err) {
       console.error('Failed to start session:', err)
