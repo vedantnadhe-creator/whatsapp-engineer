@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { AuthProvider, useAuth } from './context/AuthContext'
-import { useSessions, useStats, useSessionMessages, useModels, usePhones, useUsers, useCron, useAccessRequests, startSession, sendMessage, stopSession, uploadFile, getClaudePrompt, saveClaudePrompt } from './hooks/useApi'
+import { useSessions, useStats, useSessionMessages, useModels, usePhones, useUsers, useCron, useAccessRequests, startSession, sendMessage, stopSession, uploadFile, transcribeAudio, getClaudePrompt, saveClaudePrompt } from './hooks/useApi'
 import Sidebar from './components/Sidebar'
 import Workspace from './components/Workspace'
 import Login from './pages/Login'
@@ -162,6 +162,7 @@ function Dashboard() {
           isNewSession={isNewSession}
           onStartSession={handleStartSession}
           onUploadFile={uploadFile}
+          onTranscribe={transcribeAudio}
           models={models}
           hasAccess={hasAccess}
         />

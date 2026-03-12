@@ -262,6 +262,7 @@ export default function Workspace({
   isNewSession = false,
   onStartSession,
   onUploadFile,
+  onTranscribe,
   models = [],
   hasAccess = true,
 }) {
@@ -271,8 +272,12 @@ export default function Workspace({
   );
   const [accessNote, setAccessNote] = useState('');
   const [uploading, setUploading] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
   const textareaRef = useRef(null);
   const fileInputRef = useRef(null);
+  const mediaRecorderRef = useRef(null);
+  const audioChunksRef = useRef([]);
   const messagesEndRef = useRef(null);
   const messagesContainerRef = useRef(null);
 
@@ -339,6 +344,48 @@ export default function Workspace({
     } finally {
       setUploading(false);
       e.target.value = '';
+    }
+  };
+
+  const handleMicToggle = async () => {
+    if (recording) {
+      // Stop recording
+      mediaRecorderRef.current?.stop();
+      return;
+    }
+    // Start recording
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+      mediaRecorderRef.current = mediaRecorder;
+      audioChunksRef.current = [];
+
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunksRef.current.push(e.data);
+      };
+
+      mediaRecorder.onstop = async () => {
+        stream.getTracks().forEach(t => t.stop());
+        setRecording(false);
+        const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        if (blob.size === 0) return;
+        setTranscribing(true);
+        try {
+          const result = await onTranscribe(blob);
+          if (result?.transcript) {
+            setInputText((prev) => prev + (prev ? ' ' : '') + result.transcript);
+          }
+        } catch (err) {
+          console.error('Transcription failed:', err);
+        } finally {
+          setTranscribing(false);
+        }
+      };
+
+      mediaRecorder.start();
+      setRecording(true);
+    } catch (err) {
+      console.error('Mic access denied:', err);
     }
   };
 
@@ -522,10 +569,12 @@ export default function Workspace({
           }}
         />
         <button
-          className="p-1.5 rounded-lg hover:opacity-80 flex-shrink-0 cursor-pointer"
-          title="Voice record"
+          onClick={handleMicToggle}
+          disabled={transcribing}
+          className="p-1.5 rounded-lg hover:opacity-80 flex-shrink-0 cursor-pointer disabled:opacity-50"
+          title={recording ? 'Stop recording' : transcribing ? 'Transcribing...' : 'Voice record'}
         >
-          <Mic size={18} style={{ color: colors.textSecondary }} />
+          <Mic size={18} style={{ color: recording ? 'var(--c-danger, #ef4444)' : colors.textSecondary }} />
         </button>
         {isRunning ? (
           <button
