@@ -8,7 +8,13 @@ import {
   ChevronDown,
   Bot,
   User,
+  Copy,
+  Check,
 } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 
 const colors = {
   bg: 'var(--c-bg)',
@@ -31,81 +37,147 @@ function StatusDot({ status }) {
   );
 }
 
-function renderMarkdown(content) {
-  if (!content) return null;
-  const parts = [];
-  let remaining = content;
-  let key = 0;
+function CodeBlock({ language, children }) {
+  const [copied, setCopied] = useState(false);
+  const code = String(children).replace(/\n$/, '');
 
-  // Split by code blocks first
-  const codeBlockRegex = /```(\w*)\n?([\s\S]*?)```/g;
-  let lastIndex = 0;
-  let match;
+  const handleCopy = () => {
+    navigator.clipboard.writeText(code);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
 
-  while ((match = codeBlockRegex.exec(remaining)) !== null) {
-    // Text before code block
-    if (match.index > lastIndex) {
-      parts.push(
-        <span key={key++}>
-          {renderInlineMarkdown(remaining.slice(lastIndex, match.index))}
+  return (
+    <div className="relative my-2 rounded-lg overflow-hidden" style={{ border: `1px solid ${colors.border}` }}>
+      <div className="flex items-center justify-between px-3 py-1.5" style={{ backgroundColor: colors.surface3 }}>
+        <span className="font-mono text-[10px] uppercase" style={{ color: colors.textSecondary }}>
+          {language || 'code'}
         </span>
-      );
-    }
-    // Code block
-    parts.push(
-      <pre
-        key={key++}
-        style={{ backgroundColor: colors.surface }}
-        className="font-mono text-sm rounded-lg p-3 my-2 overflow-x-auto whitespace-pre-wrap"
+        <button
+          onClick={handleCopy}
+          className="p-1 rounded hover:opacity-80 cursor-pointer"
+          title="Copy code"
+        >
+          {copied
+            ? <Check size={12} style={{ color: 'var(--c-status-running)' }} />
+            : <Copy size={12} style={{ color: colors.textSecondary }} />
+          }
+        </button>
+      </div>
+      <SyntaxHighlighter
+        language={language || 'text'}
+        style={oneDark}
+        customStyle={{
+          margin: 0,
+          padding: '12px',
+          fontSize: '13px',
+          background: colors.surface,
+          borderRadius: 0,
+        }}
+        wrapLongLines
       >
-        <code>{match[2]}</code>
-      </pre>
-    );
-    lastIndex = match.index + match[0].length;
-  }
-
-  if (lastIndex < remaining.length) {
-    parts.push(
-      <span key={key++}>
-        {renderInlineMarkdown(remaining.slice(lastIndex))}
-      </span>
-    );
-  }
-
-  return parts.length > 0 ? parts : renderInlineMarkdown(content);
+        {code}
+      </SyntaxHighlighter>
+    </div>
+  );
 }
 
-function renderInlineMarkdown(text) {
-  if (!text) return null;
-  const parts = [];
-  const inlineCodeRegex = /`([^`]+)`/g;
-  let lastIndex = 0;
-  let match;
-  let key = 0;
-
-  while ((match = inlineCodeRegex.exec(text)) !== null) {
-    if (match.index > lastIndex) {
-      parts.push(
-        <span key={key++}>{text.slice(lastIndex, match.index)}</span>
-      );
+const markdownComponents = {
+  code({ inline, className, children, ...props }) {
+    const match = /language-(\w+)/.exec(className || '');
+    if (!inline && (match || String(children).includes('\n'))) {
+      return <CodeBlock language={match?.[1]}>{children}</CodeBlock>;
     }
-    parts.push(
+    return (
       <code
-        key={key++}
-        style={{ backgroundColor: colors.surface3 }}
         className="px-1.5 py-0.5 rounded font-mono text-sm"
+        style={{ backgroundColor: colors.surface3 }}
+        {...props}
       >
-        {match[1]}
+        {children}
       </code>
     );
-    lastIndex = match.index + match[0].length;
-  }
+  },
+  p({ children }) {
+    return <p className="mb-2 last:mb-0">{children}</p>;
+  },
+  ul({ children }) {
+    return <ul className="list-disc pl-5 mb-2 space-y-1">{children}</ul>;
+  },
+  ol({ children }) {
+    return <ol className="list-decimal pl-5 mb-2 space-y-1">{children}</ol>;
+  },
+  li({ children }) {
+    return <li>{children}</li>;
+  },
+  h1({ children }) {
+    return <h1 className="text-lg font-bold mb-2 mt-3 font-mono">{children}</h1>;
+  },
+  h2({ children }) {
+    return <h2 className="text-base font-bold mb-2 mt-3 font-mono">{children}</h2>;
+  },
+  h3({ children }) {
+    return <h3 className="text-sm font-bold mb-1 mt-2 font-mono">{children}</h3>;
+  },
+  blockquote({ children }) {
+    return (
+      <blockquote
+        className="pl-3 my-2 italic"
+        style={{ borderLeft: `2px solid ${colors.accent}`, color: colors.textSecondary }}
+      >
+        {children}
+      </blockquote>
+    );
+  },
+  a({ href, children }) {
+    return (
+      <a
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="underline"
+        style={{ color: colors.accent }}
+      >
+        {children}
+      </a>
+    );
+  },
+  table({ children }) {
+    return (
+      <div className="overflow-x-auto my-2">
+        <table className="w-full text-sm" style={{ borderCollapse: 'collapse' }}>{children}</table>
+      </div>
+    );
+  },
+  th({ children }) {
+    return (
+      <th className="text-left px-3 py-1.5 font-medium font-mono text-xs" style={{ borderBottom: `1px solid ${colors.border}`, color: colors.textSecondary }}>
+        {children}
+      </th>
+    );
+  },
+  td({ children }) {
+    return (
+      <td className="px-3 py-1.5 text-sm" style={{ borderBottom: `1px solid ${colors.border}` }}>
+        {children}
+      </td>
+    );
+  },
+  hr() {
+    return <hr className="my-3" style={{ borderColor: colors.border }} />;
+  },
+  strong({ children }) {
+    return <strong className="font-semibold">{children}</strong>;
+  },
+};
 
-  if (lastIndex < text.length) {
-    parts.push(<span key={key++}>{text.slice(lastIndex)}</span>);
-  }
-
-  return parts;
+function MarkdownContent({ content }) {
+  if (!content) return null;
+  return (
+    <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+      {content}
+    </ReactMarkdown>
+  );
 }
 
 function formatTime(timestamp) {
@@ -131,7 +203,7 @@ function MessageBubble({ message }) {
             color: isUser ? '#ffffff' : colors.text,
           }}
         >
-          {isUser ? message.content : renderMarkdown(message.content)}
+          {isUser ? message.content : <MarkdownContent content={message.content} />}
         </div>
         {message.timestamp && (
           <div
