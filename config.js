@@ -33,7 +33,7 @@ const config = {
     DB_PATH: process.env.DB_PATH || './sessions.db',
     LOG_DIR: process.env.LOG_DIR || './logs',
 
-    // ── Auth (JWT + Email/Nodemailer) ───────────────────────────────
+    // ── Auth (JWT + Email/Nodemailer) ─────────────────────────
     JWT_SECRET: process.env.JWT_SECRET || 'change-me-in-production-please',
 
     SMTP_HOST: process.env.SMTP_HOST || 'smtp.gmail.com',

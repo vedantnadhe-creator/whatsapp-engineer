@@ -22,7 +22,7 @@ function getTransporter() {
 
 const FROM = `"OliBot" <${config.SMTP_USER}>`;
 
-// ── Emails ──────────────────────────────────────────────
+// ── Emails ────────────────────────────────────────────────────
 
 /** Welcome email with auto-generated password */
 export async function sendWelcomeEmail(email, displayName, password) {
@@ -73,14 +73,14 @@ export async function sendAccessRequestEmail(adminEmail, requesterName, requeste
     });
 }
 
-// ── Password generator ──────────────────────────────────────────
+// ── Password generator ────────────────────────────────────────
 
 export function generatePassword(length = 12) {
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
     return Array.from({ length }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
 }
 
-// ── JWT helpers ──────────────────────────────────────────────
+// ── JWT helpers ───────────────────────────────────────────────
 
 const JWT_SECRET = config.JWT_SECRET;
 
@@ -92,7 +92,7 @@ export function verifyJwt(token) {
     try { return jwt.verify(token, JWT_SECRET); } catch (_) { return null; }
 }
 
-// ── Express middleware ─────────────────────────────────────────
+// ── Express middleware ────────────────────────────────────────
 
 export function requireAuth(req, res, next) {
     const token = req.cookies?.wa_token || req.headers.authorization?.replace('Bearer ', '');
