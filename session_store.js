@@ -92,7 +92,7 @@ class SessionStore {
             "ALTER TABLE users ADD COLUMN password_hash TEXT",
             "ALTER TABLE users ADD COLUMN role TEXT DEFAULT 'developer'",
             "ALTER TABLE users ADD COLUMN created_by TEXT",
-            "ALTER TABLE sessions ADD COLUMN model TEXT DEFAULT 'sonnet'",
+            "ALTER TABLE sessions ADD COLUMN model TEXT DEFAULT 'opus'",
         ];
         for (const sql of safeMigrations) {
             try { this.db.exec(sql); } catch (_) { /* column already exists */ }
