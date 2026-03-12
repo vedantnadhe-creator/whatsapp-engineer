@@ -22,7 +22,7 @@ function Dashboard() {
   const { stats, refresh: refreshStats } = useStats()
   const { sessions, total, totalPages, refresh: refreshSessions } = useSessions(page)
   const { messages, refresh: refreshMessages } = useSessionMessages(activeSession?.id)
-  const models = useModels()
+  const { models } = useModels()
   const { phones, refresh: refreshPhones, addPhone, removePhone } = usePhones()
   const { users, refresh: refreshUsers, addUser, deleteUser, resetPassword } = useUsers()
   const { jobs, refresh: refreshCron, saveJob, deleteJob } = useCron()
