@@ -7,7 +7,7 @@ The WhatsApp Engineer allows you to instruct a fully autonomous coding agent rig
 
 ---
 
-## 🎯 Features
+## Features
 
 - **WhatsApp Interface**: Start, pause, plan, and monitor coding tasks via standard WhatsApp messages.
 - **Bi-Directional Sync**: Interact with the agent via WhatsApp or the built-in Web Dashboard.
@@ -17,7 +17,7 @@ The WhatsApp Engineer allows you to instruct a fully autonomous coding agent rig
 
 ---
 
-## ⚙️ Prerequisites
+## Prerequisites
 
 1. **Node.js** (v18 or higher)
 2. **SQLite3**
@@ -29,82 +29,57 @@ The WhatsApp Engineer allows you to instruct a fully autonomous coding agent rig
 
 ---
 
-## 🚀 Setup & Installation
+## Setup & Installation
 
 **1. Clone the repository**
 ```bash
-git clone https://github.com/your-org/whatsapp-engineer.git
+git clone https://github.com/vedantnadhe-creator/whatsapp-engineer.git
 cd whatsapp-engineer
 npm install
 ```
 
 **2. Configure Environment Variables**
-Copy the `.env.example` file to create your `.env` file:
 ```bash
 cp .env.example .env
 ```
 
-Edit the `.env` file with your specific configurations:
-```env
-# Your Gemini API Key for Orchestration
-GEMINI_API_KEY=AIzaSy...
-
-# Allowlist: Comma-separated WhatsApp numbers (with country code, no '+') authorized to send tasks
-# E.g., 14155552671
-ALLOWED_PHONES=
-
-# Working Directory where Claude Code should operate
-DEFAULT_WORKING_DIR=/home/ubuntu/your-project
-
-# (Optional) GitHub Knowledge Base URL
-# The start script will automatically clone and pull updates from this repository
-GITHUB_KB_URL=https://github.com/your-org/your-knowledge-base.git
-KB_DIR=./kb
-```
-
-**3. Configure Model Context Protocol (MCP)**
-We heavily recommend setting up Claude Code MCP servers (e.g., PostgreSQL, GitHub, Linear) to expand Claude's capabilities.
-Configure these in `~/.claude.json` or by running `claude mcp` on your server directly before starting the application.
-
----
-
-## 🖥️ Running the Application
-
-We've provided a simple startup script that automatically handles loading the `.env` variables, updating your GitHub knowledge base, and launching the application in the background.
-
+**3. Run the interactive setup wizard** (recommended)
 ```bash
-chmod +x start.sh
-./start.sh
+bash setup.sh
 ```
 
-**Linking WhatsApp for the first time:**
-1. Once you run the app, check the output logs:
-   ```bash
-   tail -f /tmp/wa-engineer.log
-   ```
-2. The logs will display a large QR code in the terminal.
-3. Open WhatsApp on your primary "Bot" device.
-4. Go to **Settings > Linked Devices > Link a Device** and scan the QR code.
-5. You'll see `🤖 WhatsApp AI Engineer is ONLINE!` in the logs when the connection is successful.
+Or manually edit `.env` with your Gemini API key, allowed phone numbers, and paths.
+
+**4. Start the service**
+```bash
+bash start.sh
+```
+
+**5. Scan the QR code** (first run only)
+```bash
+tail -f /tmp/wa-engineer.log
+```
 
 ---
 
-## 📱 How to Use
+## Web Dashboard
 
-From any phone listed in your `ALLOWED_PHONES` environment variable, send a message to the bot's WhatsApp number.
+The application runs a lightweight web dashboard on **port 18790** by default.
 
-### Example Commands:
-- **"Start fresh and analyze the backend logs for errors"**: Starts a brand new Claude Code session.
-- **"Resume WA-xyz and fix the styling issues"**: Resumes a previously started Claude session with full context.
-- **"What is the status?"**: Retrieves the current execution state of all running jobs.
-- **"Stop WA-xyz"**: Kills a Claude session.
-- **"Cost"**: Reports total API expenditure.
+- Dashboard: `http://localhost:18790`
+- Login: `http://localhost:18790/login.html`
 
 ---
 
-## 🌐 Web Dashboard
+## Architecture
 
-The application runs a lightweight local dashboard on **port 18790** by default.
-You can open this dashboard in your browser to view your complete session history, read raw Claude execution logs, and monitor API costs.
+```
+WhatsApp (Baileys) → Gemini (orchestrator) → Claude Code CLI (executor)
+                                 ↑
+                          Web Dashboard
+```
 
-*(Tip: Setup an Nginx reverse proxy to forward port 18790 to a secure domain!)*
+- **Gemini** classifies intent (new task, resume, status, etc.) and routes to Claude
+- **Claude Code CLI** executes coding tasks with full tool access
+- **SQLite** stores sessions, costs, and access control
+- **Node-PTY** provides real-time streaming of Claude output
