@@ -243,8 +243,9 @@ export function startDashboard(store, messageHandler, port = 18790, wa = null, e
 
     app.post('/api/sessions/start', requireAuth, async (req, res) => {
         try {
-            const { phone, text, model } = req.body;
-            if (!phone || !text) return res.status(400).json({ error: 'phone and text are required' });
+            const { text, model } = req.body;
+            if (!text) return res.status(400).json({ error: 'text is required' });
+            const phone = req.body.phone || req.user.phone || req.user.email || req.user.id;
             const startInstruction = /^(start fresh|new task|ignore previous)/i.test(text) ? text : `[start fresh] ${text}`;
             const tokens = Array.isArray(req.body.imageTokens) ? req.body.imageTokens : (req.body.imageToken ? [req.body.imageToken] : []);
             const imagePath = tokens.map(t => { const p = pendingImages.get(t); pendingImages.delete(t); return p; }).filter(Boolean)[0] || null;
@@ -264,9 +265,10 @@ export function startDashboard(store, messageHandler, port = 18790, wa = null, e
 
     app.post('/api/sessions/:id/message', requireAuth, async (req, res) => {
         try {
-            const { phone, text } = req.body;
+            const { text } = req.body;
             const sessionId = req.params.id;
-            if (!phone || !text) return res.status(400).json({ error: 'phone and text are required' });
+            if (!text) return res.status(400).json({ error: 'text is required' });
+            const phone = req.body.phone || req.user.phone || req.user.email || req.user.id;
             const session = store.getSession(sessionId);
             if (!session) return res.status(404).json({ error: 'Session not found' });
             // Check access: owner or collaborator

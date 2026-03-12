@@ -1170,6 +1170,14 @@
             if (!sendBtn.disabled) sendMessage();
         });
 
+        // Update model badge in header when model dropdown changes
+        document.getElementById('model-select').addEventListener('change', function () {
+            const badge = document.getElementById('workspace-model-badge');
+            if (badge && !badge.classList.contains('hidden')) {
+                badge.textContent = this.value;
+            }
+        });
+
         async function fetchStats() {
             try {
                 const res = await fetch('/api/stats');
@@ -1262,7 +1270,6 @@
             document.getElementById('workspace-status-dot').className = "w-2.5 h-2.5 rounded-full animate-pulse shadow-[0_0_8px_rgba(50,73,215,0.6)]";
             document.getElementById('workspace-status-dot').style.background = '#3249d7';
 
-            const phoneOptions = document.getElementById('user-phone').innerHTML;
             const content = document.getElementById('workspace-content');
             content.innerHTML = `
                 <div class="max-w-3xl mx-auto py-8 sm:py-12 md:py-16 text-center px-4 animate-[fadeIn_0.5s_ease-out]">
@@ -1272,13 +1279,7 @@
                     <h2 class="text-xl sm:text-3xl font-bold t-text-primary mb-3 tracking-tight" style="font-family: Poppins, sans-serif;">Let's build something.</h2>
                     <p class="t-text-secondary text-sm sm:text-base max-w-xl mx-auto mb-6 leading-relaxed">Describe your feature or bug fix. Gemini will plan it, spawn a Claude Code session, and execute the changes on the server.</p>
                     
-                    <div class="mx-auto max-w-sm text-left bg-white/50 dark:bg-[#1a1c23]/50 p-4 border rounded-xl" style="border-color: rgba(50,73,215,0.15)">
-                        <label class="block text-xs font-bold t-text-primary uppercase tracking-wider mb-2">Map task to phone</label>
-                        <select id="new-task-phone" class="t-input border rounded-lg text-sm px-3 py-2 w-full focus:ring-1 focus:ring-[#3249d7] outline-none bg-white dark:bg-[#1a1c23]">
-                            ${phoneOptions}
-                        </select>
-                        <p class="text-[10px] t-text-muted mt-2 italic">This session will be exclusively mapped to your email and this number. Others must request access.</p>
-                    </div>
+
                 </div>
             `;
 
@@ -1312,6 +1313,9 @@
                 modelBadge.textContent = model;
                 modelBadge.classList.remove('hidden');
                 modelBadge.classList.add('sm:inline-block');
+                // Sync model dropdown to session's model
+                const modelSelect = document.getElementById('model-select');
+                if (modelSelect) modelSelect.value = model;
             } else {
                 modelBadge.classList.add('hidden');
             }
@@ -1462,18 +1466,7 @@
             const val = textarea.value.trim();
             if (!val && !pendingImages.length) return;   // need text OR image
 
-            let phone = document.getElementById('user-phone').value;
-            if (isCreatingNew) {
-                const newDropdown = document.getElementById('new-task-phone');
-                if (newDropdown && newDropdown.value) {
-                    phone = newDropdown.value;
-                }
-            }
-
-            if (!phone) {
-                alert("Please add an authorized phone number first in the 'Manage numbers' section.");
-                return;
-            }
+            let phone = document.getElementById('user-phone').value || '';
 
             textarea.value = '';
             textarea.style.height = 'auto';
