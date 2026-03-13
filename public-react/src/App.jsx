@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { AuthProvider, useAuth } from './context/AuthContext'
-import { useSessions, useStats, useSessionMessages, useModels, usePhones, useUsers, useCron, useAccessRequests, startSession, sendMessage, stopSession, uploadFile, transcribeAudio, requestAccess, getClaudePrompt, saveClaudePrompt } from './hooks/useApi'
+import { useSessions, useStats, useSessionMessages, useModels, usePhones, useUsers, useCron, useAccessRequests, useAction, startSession, sendMessage, stopSession, uploadFile, transcribeAudio, requestAccess, getClaudePrompt, saveClaudePrompt } from './hooks/useApi'
 import Sidebar from './components/Sidebar'
 import Workspace from './components/Workspace'
 import Login from './pages/Login'
@@ -59,53 +59,42 @@ function Dashboard() {
     setSelectedModel('opus')
   }, [])
 
-  const handleStartSession = useCallback(async (text, model) => {
-    try {
-      const result = await startSession(text, model)
-      if (result.sessionId) {
-        // Immediately switch to the new session view
-        const newSession = {
-          id: result.sessionId,
-          task: text,
-          model: model || 'opus',
-          status: 'running',
-          is_mine: true,
-        }
-        setActiveSession(newSession)
-        setIsNewSession(false)
-        setSelectedModel(model || 'opus')
-        // Refresh to get real data + messages
-        setTimeout(() => {
-          refreshSessions()
-          refreshStats()
-          refreshMessages()
-        }, 1500)
+  const _startSession = useCallback(async (text, model) => {
+    const result = await startSession(text, model)
+    if (result.sessionId) {
+      const newSession = {
+        id: result.sessionId,
+        task: text,
+        model: model || 'opus',
+        status: 'running',
+        is_mine: true,
       }
-    } catch (err) {
-      console.error('Failed to start session:', err)
+      setActiveSession(newSession)
+      setIsNewSession(false)
+      setSelectedModel(model || 'opus')
+      setTimeout(() => {
+        refreshSessions()
+        refreshStats()
+        refreshMessages()
+      }, 1500)
     }
   }, [])
+  const [handleStartSession, startingSession] = useAction(_startSession)
 
-  const handleSendMessage = useCallback(async (text, model) => {
+  const _sendMessage = useCallback(async (text, model) => {
     if (!activeSession?.id) return
-    try {
-      await sendMessage(activeSession.id, text)
-      setTimeout(() => refreshMessages(), 1000)
-    } catch (err) {
-      console.error('Failed to send message:', err)
-    }
+    await sendMessage(activeSession.id, text)
+    setTimeout(() => refreshMessages(), 1000)
   }, [activeSession?.id])
+  const [handleSendMessage, sendingMessage] = useAction(_sendMessage)
 
-  const handleStop = useCallback(async () => {
+  const _stopSession = useCallback(async () => {
     if (!activeSession?.id) return
-    try {
-      await stopSession(activeSession.id)
-      refreshSessions()
-      refreshStats()
-    } catch (err) {
-      console.error('Failed to stop session:', err)
-    }
+    await stopSession(activeSession.id)
+    refreshSessions()
+    refreshStats()
   }, [activeSession?.id])
+  const [handleStop, stoppingSession] = useAction(_stopSession)
 
   const handleShowAdmin = useCallback(async (panel) => {
     setAdminPanel(panel)
@@ -161,12 +150,7 @@ function Dashboard() {
           onStop={handleStop}
           onRequestAccess={async (note) => {
             if (!activeSession?.id) return
-            try {
-              await requestAccess(activeSession.id, note)
-              alert('Access request sent! The admin will be notified.')
-            } catch (err) {
-              alert('Failed to send request: ' + err.message)
-            }
+            await requestAccess(activeSession.id, note)
           }}
           isNewSession={isNewSession}
           onStartSession={handleStartSession}
@@ -174,6 +158,7 @@ function Dashboard() {
           onTranscribe={transcribeAudio}
           models={models}
           hasAccess={hasAccess}
+          busy={startingSession || sendingMessage || stoppingSession}
         />
       </div>
 

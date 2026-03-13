@@ -10,6 +10,8 @@ import {
   User,
   Copy,
   Check,
+  X,
+  FileText,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -265,6 +267,7 @@ export default function Workspace({
   onTranscribe,
   models = [],
   hasAccess = true,
+  busy = false,
 }) {
   const [inputText, setInputText] = useState('');
   const [selectedModel, setSelectedModel] = useState(
@@ -274,6 +277,7 @@ export default function Workspace({
   const [uploading, setUploading] = useState(false);
   const [recording, setRecording] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
+  const [attachments, setAttachments] = useState([]);
   const textareaRef = useRef(null);
   const fileInputRef = useRef(null);
   const mediaRecorderRef = useRef(null);
@@ -323,14 +327,52 @@ export default function Workspace({
     adjustTextarea();
   }, [inputText, adjustTextarea]);
 
-  const handleSend = () => {
+  const addAttachment = useCallback((file) => {
+    const isImage = file.type.startsWith('image/');
+    const previewUrl = isImage ? URL.createObjectURL(file) : null;
+    setAttachments((prev) => [...prev, { file, previewUrl, name: file.name, isImage, uploading: false, token: null }]);
+  }, []);
+
+  const removeAttachment = useCallback((index) => {
+    setAttachments((prev) => {
+      const item = prev[index];
+      if (item?.previewUrl) URL.revokeObjectURL(item.previewUrl);
+      return prev.filter((_, i) => i !== index);
+    });
+  }, []);
+
+  const uploadAttachments = useCallback(async () => {
+    if (!onUploadFile || attachments.length === 0) return [];
+    const results = await Promise.allSettled(
+      attachments.map(async (att) => {
+        if (att.token) return att.token;
+        const result = await onUploadFile(att.file);
+        return result?.token || `[file: ${att.name}]`;
+      })
+    );
+    return results.map((r) => r.status === 'fulfilled' ? r.value : null).filter(Boolean);
+  }, [attachments, onUploadFile]);
+
+  const handleSend = async () => {
     const text = inputText.trim();
-    if (!text) return;
-    if (isNewSession && onStartSession) {
-      onStartSession(text, selectedModel);
-    } else if (onSendMessage) {
-      onSendMessage(text, selectedModel);
+    if (!text && attachments.length === 0) return;
+    // Upload any pending attachments and append tokens to the message
+    let finalText = text;
+    if (attachments.length > 0) {
+      const tokens = await uploadAttachments();
+      if (tokens.length > 0) {
+        finalText = (finalText ? finalText + '\n' : '') + tokens.join('\n');
+      }
     }
+    if (!finalText) return;
+    if (isNewSession && onStartSession) {
+      onStartSession(finalText, selectedModel);
+    } else if (onSendMessage) {
+      onSendMessage(finalText, selectedModel);
+    }
+    // Clean up previews
+    attachments.forEach((att) => { if (att.previewUrl) URL.revokeObjectURL(att.previewUrl); });
+    setAttachments([]);
     setInputText('');
   };
 
@@ -341,26 +383,30 @@ export default function Workspace({
     }
   };
 
+  const handlePaste = useCallback((e) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (const item of items) {
+      if (item.kind === 'file') {
+        e.preventDefault();
+        const file = item.getAsFile();
+        if (file) addAttachment(file);
+      }
+    }
+  }, [addAttachment]);
+
   const handleRequestAccess = () => {
     onRequestAccess?.(accessNote);
     setAccessNote('');
   };
 
-  const handleFileSelect = async (e) => {
-    const file = e.target.files?.[0];
-    if (!file || !onUploadFile) return;
-    setUploading(true);
-    try {
-      const result = await onUploadFile(file);
-      if (result?.token) {
-        setInputText((prev) => prev + (prev ? '\n' : '') + `[file: ${file.name}] ${result.token}`);
-      }
-    } catch (err) {
-      console.error('Upload failed:', err);
-    } finally {
-      setUploading(false);
-      e.target.value = '';
+  const handleFileSelect = (e) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    for (const file of files) {
+      addAttachment(file);
     }
+    e.target.value = '';
   };
 
   const handleMicToggle = async () => {
@@ -546,6 +592,45 @@ export default function Workspace({
           compact
         />
       </div>
+      {attachments.length > 0 && (
+        <div className="flex gap-2 mb-2 overflow-x-auto pb-1">
+          {attachments.map((att, i) => (
+            <div
+              key={i}
+              className="relative flex-shrink-0 rounded-lg overflow-hidden group"
+              style={{
+                border: `1px solid ${colors.border}`,
+                backgroundColor: colors.surface2,
+              }}
+            >
+              {att.isImage ? (
+                <img
+                  src={att.previewUrl}
+                  alt={att.name}
+                  className="h-16 w-16 object-cover"
+                />
+              ) : (
+                <div className="h-16 w-16 flex flex-col items-center justify-center p-1">
+                  <FileText size={20} style={{ color: colors.textSecondary }} />
+                  <span
+                    className="text-[9px] mt-1 truncate max-w-full text-center px-0.5"
+                    style={{ color: colors.textSecondary }}
+                  >
+                    {att.name.length > 12 ? att.name.slice(0, 10) + '...' : att.name}
+                  </span>
+                </div>
+              )}
+              <button
+                onClick={() => removeAttachment(i)}
+                className="absolute top-0.5 right-0.5 p-0.5 rounded-full opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
+                style={{ backgroundColor: 'rgba(0,0,0,0.6)' }}
+              >
+                <X size={10} className="text-white" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
       <div
         className="flex items-end gap-2 rounded-xl p-2"
         style={{
@@ -556,6 +641,7 @@ export default function Workspace({
         <input
           ref={fileInputRef}
           type="file"
+          multiple
           className="hidden"
           onChange={handleFileSelect}
         />
@@ -572,6 +658,7 @@ export default function Workspace({
           value={inputText}
           onChange={(e) => setInputText(e.target.value)}
           onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
           placeholder={
             isRunning
               ? 'Session is currently running...'
@@ -596,7 +683,8 @@ export default function Workspace({
         {isRunning ? (
           <button
             onClick={onStop}
-            className="p-1.5 rounded-full flex-shrink-0 cursor-pointer hover:opacity-80"
+            disabled={busy}
+            className="p-1.5 rounded-full flex-shrink-0 cursor-pointer hover:opacity-80 disabled:opacity-50 disabled:cursor-not-allowed"
             style={{ backgroundColor: 'var(--c-danger)' }}
             title="Stop session"
           >
@@ -605,17 +693,17 @@ export default function Workspace({
         ) : (
           <button
             onClick={handleSend}
-            disabled={!inputText.trim()}
-            className="p-1.5 rounded-full flex-shrink-0 cursor-pointer transition-opacity"
+            disabled={(!inputText.trim() && attachments.length === 0) || busy}
+            className="p-1.5 rounded-full flex-shrink-0 cursor-pointer transition-opacity disabled:cursor-not-allowed"
             style={{
-              backgroundColor: inputText.trim() ? colors.accent : colors.surface3,
-              opacity: inputText.trim() ? 1 : 0.5,
+              backgroundColor: (inputText.trim() || attachments.length > 0) && !busy ? colors.accent : colors.surface3,
+              opacity: (inputText.trim() || attachments.length > 0) && !busy ? 1 : 0.5,
             }}
             title="Send message"
           >
             <ArrowUp
               size={16}
-              style={{ color: inputText.trim() ? '#ffffff' : colors.textSecondary }}
+              style={{ color: (inputText.trim() || attachments.length > 0) && !busy ? '#ffffff' : colors.textSecondary }}
             />
           </button>
         )}

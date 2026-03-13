@@ -1,19 +1,36 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-// When served behind nginx at /sessions/, API calls need the prefix
 const API_BASE = window.location.pathname.startsWith('/sessions') ? '/sessions' : '';
 
+// Dedup: reject duplicate in-flight POST/PUT/DELETE requests to the same URL
+const inflightMutations = new Map();
+
 async function apiFetch(url, opts = {}) {
-  const res = await fetch(API_BASE + url, { credentials: 'include', ...opts });
+  const method = (opts.method || 'GET').toUpperCase();
+  const fullUrl = API_BASE + url;
+
+  // For mutations, deduplicate — if identical request is in-flight, return its promise
+  if (method !== 'GET') {
+    const key = `${method}:${fullUrl}`;
+    if (inflightMutations.has(key)) return inflightMutations.get(key);
+    const promise = _doFetch(fullUrl, opts).finally(() => inflightMutations.delete(key));
+    inflightMutations.set(key, promise);
+    return promise;
+  }
+
+  return _doFetch(fullUrl, opts);
+}
+
+async function _doFetch(fullUrl, opts) {
+  const res = await fetch(fullUrl, { credentials: 'include', ...opts });
   if (!res.ok) {
     const body = await res.json().catch(() => ({ message: res.statusText }));
-    throw new Error(body.message || `Request failed: ${res.status}`);
+    throw new Error(body.error || body.message || `Request failed: ${res.status}`);
   }
-  // Some endpoints may return 204 with no body
   if (res.status === 204) return null;
   return res.json();
 }
@@ -22,8 +39,23 @@ function useGet(url, deps = []) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const timerRef = useRef(null);
 
   const refresh = useCallback(() => {
+    // Debounce rapid refresh calls (e.g. from polling)
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => {
+      setError(null);
+      apiFetch(url)
+        .then(setData)
+        .catch(setError)
+        .finally(() => setLoading(false));
+    }, 200);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [url, ...deps]);
+
+  useEffect(() => {
+    // Initial load — no debounce
     setLoading(true);
     setError(null);
     apiFetch(url)
@@ -33,11 +65,22 @@ function useGet(url, deps = []) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [url, ...deps]);
 
-  useEffect(() => {
-    refresh();
-  }, [refresh]);
-
   return { data, loading, error, refresh };
+}
+
+// Hook for mutation actions — prevents double-click and exposes busy state
+export function useAction(fn) {
+  const [busy, setBusy] = useState(false);
+  const run = useCallback(async (...args) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      return await fn(...args);
+    } finally {
+      setBusy(false);
+    }
+  }, [fn, busy]);
+  return [run, busy];
 }
 
 // ---------------------------------------------------------------------------
