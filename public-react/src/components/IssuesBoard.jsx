@@ -19,6 +19,14 @@ import {
   Paperclip,
 } from 'lucide-react';
 
+// SQLite CURRENT_TIMESTAMP returns 'YYYY-MM-DD HH:MM:SS' without timezone.
+// Append 'Z' so the browser treats it as UTC, then toLocale* converts to local.
+function parseUTC(ts) {
+  if (!ts) return null;
+  const s = String(ts);
+  return new Date(s.includes('T') || s.endsWith('Z') ? s : s.replace(' ', 'T') + 'Z');
+}
+
 const colors = {
   bg: 'var(--c-bg)',
   surface: 'var(--c-surface)',
@@ -547,7 +555,7 @@ function IssueDetail({ issue, onBack, onUpdate, onDelete }) {
           <div className="flex items-center gap-4">
             <span className="text-xs font-mono w-20" style={{ color: colors.textSecondary }}>Created</span>
             <span className="text-xs" style={{ color: colors.textSecondary }}>
-              {new Date(issue.created_at).toLocaleString()}
+              {parseUTC(issue.created_at)?.toLocaleString() || ''}
             </span>
           </div>
 

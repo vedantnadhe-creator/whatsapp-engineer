@@ -182,9 +182,18 @@ function MarkdownContent({ content }) {
   );
 }
 
+// SQLite CURRENT_TIMESTAMP returns 'YYYY-MM-DD HH:MM:SS' without timezone.
+// Append 'Z' so the browser treats it as UTC, then toLocale* converts to local.
+function parseUTC(ts) {
+  if (!ts) return null;
+  const s = String(ts);
+  return new Date(s.includes('T') || s.endsWith('Z') ? s : s.replace(' ', 'T') + 'Z');
+}
+
 function formatTime(timestamp) {
   if (!timestamp) return '';
-  const d = new Date(timestamp);
+  const d = parseUTC(timestamp);
+  if (!d || isNaN(d)) return '';
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
