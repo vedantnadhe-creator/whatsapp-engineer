@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { AuthProvider, useAuth } from './context/AuthContext'
-import { useSessions, useStats, useSessionMessages, useModels, usePhones, useUsers, useCron, useAccessRequests, startSession, sendMessage, stopSession, uploadFile, transcribeAudio, getClaudePrompt, saveClaudePrompt } from './hooks/useApi'
+import { useSessions, useStats, useSessionMessages, useModels, usePhones, useUsers, useCron, useAccessRequests, startSession, sendMessage, stopSession, uploadFile, transcribeAudio, requestAccess, getClaudePrompt, saveClaudePrompt } from './hooks/useApi'
 import Sidebar from './components/Sidebar'
 import Workspace from './components/Workspace'
 import Login from './pages/Login'
@@ -151,6 +151,7 @@ function Dashboard() {
         onShowAdmin={handleShowAdmin}
         onLoadMore={() => setPage(p => Math.min(p + 1, totalPages || 1))}
         hasMore={page < (totalPages || 1)}
+        pendingRequestsCount={requests?.length || 0}
       />
       <div className="flex-1 min-w-0 h-full">
         <Workspace
@@ -158,7 +159,15 @@ function Dashboard() {
           messages={messages}
           onSendMessage={handleSendMessage}
           onStop={handleStop}
-          onRequestAccess={() => {}}
+          onRequestAccess={async (note) => {
+            if (!activeSession?.id) return
+            try {
+              await requestAccess(activeSession.id, note)
+              alert('Access request sent! The admin will be notified.')
+            } catch (err) {
+              alert('Failed to send request: ' + err.message)
+            }
+          }}
           isNewSession={isNewSession}
           onStartSession={handleStartSession}
           onUploadFile={uploadFile}

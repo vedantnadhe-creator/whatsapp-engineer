@@ -151,11 +151,11 @@ export function useCron() {
 export function useAccessRequests() {
   const { data, loading, error, refresh } = useGet('/api/admin/access-requests');
 
-  const resolve = useCallback(async (requestId, action) => {
-    const result = await apiFetch(`/api/admin/access-requests/${requestId}`, {
+  const resolve = useCallback(async (requestId, approve) => {
+    const result = await apiFetch(`/api/admin/access-requests/${requestId}/resolve`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action }),
+      body: JSON.stringify({ approve }),
     });
     refresh();
     return result;

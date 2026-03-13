@@ -91,7 +91,7 @@ function SessionItem({ session, isActive, onSelect }) {
   );
 }
 
-function AdminDropdown({ onShowAdmin, onClose }) {
+function AdminDropdown({ onShowAdmin, onClose, pendingRequestsCount = 0 }) {
   const ref = useRef(null);
 
   useEffect(() => {
@@ -107,6 +107,7 @@ function AdminDropdown({ onShowAdmin, onClose }) {
     { key: 'phones', label: 'Phones', icon: Phone },
     { key: 'prompts', label: 'Prompts', icon: FileText },
     { key: 'cron', label: 'Cron', icon: Clock },
+    { key: 'requests', label: 'Requests', icon: MessageSquare, badge: pendingRequestsCount },
   ];
 
   return (
@@ -115,7 +116,7 @@ function AdminDropdown({ onShowAdmin, onClose }) {
       className="absolute bottom-full left-0 mb-1 w-40 rounded border py-1"
       style={{ backgroundColor: 'var(--c-surface)', borderColor: 'var(--c-border)' }}
     >
-      {items.map(({ key, label, icon: Icon }) => (
+      {items.map(({ key, label, icon: Icon, badge }) => (
         <button
           key={key}
           onClick={() => {
@@ -129,6 +130,14 @@ function AdminDropdown({ onShowAdmin, onClose }) {
         >
           <Icon size={14} style={{ color: 'var(--c-text-secondary)' }} />
           {label}
+          {badge > 0 && (
+            <span
+              className="ml-auto text-[10px] font-mono font-bold rounded-full px-1.5 py-0.5 leading-none"
+              style={{ backgroundColor: 'var(--c-danger, #ef4444)', color: '#fff' }}
+            >
+              {badge}
+            </span>
+          )}
         </button>
       ))}
     </div>
@@ -146,6 +155,7 @@ function SidebarContent({
   onShowAdmin,
   onLoadMore,
   hasMore,
+  pendingRequestsCount = 0,
 }) {
   const [adminOpen, setAdminOpen] = useState(false);
   const { theme, toggle } = useTheme();
@@ -236,6 +246,7 @@ function SidebarContent({
           <AdminDropdown
             onShowAdmin={onShowAdmin}
             onClose={() => setAdminOpen(false)}
+            pendingRequestsCount={pendingRequestsCount}
           />
         )}
         <div className="flex items-center gap-3">
@@ -261,12 +272,18 @@ function SidebarContent({
           {user?.isAdmin && (
             <button
               onClick={() => setAdminOpen((v) => !v)}
-              className="p-1 transition-colors duration-150 cursor-pointer"
+              className="relative p-1 transition-colors duration-150 cursor-pointer"
               style={{ color: 'var(--c-text-secondary)' }}
               onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--c-text)')}
               onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--c-text-secondary)')}
             >
               <Settings size={16} />
+              {pendingRequestsCount > 0 && (
+                <span
+                  className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full"
+                  style={{ backgroundColor: 'var(--c-danger, #ef4444)' }}
+                />
+              )}
             </button>
           )}
 
