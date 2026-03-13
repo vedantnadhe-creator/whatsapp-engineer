@@ -475,5 +475,153 @@ export function startDashboard(store, messageHandler, port = 18790, wa = null, e
         } catch (err) { res.status(500).json({ error: err.message }); }
     });
 
+    // ── Issues (Linear-like task board) ──────────────────────────
+
+    app.get('/api/issues', requireAuth, (req, res) => {
+        try { res.json(store.getAllIssues()); }
+        catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    app.post('/api/issues', requireAuth, (req, res) => {
+        try {
+            const { title, description, priority, labels } = req.body;
+            if (!title) return res.status(400).json({ error: 'title is required' });
+            const issue = store.createIssue({ title, description, priority, labels, createdBy: req.user.id });
+            res.json(issue);
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    app.put('/api/issues/:id', requireAuth, (req, res) => {
+        try {
+            const allowed = ['title', 'description', 'status', 'priority', 'labels', 'assigned_to', 'sort_order'];
+            const updates = {};
+            for (const key of allowed) {
+                if (req.body[key] !== undefined) updates[key] = req.body[key];
+            }
+            if (updates.status === 'completed') updates.completed_at = new Date().toISOString();
+            const issue = store.updateIssue(req.params.id, updates);
+            if (!issue) return res.status(404).json({ error: 'Issue not found' });
+            res.json(issue);
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    app.delete('/api/issues/:id', requireAuth, requireAdmin, (req, res) => {
+        try { store.deleteIssue(req.params.id); res.json({ success: true }); }
+        catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    app.get('/api/issues/stats', requireAuth, (req, res) => {
+        try { res.json(store.countIssuesByStatus()); }
+        catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    // ── Autonomous Run (picks issues one by one) ─────────────────
+
+    // In-memory state for autonomous runner
+    const autonomousState = { running: false, currentIssueId: null, sessionId: null };
+
+    app.get('/api/autonomous/status', requireAuth, (req, res) => {
+        res.json(autonomousState);
+    });
+
+    app.post('/api/autonomous/start', requireAuth, requireAdmin, async (req, res) => {
+        try {
+            if (autonomousState.running) return res.status(400).json({ error: 'Autonomous runner is already active' });
+            autonomousState.running = true;
+
+            // Pick first todo issue
+            const issue = store.getNextTodoIssue();
+            if (!issue) {
+                autonomousState.running = false;
+                return res.json({ success: false, message: 'No todo issues to run' });
+            }
+
+            // Mark as in_progress
+            store.updateIssue(issue.id, { status: 'in_progress' });
+            autonomousState.currentIssueId = issue.id;
+
+            // Start a session for this issue
+            const phone = req.user.phone || req.user.email || req.user.id;
+            const model = req.body.model || 'opus';
+            const taskPrompt = `[Issue ${issue.id}] ${issue.title}\n\n${issue.description || 'No additional details.'}`;
+            const result = await messageHandler({ isWeb: true, phone: String(phone), text: `[start fresh] ${taskPrompt}`, pushName: req.user.displayName || 'Autonomous', ownerId: req.user.id, model });
+
+            if (result?.sessionId) {
+                autonomousState.sessionId = result.sessionId;
+                store.updateIssue(issue.id, { session_id: result.sessionId });
+            }
+            res.json({ success: true, issueId: issue.id, sessionId: result?.sessionId });
+        } catch (err) {
+            autonomousState.running = false;
+            autonomousState.currentIssueId = null;
+            res.status(500).json({ error: err.message });
+        }
+    });
+
+    app.post('/api/autonomous/stop', requireAuth, requireAdmin, (req, res) => {
+        try {
+            if (autonomousState.sessionId && executionEngine) {
+                try { executionEngine.stopSession(autonomousState.sessionId); } catch (_) { }
+            }
+            // Revert current issue to todo if still in_progress
+            if (autonomousState.currentIssueId) {
+                const issue = store.getIssue(autonomousState.currentIssueId);
+                if (issue && issue.status === 'in_progress') {
+                    store.updateIssue(autonomousState.currentIssueId, { status: 'todo' });
+                }
+            }
+            autonomousState.running = false;
+            autonomousState.currentIssueId = null;
+            autonomousState.sessionId = null;
+            res.json({ success: true });
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    // Listen for session completions to auto-pick next issue
+    if (executionEngine) {
+        executionEngine.on('session_end', ({ sessionId, status }) => {
+            if (!autonomousState.running || autonomousState.sessionId !== sessionId) return;
+
+            // Mark current issue based on session outcome
+            if (autonomousState.currentIssueId) {
+                const newStatus = status === 'completed' ? 'completed' : 'question';
+                store.updateIssue(autonomousState.currentIssueId, {
+                    status: newStatus,
+                    ...(newStatus === 'completed' ? { completed_at: new Date().toISOString() } : {}),
+                });
+            }
+
+            // Pick next issue
+            const next = store.getNextTodoIssue();
+            if (!next) {
+                console.log('[Autonomous] No more todo issues. Stopping runner.');
+                autonomousState.running = false;
+                autonomousState.currentIssueId = null;
+                autonomousState.sessionId = null;
+                return;
+            }
+
+            // Start next issue
+            store.updateIssue(next.id, { status: 'in_progress' });
+            autonomousState.currentIssueId = next.id;
+
+            const taskPrompt = `[Issue ${next.id}] ${next.title}\n\n${next.description || 'No additional details.'}`;
+            messageHandler({ isWeb: true, phone: 'system_autonomous', text: `[start fresh] ${taskPrompt}`, pushName: 'Autonomous Runner', ownerId: null, model: 'opus' })
+                .then(result => {
+                    if (result?.sessionId) {
+                        autonomousState.sessionId = result.sessionId;
+                        store.updateIssue(next.id, { session_id: result.sessionId });
+                    }
+                })
+                .catch(err => {
+                    console.error('[Autonomous] Failed to start next issue:', err.message);
+                    store.updateIssue(next.id, { status: 'question' });
+                    autonomousState.running = false;
+                    autonomousState.currentIssueId = null;
+                    autonomousState.sessionId = null;
+                });
+        });
+    }
+
     app.listen(port, () => console.log(`[Dashboard] 🌐 Web Dashboard running on port ${port}`));
 }

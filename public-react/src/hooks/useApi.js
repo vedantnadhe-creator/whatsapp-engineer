@@ -268,3 +268,60 @@ export async function transcribeAudio(blob) {
     body: blob,
   });
 }
+
+// ---------------------------------------------------------------------------
+// Issues hooks & helpers
+// ---------------------------------------------------------------------------
+
+export function useIssues() {
+  const { data, loading, error, refresh } = useGet('/api/issues');
+
+  const createIssue = useCallback(async (issueData) => {
+    const result = await apiFetch('/api/issues', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(issueData),
+    });
+    refresh();
+    return result;
+  }, [refresh]);
+
+  const updateIssue = useCallback(async (id, updates) => {
+    const result = await apiFetch(`/api/issues/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updates),
+    });
+    refresh();
+    return result;
+  }, [refresh]);
+
+  const deleteIssue = useCallback(async (id) => {
+    await apiFetch(`/api/issues/${id}`, { method: 'DELETE' });
+    refresh();
+  }, [refresh]);
+
+  return { issues: data ?? [], loading, error, refresh, createIssue, updateIssue, deleteIssue };
+}
+
+export function useAutonomous() {
+  const { data, loading, error, refresh } = useGet('/api/autonomous/status');
+
+  const start = useCallback(async (model) => {
+    const result = await apiFetch('/api/autonomous/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model }),
+    });
+    refresh();
+    return result;
+  }, [refresh]);
+
+  const stop = useCallback(async () => {
+    const result = await apiFetch('/api/autonomous/stop', { method: 'POST' });
+    refresh();
+    return result;
+  }, [refresh]);
+
+  return { status: data, loading, error, refresh, start, stop };
+}

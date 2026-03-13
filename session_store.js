@@ -76,6 +76,23 @@ class SessionStore {
             CREATE INDEX IF NOT EXISTS idx_collaborators_session ON session_collaborators(session_id);
             CREATE INDEX IF NOT EXISTS idx_collaborators_user ON session_collaborators(user_id);
             CREATE INDEX IF NOT EXISTS idx_access_requests_status ON access_requests(status);
+            CREATE TABLE IF NOT EXISTS issues (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                description TEXT DEFAULT '',
+                status TEXT DEFAULT 'todo',
+                priority TEXT DEFAULT 'medium',
+                labels TEXT DEFAULT '[]',
+                created_by TEXT,
+                assigned_to TEXT,
+                session_id TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                completed_at DATETIME,
+                sort_order INTEGER DEFAULT 0
+            );
+            CREATE INDEX IF NOT EXISTS idx_issues_status ON issues(status);
+            CREATE INDEX IF NOT EXISTS idx_issues_created_by ON issues(created_by);
             CREATE TABLE IF NOT EXISTS system_prompts (
                 key TEXT PRIMARY KEY,
                 prompt TEXT NOT NULL,
@@ -347,6 +364,55 @@ class SessionStore {
             const req = this.db.prepare('SELECT * FROM access_requests WHERE id = ?').get(requestId);
             if (req) this.addCollaborator(req.session_id, req.requester_id);
         }
+    }
+
+    // ── Issues ─────────────────────────────────────────────────
+
+    createIssue({ title, description = '', priority = 'medium', labels = [], createdBy = null }) {
+        const id = `ISS-${Date.now().toString(36)}`;
+        const maxOrder = this.db.prepare("SELECT COALESCE(MAX(sort_order), 0) as m FROM issues WHERE status = 'todo'").get().m;
+        this.db.prepare(
+            `INSERT INTO issues (id, title, description, priority, labels, created_by, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)`
+        ).run(id, title, description, priority, JSON.stringify(labels), createdBy, maxOrder + 1);
+        return this.getIssue(id);
+    }
+
+    getIssue(id) { return this.db.prepare('SELECT * FROM issues WHERE id = ?').get(id); }
+
+    getAllIssues() {
+        return this.db.prepare('SELECT i.*, u.display_name as creator_name FROM issues i LEFT JOIN users u ON i.created_by = u.id ORDER BY i.sort_order ASC, i.created_at DESC').all();
+    }
+
+    getIssuesByStatus(status) {
+        return this.db.prepare('SELECT i.*, u.display_name as creator_name FROM issues i LEFT JOIN users u ON i.created_by = u.id WHERE i.status = ? ORDER BY i.sort_order ASC').all(status);
+    }
+
+    updateIssue(id, updates) {
+        const fields = [];
+        const values = [];
+        for (const [key, val] of Object.entries(updates)) {
+            if (key === 'labels') {
+                fields.push('labels = ?');
+                values.push(JSON.stringify(val));
+            } else {
+                fields.push(`${key} = ?`);
+                values.push(val);
+            }
+        }
+        if (fields.length === 0) return;
+        values.push(id);
+        this.db.prepare(`UPDATE issues SET ${fields.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(...values);
+        return this.getIssue(id);
+    }
+
+    deleteIssue(id) { this.db.prepare('DELETE FROM issues WHERE id = ?').run(id); }
+
+    getNextTodoIssue() {
+        return this.db.prepare("SELECT * FROM issues WHERE status = 'todo' ORDER BY sort_order ASC LIMIT 1").get();
+    }
+
+    countIssuesByStatus() {
+        return this.db.prepare("SELECT status, COUNT(*) as count FROM issues GROUP BY status").all();
     }
 
     getSystemPrompt(key) { return this.db.prepare('SELECT * FROM system_prompts WHERE key = ?').get(key); }

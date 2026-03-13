@@ -14,6 +14,7 @@ import {
   MessageSquare,
   Sun,
   Moon,
+  CircleDot,
 } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
 
@@ -156,6 +157,9 @@ function SidebarContent({
   onLoadMore,
   hasMore,
   pendingRequestsCount = 0,
+  view = 'chat',
+  onViewChange,
+  issueCount = 0,
 }) {
   const [adminOpen, setAdminOpen] = useState(false);
   const { theme, toggle } = useTheme();
@@ -205,6 +209,43 @@ function SidebarContent({
           </span>
         </div>
       )}
+
+      {/* Nav tabs */}
+      <div
+        className="flex px-2 py-1.5 gap-1"
+        style={{ borderBottom: '1px solid var(--c-border)' }}
+      >
+        <button
+          onClick={() => onViewChange?.('chat')}
+          className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded text-xs font-medium cursor-pointer transition-colors"
+          style={{
+            backgroundColor: view === 'chat' ? 'var(--c-surface-2)' : 'transparent',
+            color: view === 'chat' ? 'var(--c-text)' : 'var(--c-text-secondary)',
+          }}
+        >
+          <MessageSquare size={12} />
+          Sessions
+        </button>
+        <button
+          onClick={() => onViewChange?.('issues')}
+          className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded text-xs font-medium cursor-pointer transition-colors"
+          style={{
+            backgroundColor: view === 'issues' ? 'var(--c-surface-2)' : 'transparent',
+            color: view === 'issues' ? 'var(--c-text)' : 'var(--c-text-secondary)',
+          }}
+        >
+          <CircleDot size={12} />
+          Issues
+          {issueCount > 0 && (
+            <span
+              className="text-[10px] font-mono px-1 py-0 rounded"
+              style={{ backgroundColor: 'var(--c-surface-3)', color: 'var(--c-text-muted)' }}
+            >
+              {issueCount}
+            </span>
+          )}
+        </button>
+      </div>
 
       {/* Session list */}
       <div className="flex-1 overflow-y-auto">

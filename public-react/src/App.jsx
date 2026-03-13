@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback } from 'react'
 import { AuthProvider, useAuth } from './context/AuthContext'
-import { useSessions, useStats, useSessionMessages, useModels, usePhones, useUsers, useCron, useAccessRequests, useAction, startSession, sendMessage, stopSession, uploadFile, transcribeAudio, requestAccess, getClaudePrompt, saveClaudePrompt } from './hooks/useApi'
+import { useSessions, useStats, useSessionMessages, useModels, usePhones, useUsers, useCron, useAccessRequests, useIssues, useAutonomous, useAction, startSession, sendMessage, stopSession, uploadFile, transcribeAudio, requestAccess, getClaudePrompt, saveClaudePrompt } from './hooks/useApi'
 import Sidebar from './components/Sidebar'
 import Workspace from './components/Workspace'
+import IssuesBoard from './components/IssuesBoard'
 import Login from './pages/Login'
 import { AdminModal, UsersPanel, PhonesPanel, PromptsPanel, CronPanel, AccessRequestsPanel } from './components/AdminPanels'
 import { ThemeProvider } from './context/ThemeContext'
@@ -17,6 +18,7 @@ function Dashboard() {
   const [selectedModel, setSelectedModel] = useState('opus')
   const [claudePrompt, setClaudePrompt] = useState('')
   const [promptLoading, setPromptLoading] = useState(false)
+  const [view, setView] = useState('chat') // 'chat' or 'issues'
 
   const { stats, refresh: refreshStats } = useStats()
   const { sessions, total, totalPages, refresh: refreshSessions } = useSessions(page)
@@ -26,6 +28,8 @@ function Dashboard() {
   const { users, refresh: refreshUsers, addUser, deleteUser, resetPassword } = useUsers()
   const { jobs, refresh: refreshCron, saveJob, deleteJob } = useCron()
   const { requests, refresh: refreshRequests, resolve } = useAccessRequests()
+  const { issues, refresh: refreshIssues, createIssue, updateIssue, deleteIssue } = useIssues()
+  const { status: autonomousStatus, refresh: refreshAutonomous, start: startAutonomous, stop: stopAutonomous } = useAutonomous()
 
   // Keep activeSession in sync with refreshed sessions list
   useEffect(() => {
@@ -43,9 +47,10 @@ function Dashboard() {
       refreshStats()
       refreshSessions()
       if (activeSession?.id) refreshMessages()
+      if (view === 'issues') { refreshIssues(); refreshAutonomous() }
     }, 5000)
     return () => clearInterval(interval)
-  }, [activeSession?.id])
+  }, [activeSession?.id, view])
 
   const handleSelectSession = useCallback((session) => {
     setActiveSession(session)
@@ -132,8 +137,8 @@ function Dashboard() {
       <Sidebar
         sessions={sessions}
         activeSessionId={activeSession?.id}
-        onSelectSession={handleSelectSession}
-        onNewSession={handleNewSession}
+        onSelectSession={(s) => { handleSelectSession(s); setView('chat') }}
+        onNewSession={() => { handleNewSession(); setView('chat') }}
         stats={stats}
         user={user}
         onLogout={logout}
@@ -141,25 +146,40 @@ function Dashboard() {
         onLoadMore={() => setPage(p => Math.min(p + 1, totalPages || 1))}
         hasMore={page < (totalPages || 1)}
         pendingRequestsCount={requests?.length || 0}
+        view={view}
+        onViewChange={setView}
+        issueCount={issues.length}
       />
       <div className="flex-1 min-w-0 h-full">
-        <Workspace
-          session={activeSession}
-          messages={messages}
-          onSendMessage={handleSendMessage}
-          onStop={handleStop}
-          onRequestAccess={async (note) => {
-            if (!activeSession?.id) return
-            await requestAccess(activeSession.id, note)
-          }}
-          isNewSession={isNewSession}
-          onStartSession={handleStartSession}
-          onUploadFile={uploadFile}
-          onTranscribe={transcribeAudio}
-          models={models}
-          hasAccess={hasAccess}
-          busy={startingSession || sendingMessage || stoppingSession}
-        />
+        {view === 'issues' ? (
+          <IssuesBoard
+            issues={issues}
+            onCreateIssue={createIssue}
+            onUpdateIssue={updateIssue}
+            onDeleteIssue={deleteIssue}
+            autonomousStatus={autonomousStatus}
+            onStartAutonomous={() => startAutonomous('opus')}
+            onStopAutonomous={stopAutonomous}
+          />
+        ) : (
+          <Workspace
+            session={activeSession}
+            messages={messages}
+            onSendMessage={handleSendMessage}
+            onStop={handleStop}
+            onRequestAccess={async (note) => {
+              if (!activeSession?.id) return
+              await requestAccess(activeSession.id, note)
+            }}
+            isNewSession={isNewSession}
+            onStartSession={handleStartSession}
+            onUploadFile={uploadFile}
+            onTranscribe={transcribeAudio}
+            models={models}
+            hasAccess={hasAccess}
+            busy={startingSession || sendingMessage || stoppingSession}
+          />
+        )}
       </div>
 
       {adminPanel === 'users' && (
