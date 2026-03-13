@@ -478,6 +478,15 @@ export default function Workspace({
         </span>
       </div>
       <div className="flex items-center gap-3 flex-shrink-0">
+        {(session.owner_name || session.owner_email) && (
+          <span
+            className="text-[10px] px-2 py-0.5 rounded truncate max-w-[100px]"
+            style={{ backgroundColor: colors.surface2, color: colors.textSecondary }}
+            title={session.owner_name || session.owner_email}
+          >
+            {session.owner_name || session.owner_email}
+          </span>
+        )}
         <span
           className="font-mono text-xs"
           style={{ color: colors.textSecondary }}

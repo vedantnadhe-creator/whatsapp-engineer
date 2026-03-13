@@ -44,6 +44,7 @@ function StatusDot({ status }) {
 }
 
 function SessionItem({ session, isActive, onSelect }) {
+  const ownerLabel = session.owner_name || session.owner_email || null;
   return (
     <button
       onClick={() => onSelect(session)}
@@ -65,8 +66,19 @@ function SessionItem({ session, isActive, onSelect }) {
           <div className="truncate text-sm font-medium" style={{ color: 'var(--c-text)' }}>
             {session.task || 'Untitled'}
           </div>
-          <div className="mt-0.5 font-mono text-xs" style={{ color: 'var(--c-text-muted)' }}>
-            {session.id}
+          <div className="mt-0.5 flex items-center gap-2">
+            <span className="font-mono text-xs" style={{ color: 'var(--c-text-muted)' }}>
+              {session.id}
+            </span>
+            {ownerLabel && (
+              <span
+                className="truncate text-[10px] max-w-[80px]"
+                style={{ color: 'var(--c-text-secondary)' }}
+                title={ownerLabel}
+              >
+                {ownerLabel}
+              </span>
+            )}
           </div>
           <div className="mt-1 flex items-center gap-2">
             <span
@@ -162,7 +174,12 @@ function SidebarContent({
   issueCount = 0,
 }) {
   const [adminOpen, setAdminOpen] = useState(false);
+  const [sessionFilter, setSessionFilter] = useState('all'); // 'all' or 'mine'
   const { theme, toggle } = useTheme();
+
+  const filteredSessions = sessionFilter === 'mine'
+    ? (sessions || []).filter((s) => s.is_mine)
+    : (sessions || []);
 
   return (
     <div
@@ -247,11 +264,33 @@ function SidebarContent({
         </button>
       </div>
 
+      {/* Session filter: All / Mine */}
+      {view === 'chat' && (
+        <div
+          className="flex px-3 py-1.5 gap-1"
+          style={{ borderBottom: '1px solid var(--c-border)' }}
+        >
+          {['all', 'mine'].map((f) => (
+            <button
+              key={f}
+              onClick={() => setSessionFilter(f)}
+              className="text-[10px] font-mono uppercase px-2 py-1 rounded cursor-pointer transition-colors"
+              style={{
+                backgroundColor: sessionFilter === f ? 'var(--c-surface-2)' : 'transparent',
+                color: sessionFilter === f ? 'var(--c-text)' : 'var(--c-text-secondary)',
+              }}
+            >
+              {f === 'all' ? `All (${(sessions || []).length})` : `Mine (${(sessions || []).filter(s => s.is_mine).length})`}
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* Session list */}
       <div className="flex-1 overflow-y-auto">
-        {sessions && sessions.length > 0 ? (
+        {filteredSessions.length > 0 ? (
           <>
-            {sessions.map((session) => (
+            {filteredSessions.map((session) => (
               <SessionItem
                 key={session.id}
                 session={session}
@@ -273,7 +312,7 @@ function SidebarContent({
           </>
         ) : (
           <div className="px-4 py-8 text-center text-sm" style={{ color: 'var(--c-text-muted)' }}>
-            No sessions yet
+            {sessionFilter === 'mine' ? 'No sessions by you yet' : 'No sessions yet'}
           </div>
         )}
       </div>
