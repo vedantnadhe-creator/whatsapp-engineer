@@ -157,6 +157,7 @@ function Dashboard() {
             onCreateIssue={createIssue}
             onUpdateIssue={updateIssue}
             onDeleteIssue={deleteIssue}
+            onUploadFile={uploadFile}
             autonomousStatus={autonomousStatus}
             onStartAutonomous={() => startAutonomous('opus')}
             onStopAutonomous={stopAutonomous}

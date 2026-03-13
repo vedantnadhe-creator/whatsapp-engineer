@@ -16,6 +16,7 @@ import {
   GripVertical,
   Tag,
   X,
+  Paperclip,
 } from 'lucide-react';
 
 const colors = {
@@ -165,24 +166,114 @@ function IssueRow({ issue, onSelect, onStatusChange }) {
   );
 }
 
-function CreateIssueForm({ onSubmit, onCancel }) {
+function FilePreview({ file, previewUrl, isImage, onRemove }) {
+  return (
+    <div
+      className="relative flex-shrink-0 rounded-lg overflow-hidden group"
+      style={{ border: `1px solid ${colors.border}`, backgroundColor: colors.surface2 }}
+    >
+      {isImage ? (
+        <img src={previewUrl} alt={file.name} className="h-14 w-14 object-cover" />
+      ) : (
+        <div className="h-14 w-14 flex flex-col items-center justify-center p-1">
+          <Paperclip size={16} style={{ color: colors.textSecondary }} />
+          <span className="text-[8px] mt-0.5 truncate max-w-full text-center px-0.5" style={{ color: colors.textSecondary }}>
+            {file.name.length > 10 ? file.name.slice(0, 8) + '...' : file.name}
+          </span>
+        </div>
+      )}
+      <button
+        type="button"
+        onClick={onRemove}
+        className="absolute top-0.5 right-0.5 p-0.5 rounded-full opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
+        style={{ backgroundColor: 'rgba(0,0,0,0.6)' }}
+      >
+        <X size={8} className="text-white" />
+      </button>
+    </div>
+  );
+}
+
+function CreateIssueForm({ onSubmit, onCancel, onUploadFile }) {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [priority, setPriority] = useState('medium');
   const [labelInput, setLabelInput] = useState('');
   const [labels, setLabels] = useState([]);
+  const [attachments, setAttachments] = useState([]);
+  const [submitting, setSubmitting] = useState(false);
   const titleRef = useRef(null);
+  const fileInputRef = useRef(null);
 
   useEffect(() => { titleRef.current?.focus(); }, []);
 
-  const handleSubmit = (e) => {
+  const addFiles = useCallback((files) => {
+    for (const file of files) {
+      const isImage = file.type.startsWith('image/');
+      const previewUrl = isImage ? URL.createObjectURL(file) : null;
+      setAttachments((prev) => [...prev, { file, previewUrl, isImage }]);
+    }
+  }, []);
+
+  const removeAttachment = useCallback((index) => {
+    setAttachments((prev) => {
+      const item = prev[index];
+      if (item?.previewUrl) URL.revokeObjectURL(item.previewUrl);
+      return prev.filter((_, i) => i !== index);
+    });
+  }, []);
+
+  const handlePaste = useCallback((e) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    const files = [];
+    for (const item of items) {
+      if (item.kind === 'file') {
+        const f = item.getAsFile();
+        if (f) files.push(f);
+      }
+    }
+    if (files.length > 0) {
+      e.preventDefault();
+      addFiles(files);
+    }
+  }, [addFiles]);
+
+  const handleFileSelect = (e) => {
+    if (e.target.files?.length) addFiles(Array.from(e.target.files));
+    e.target.value = '';
+  };
+
+  const handleSubmit = async (e) => {
     e.preventDefault();
     if (!title.trim()) return;
-    onSubmit({ title: title.trim(), description: description.trim(), priority, labels });
-    setTitle('');
-    setDescription('');
-    setPriority('medium');
-    setLabels([]);
+    setSubmitting(true);
+    try {
+      // Upload attachments and collect tokens
+      let desc = description.trim();
+      if (attachments.length > 0 && onUploadFile) {
+        const results = await Promise.allSettled(
+          attachments.map(async (att) => {
+            const result = await onUploadFile(att.file);
+            return result?.token ? `[file: ${att.file.name}] ${result.token}` : `[file: ${att.file.name}]`;
+          })
+        );
+        const tokens = results.map((r) => r.status === 'fulfilled' ? r.value : null).filter(Boolean);
+        if (tokens.length > 0) {
+          desc = (desc ? desc + '\n\n' : '') + 'Attachments:\n' + tokens.join('\n');
+        }
+      }
+      await onSubmit({ title: title.trim(), description: desc, priority, labels });
+      // Cleanup
+      attachments.forEach((att) => { if (att.previewUrl) URL.revokeObjectURL(att.previewUrl); });
+      setTitle('');
+      setDescription('');
+      setPriority('medium');
+      setLabels([]);
+      setAttachments([]);
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const addLabel = () => {
@@ -204,11 +295,28 @@ function CreateIssueForm({ onSubmit, onCancel }) {
       <textarea
         value={description}
         onChange={(e) => setDescription(e.target.value)}
-        placeholder="Add description..."
+        onPaste={handlePaste}
+        placeholder="Add description... (paste images here)"
         rows={3}
         className="w-full text-sm bg-transparent outline-none resize-none mb-3"
         style={{ color: colors.textSecondary }}
       />
+
+      {/* Attachment previews */}
+      {attachments.length > 0 && (
+        <div className="flex gap-2 mb-3 overflow-x-auto pb-1">
+          {attachments.map((att, i) => (
+            <FilePreview
+              key={i}
+              file={att.file}
+              previewUrl={att.previewUrl}
+              isImage={att.isImage}
+              onRemove={() => removeAttachment(i)}
+            />
+          ))}
+        </div>
+      )}
+
       <div className="flex items-center gap-2 mb-3 flex-wrap">
         <select
           value={priority}
@@ -220,6 +328,20 @@ function CreateIssueForm({ onSubmit, onCancel }) {
             <option key={k} value={k}>{v.label}</option>
           ))}
         </select>
+
+        {/* File upload button */}
+        <input ref={fileInputRef} type="file" multiple className="hidden" onChange={handleFileSelect} />
+        <button
+          type="button"
+          onClick={() => fileInputRef.current?.click()}
+          className="text-xs px-2 py-1 rounded cursor-pointer flex items-center gap-1"
+          style={{ backgroundColor: colors.surface2, color: colors.textSecondary, border: `1px solid ${colors.border}` }}
+          title="Attach files"
+        >
+          <Paperclip size={10} />
+          Attach
+        </button>
+
         <div className="flex items-center gap-1">
           <input
             value={labelInput}
@@ -258,11 +380,11 @@ function CreateIssueForm({ onSubmit, onCancel }) {
       <div className="flex items-center gap-2">
         <button
           type="submit"
-          disabled={!title.trim()}
+          disabled={!title.trim() || submitting}
           className="text-xs px-3 py-1.5 rounded-md font-medium text-white cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
           style={{ backgroundColor: colors.accent }}
         >
-          Create Issue
+          {submitting ? 'Creating...' : 'Create Issue'}
         </button>
         <button
           type="button"
@@ -272,6 +394,11 @@ function CreateIssueForm({ onSubmit, onCancel }) {
         >
           Cancel
         </button>
+        {attachments.length > 0 && (
+          <span className="text-[10px] font-mono" style={{ color: colors.textSecondary }}>
+            {attachments.length} file{attachments.length > 1 ? 's' : ''} attached
+          </span>
+        )}
       </div>
     </form>
   );
@@ -443,6 +570,7 @@ export default function IssuesBoard({
   onCreateIssue,
   onUpdateIssue,
   onDeleteIssue,
+  onUploadFile,
   autonomousStatus,
   onStartAutonomous,
   onStopAutonomous,
@@ -630,6 +758,7 @@ export default function IssuesBoard({
         <CreateIssueForm
           onSubmit={handleCreate}
           onCancel={() => setShowCreate(false)}
+          onUploadFile={onUploadFile}
         />
       )}
 
