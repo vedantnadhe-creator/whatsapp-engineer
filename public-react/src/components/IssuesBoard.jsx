@@ -257,18 +257,27 @@ function CreateIssueForm({ onSubmit, onCancel, onUploadFile }) {
     if (!title.trim()) return;
     setSubmitting(true);
     try {
-      // Upload attachments and collect tokens
+      // Upload attachments and collect URLs
       let desc = description.trim();
+      const uploadedFiles = [];
       if (attachments.length > 0 && onUploadFile) {
         const results = await Promise.allSettled(
           attachments.map(async (att) => {
             const result = await onUploadFile(att.file);
-            return result?.token ? `[file: ${att.file.name}] ${result.token}` : `[file: ${att.file.name}]`;
+            if (result?.url) {
+              return { name: att.file.name, url: result.url, isImage: att.isImage };
+            }
+            return null;
           })
         );
-        const tokens = results.map((r) => r.status === 'fulfilled' ? r.value : null).filter(Boolean);
-        if (tokens.length > 0) {
-          desc = (desc ? desc + '\n\n' : '') + 'Attachments:\n' + tokens.join('\n');
+        for (const r of results) {
+          if (r.status === 'fulfilled' && r.value) uploadedFiles.push(r.value);
+        }
+        if (uploadedFiles.length > 0) {
+          const lines = uploadedFiles.map((f) =>
+            f.isImage ? `![${f.name}](${f.url})` : `[${f.name}](${f.url})`
+          );
+          desc = (desc ? desc + '\n\n' : '') + lines.join('\n');
         }
       }
       await onSubmit({ title: title.trim(), description: desc, priority, labels });
@@ -412,6 +421,44 @@ function CreateIssueForm({ onSubmit, onCancel, onUploadFile }) {
   );
 }
 
+// Render description with inline images and file links
+function renderDescription(text) {
+  // Split by markdown image/link patterns: ![name](url) or [name](url)
+  const parts = text.split(/(!\[[^\]]*\]\([^)]+\)|\[[^\]]*\]\([^)]+\))/g);
+  return parts.map((part, i) => {
+    const imgMatch = part.match(/^!\[([^\]]*)\]\(([^)]+)\)$/);
+    if (imgMatch) {
+      return (
+        <img
+          key={i}
+          src={imgMatch[2]}
+          alt={imgMatch[1]}
+          className="max-w-full rounded-lg my-2"
+          style={{ maxHeight: 300, border: `1px solid ${colors.border}` }}
+        />
+      );
+    }
+    const linkMatch = part.match(/^\[([^\]]*)\]\(([^)]+)\)$/);
+    if (linkMatch) {
+      return (
+        <a
+          key={i}
+          href={linkMatch[2]}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-xs font-mono px-2 py-1 rounded inline-flex items-center gap-1 my-1"
+          style={{ backgroundColor: colors.surface2, color: colors.accent, border: `1px solid ${colors.border}` }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <Paperclip size={10} />
+          {linkMatch[1]}
+        </a>
+      );
+    }
+    return <span key={i}>{part}</span>;
+  });
+}
+
 function IssueDetail({ issue, onBack, onUpdate, onDelete }) {
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(issue.title);
@@ -490,13 +537,13 @@ function IssueDetail({ issue, onBack, onUpdate, onDelete }) {
             >
               {issue.title}
             </h1>
-            <p
+            <div
               className="text-sm whitespace-pre-wrap cursor-pointer"
               style={{ color: issue.description ? colors.text : colors.textSecondary }}
               onClick={() => setEditing(true)}
             >
-              {issue.description || 'Click to add a description...'}
-            </p>
+              {issue.description ? renderDescription(issue.description) : 'Click to add a description...'}
+            </div>
           </div>
         )}
 
@@ -634,9 +681,9 @@ export default function IssuesBoard({
 
   return (
     <div className="flex flex-col h-full" style={{ backgroundColor: colors.bg }}>
-      {/* Header */}
+      {/* Header — wraps to two rows on mobile */}
       <div
-        className="h-14 flex items-center gap-3 px-4 flex-shrink-0"
+        className="flex flex-wrap items-center gap-2 px-4 py-2 flex-shrink-0"
         style={{ borderBottom: `1px solid ${colors.border}` }}
       >
         {onBack && (
@@ -653,18 +700,18 @@ export default function IssuesBoard({
         >
           {issues.length}
         </span>
-        <div className="flex-1" />
+        <div className="flex-1 min-w-[20px]" />
 
-        {/* View toggle */}
+        {/* View toggle — always visible */}
         <div
-          className="flex rounded-md overflow-hidden"
+          className="flex rounded-md overflow-hidden flex-shrink-0"
           style={{ border: `1px solid ${colors.border}` }}
         >
           {['list', 'board'].map((mode) => (
             <button
               key={mode}
               onClick={() => setViewMode(mode)}
-              className="text-[10px] font-mono uppercase px-2.5 py-1 cursor-pointer transition-colors"
+              className="text-[11px] font-mono uppercase px-3 py-1.5 cursor-pointer transition-colors"
               style={{
                 backgroundColor: viewMode === mode ? colors.surface2 : 'transparent',
                 color: viewMode === mode ? colors.text : colors.textSecondary,
@@ -679,31 +726,34 @@ export default function IssuesBoard({
         {isAutoRunning ? (
           <button
             onClick={onStopAutonomous}
-            className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md font-medium cursor-pointer text-white"
+            className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md font-medium cursor-pointer text-white flex-shrink-0"
             style={{ backgroundColor: '#ef4444' }}
           >
             <Square size={12} fill="white" />
-            Stop Run
+            <span className="hidden sm:inline">Stop Run</span>
+            <span className="sm:hidden">Stop</span>
           </button>
         ) : (
           <button
             onClick={onStartAutonomous}
             disabled={grouped.todo.length === 0}
-            className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md font-medium cursor-pointer text-white disabled:opacity-40 disabled:cursor-not-allowed"
+            className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md font-medium cursor-pointer text-white disabled:opacity-40 disabled:cursor-not-allowed flex-shrink-0"
             style={{ backgroundColor: '#22c55e' }}
           >
             <Zap size={12} />
-            Run Autonomous
+            <span className="hidden sm:inline">Run Autonomous</span>
+            <span className="sm:hidden">Run</span>
           </button>
         )}
 
         <button
           onClick={() => setShowCreate(!showCreate)}
-          className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md font-medium cursor-pointer text-white"
+          className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md font-medium cursor-pointer text-white flex-shrink-0"
           style={{ backgroundColor: colors.accent }}
         >
           <Plus size={12} />
-          New Issue
+          <span className="hidden sm:inline">New Issue</span>
+          <span className="sm:hidden">New</span>
         </button>
       </div>
 

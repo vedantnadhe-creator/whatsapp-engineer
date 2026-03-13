@@ -14,7 +14,8 @@ async function apiFetch(url, opts = {}) {
   const fullUrl = API_BASE + url;
 
   // For mutations, deduplicate — if identical request is in-flight, return its promise
-  if (method !== 'GET') {
+  // Skip dedup for file uploads (each upload is unique)
+  if (method !== 'GET' && !url.includes('/upload')) {
     const key = `${method}:${fullUrl}`;
     if (inflightMutations.has(key)) return inflightMutations.get(key);
     const promise = _doFetch(fullUrl, opts).finally(() => inflightMutations.delete(key));

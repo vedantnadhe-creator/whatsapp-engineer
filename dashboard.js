@@ -5,7 +5,6 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
 import config from './config.js';
-import SessionStore from './session_store.js';
 // orchestrator import removed — Claude prompt is now file-based (CLAUDE.md)
 import {
     signJwt, requireAuth, optionalAuth, requireAdmin,
@@ -25,7 +24,12 @@ function storePendingImage(filePath) {
 }
 export { pendingImages };
 
-export function startDashboard(store, messageHandler, port = 18790, wa = null, executionEngine = null, orchestrator = null) {
+export function startDashboard(store, messageHandler, port = 18790, wa = null, executionEngine = null, orchestrator = null, hashPasswordFn = null) {
+    // hashPassword function — passed in from index.js so we don't import store-specific module
+    const hashPassword = hashPasswordFn || ((plain) => {
+        const salt = 'wa-engineer-salt-2025';
+        return require('crypto').createHash('sha256').update(salt + plain).digest('hex');
+    });
     const app = express();
     app.use(cors({ origin: true, credentials: true }));
     app.use(express.json({ strict: false }));
@@ -178,7 +182,7 @@ export function startDashboard(store, messageHandler, port = 18790, wa = null, e
             if (existing) return res.status(409).json({ error: 'A user with this email already exists' });
 
             const password = generatePassword();
-            const passwordHash = SessionStore.hashPassword(password);
+            const passwordHash = hashPassword(password);
             const user = store.createUser({
                 email: email.toLowerCase().trim(),
                 displayName: displayName || email.split('@')[0],
@@ -211,7 +215,7 @@ export function startDashboard(store, messageHandler, port = 18790, wa = null, e
             const user = store.getUserById(req.params.id);
             if (!user) return res.status(404).json({ error: 'User not found' });
             const password = generatePassword();
-            store.updateUserPassword(user.id, SessionStore.hashPassword(password));
+            store.updateUserPassword(user.id, hashPassword(password));
             if (config.SMTP_USER && user.email) {
                 await sendWelcomeEmail(user.email, user.display_name, password)
                     .catch(e => console.warn('[Auth] Reset email failed:', e.message));
@@ -354,6 +358,12 @@ export function startDashboard(store, messageHandler, port = 18790, wa = null, e
 
     // ── File Upload ─────────────────────────────────────────────
 
+    const uploadsDir = path.join(__dirname, 'uploads');
+    if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+
+    // Serve uploaded files
+    app.use('/api/uploads', express.static(uploadsDir));
+
     const uploadHandler = express.raw({ type: '*/*', limit: '50mb' });
     app.post('/api/upload-file', uploadHandler, (req, res) => {
         try {
@@ -362,9 +372,13 @@ export function startDashboard(store, messageHandler, port = 18790, wa = null, e
             try { if (req.headers['x-file-name']) origName = decodeURIComponent(req.headers['x-file-name']); } catch (_) { }
             const safeName = origName.replace(/[^a-zA-Z0-9.\u0080-\uFFFF_-]/g, '_');
             const ext = path.extname(safeName) || '.' + (mimeType.split('/')[1]?.split(';')[0] || 'bin');
-            const filePath = `/tmp/dash-file-${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`;
+            const fileName = `${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`;
+            const filePath = path.join(uploadsDir, fileName);
             fs.writeFileSync(filePath, req.body);
-            res.json({ success: true, token: storePendingImage(filePath) });
+            // Also store in pending map for Claude session use
+            const token = storePendingImage(filePath);
+            const url = `/api/uploads/${fileName}`;
+            res.json({ success: true, token, url, fileName, mimeType });
         } catch (err) { res.status(500).json({ error: err.message }); }
     });
     app.post('/api/upload-image', uploadHandler, (req, res) => res.redirect(307, '/api/upload-file'));

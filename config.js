@@ -28,10 +28,18 @@ const config = {
     GITHUB_KB_URL: process.env.GITHUB_KB_URL || '',
     KB_DIR: process.env.KB_DIR || './kb',
 
-    // Paths
+    // Database backend: 'sqlite' (default) or 'supabase'
+    DB_BACKEND: process.env.DB_BACKEND || 'sqlite',
+
+    // Paths (SQLite mode)
     AUTH_DIR: process.env.AUTH_DIR || './auth_info',
     DB_PATH: process.env.DB_PATH || './sessions.db',
     LOG_DIR: process.env.LOG_DIR || './logs',
+
+    // Supabase (when DB_BACKEND=supabase)
+    SUPABASE_URL: process.env.SUPABASE_URL || '',
+    SUPABASE_SERVICE_KEY: process.env.SUPABASE_SERVICE_KEY || '',
+    SUPABASE_ANON_KEY: process.env.SUPABASE_ANON_KEY || '',
 
     // ── Auth (JWT + Email/Nodemailer) ─────────────────────────
     JWT_SECRET: process.env.JWT_SECRET || 'change-me-in-production-please',

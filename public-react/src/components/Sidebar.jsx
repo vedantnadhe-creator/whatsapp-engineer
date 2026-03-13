@@ -423,11 +423,15 @@ export default function Sidebar(props) {
             onClick={() => setMobileOpen(false)}
           />
           {/* Sidebar */}
-          <div className="relative h-full" onClick={(e) => e.stopPropagation()}>
+          <div className="relative h-full w-72" onClick={(e) => e.stopPropagation()}>
             <SidebarContent
               {...props}
               onSelectSession={(session) => {
                 props.onSelectSession(session);
+                setMobileOpen(false);
+              }}
+              onViewChange={(v) => {
+                props.onViewChange?.(v);
                 setMobileOpen(false);
               }}
             />

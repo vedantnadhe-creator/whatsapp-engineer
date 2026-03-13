@@ -10,33 +10,36 @@ import './polyfill.js';
 import WhatsAppBridge from './whatsapp.js';
 import Orchestrator from './orchestrator.js';
 import ClaudeManager from './claude_manager.js';
-import SessionStore from './session_store.js';
 import config from './config.js';
 import CronManager from './cron_manager.js';
 import { startDashboard } from './dashboard.js';
+import { createStore } from './store_factory.js';
 
 // ── Initialize components ─────────────────────────────────────
 
-const store = new SessionStore();
-const orphans = store.cleanOrphanedSessions();
+const store = await createStore();
+const orphans = await store.cleanOrphanedSessions();
 if (orphans > 0) {
     console.log(`[Main] Cleaned up ${orphans} orphaned running sessions on startup.`);
 }
 
 // Seed allowed phones from env config into DB (non-destructive; won't delete existing entries)
 if (config.ALLOWED_PHONES.length > 0) {
-    store.seedAllowedPhones(config.ALLOWED_PHONES);
+    await store.seedAllowedPhones(config.ALLOWED_PHONES);
     console.log(`[Main] Seeded ${config.ALLOWED_PHONES.length} phone(s) from ALLOWED_PHONES env.`);
 }
 
+// hashPassword is static on both stores
+const hashPassword = (await import(config.DB_BACKEND === 'supabase' ? './supabase_store.js' : './session_store.js')).default.hashPassword;
+
 // ── First-boot admin seeding ────────────────────────────────
 if (config.ADMIN_EMAIL) {
-    const existingAdmins = store.getAdmins();
+    const existingAdmins = await store.getAdmins();
     if (existingAdmins.length === 0) {
         const { generatePassword, sendWelcomeEmail } = await import('./auth.js');
         const password = generatePassword();
-        const passwordHash = SessionStore.hashPassword(password);
-        store.createUser({
+        const passwordHash = hashPassword(password);
+        await store.createUser({
             email: config.ADMIN_EMAIL.toLowerCase().trim(),
             displayName: config.ADMIN_NAME || 'Admin',
             role: 'admin',
@@ -198,25 +201,38 @@ export async function handleIncomingMessage({ isWeb: explicitIsWeb, phone, text,
 
         const activeSessions = store.getActiveSessions(threadKey);
         const currentThread = store.getCurrentThread(threadKey);
-        const intent = await orchestrator.classify(threadKey, text, activeSessions, currentThread);
 
-        // Update cost for Gemini Orchestrator usage (~$0.002 per message overhead)
-        if (currentThread) {
-            store.incrementCost(currentThread.id, 0.002);
-        } else if (intent.session_ref) {
-            // If the user is referring to a session that isn't the current thread
-            const session = store.getSession(intent.session_ref);
-            if (session) store.incrementCost(session.id, 0.002);
-        }
-
+        let intent;
         let logPrefix = groupJid ? `[Group ${groupJid}]` : `[DM ${phone}]`;
-        console.log(`${logPrefix} Intent: ${intent.action} | thread: ${currentThread?.id || 'none'}`);
 
         if (isWeb) {
-            text = text.replace(/^\[start fresh\]\s*/i, '').replace(/^\[resume WA-[a-z0-9\-]+\]\s*/i, '').replace(/^\[resume\]\s*/i, '').trim();
-            if (intent.task) {
-                intent.task = intent.task.replace(/^\[start fresh\]\s*/i, '').replace(/^\[resume WA-[a-z0-9\-]+\]\s*/i, '').replace(/^\[resume\]\s*/i, '').trim();
+            // Dashboard messages have explicit intent from the route — skip orchestrator
+            const resumeMatch = text.match(/^\[resume (WA-[a-z0-9\-]+)\]\s*/i);
+            const isStartFresh = /^\[start fresh\]/i.test(text);
+            if (resumeMatch) {
+                const sessionId = resumeMatch[1];
+                const cleanText = text.replace(/^\[resume WA-[a-z0-9\-]+\]\s*/i, '').trim();
+                intent = { action: 'RESUME_SESSION', session_ref: sessionId, task: cleanText };
+            } else if (isStartFresh) {
+                const cleanText = text.replace(/^\[start fresh\]\s*/i, '').trim();
+                intent = { action: 'START_SESSION', task: cleanText };
+            } else {
+                // Fallback: if no prefix, treat as new session
+                intent = { action: 'START_SESSION', task: text.trim() };
             }
+            text = intent.task || text;
+            console.log(`${logPrefix} [Web] Intent: ${intent.action} | thread: ${currentThread?.id || 'none'}`);
+        } else {
+            intent = await orchestrator.classify(threadKey, text, activeSessions, currentThread);
+
+            // Update cost for Gemini Orchestrator usage (~$0.002 per message overhead)
+            if (currentThread) {
+                store.incrementCost(currentThread.id, 0.002);
+            } else if (intent.session_ref) {
+                const session = store.getSession(intent.session_ref);
+                if (session) store.incrementCost(session.id, 0.002);
+            }
+            console.log(`${logPrefix} Intent: ${intent.action} | thread: ${currentThread?.id || 'none'}`);
         }
 
         switch (intent.action) {
@@ -461,7 +477,7 @@ if (config.WHATSAPP_ENABLED === false) {
     console.log(`📱 Allowed phones: ${allowedPhones.length > 0 ? allowedPhones.join(', ') : 'none'}`);
     console.log(`🧠 Gemini model: ${config.GEMINI_MODEL}`);
     console.log(`🔧 Claude binary: ${config.CLAUDE_BIN}`);
-    startDashboard(store, handleIncomingMessage, 18790, null, claude, orchestrator);
+    startDashboard(store, handleIncomingMessage, 18790, null, claude, orchestrator, hashPassword);
     console.log('🌐 Dashboard running at http://localhost:18790');
 } else {
     // WhatsApp mode: wait for QR scan
@@ -471,7 +487,7 @@ if (config.WHATSAPP_ENABLED === false) {
         console.log(`📱 Allowed phones: ${allowedPhones.length > 0 ? allowedPhones.join(', ') : 'OPEN (no filter)'}`);
         console.log(`🧠 Gemini model: ${config.GEMINI_MODEL}`);
         console.log(`🔧 Claude binary: ${config.CLAUDE_BIN}`);
-        startDashboard(store, handleIncomingMessage, 18790, wa, claude, orchestrator);
+        startDashboard(store, handleIncomingMessage, 18790, wa, claude, orchestrator, hashPassword);
     });
 
     console.log('Starting OliBot...');
