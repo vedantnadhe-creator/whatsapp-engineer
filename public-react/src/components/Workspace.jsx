@@ -280,12 +280,28 @@ export default function Workspace({
   const audioChunksRef = useRef([]);
   const messagesEndRef = useRef(null);
   const messagesContainerRef = useRef(null);
+  const prevMessageCountRef = useRef(0);
+  const userScrolledUpRef = useRef(false);
 
   const isRunning = session?.status === 'running';
 
-  // Auto-scroll on new messages
+  // Track if user has scrolled up
+  const handleScroll = useCallback(() => {
+    const el = messagesContainerRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    userScrolledUpRef.current = distanceFromBottom > 100;
+  }, []);
+
+  // Auto-scroll only when new messages arrive AND user hasn't scrolled up
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    const newCount = messages?.length || 0;
+    const hadNewMessages = newCount > prevMessageCountRef.current;
+    prevMessageCountRef.current = newCount;
+
+    if (hadNewMessages && !userScrolledUpRef.current) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
   }, [messages]);
 
   // Update selected model when models prop changes
@@ -459,6 +475,7 @@ export default function Workspace({
   const messagesView = (
     <div
       ref={messagesContainerRef}
+      onScroll={handleScroll}
       className="flex-1 overflow-y-auto p-4"
       style={{ backgroundColor: colors.bg }}
     >
