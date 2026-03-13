@@ -505,7 +505,7 @@ export function startDashboard(store, messageHandler, port = 18790, wa = null, e
         } catch (err) { res.status(500).json({ error: err.message }); }
     });
 
-    app.delete('/api/issues/:id', requireAuth, requireAdmin, (req, res) => {
+    app.delete('/api/issues/:id', requireAuth, (req, res) => {
         try { store.deleteIssue(req.params.id); res.json({ success: true }); }
         catch (err) { res.status(500).json({ error: err.message }); }
     });
@@ -524,7 +524,7 @@ export function startDashboard(store, messageHandler, port = 18790, wa = null, e
         res.json(autonomousState);
     });
 
-    app.post('/api/autonomous/start', requireAuth, requireAdmin, async (req, res) => {
+    app.post('/api/autonomous/start', requireAuth, async (req, res) => {
         try {
             if (autonomousState.running) return res.status(400).json({ error: 'Autonomous runner is already active' });
             autonomousState.running = true;
@@ -558,7 +558,7 @@ export function startDashboard(store, messageHandler, port = 18790, wa = null, e
         }
     });
 
-    app.post('/api/autonomous/stop', requireAuth, requireAdmin, (req, res) => {
+    app.post('/api/autonomous/stop', requireAuth, (req, res) => {
         try {
             if (autonomousState.sessionId && executionEngine) {
                 try { executionEngine.stopSession(autonomousState.sessionId); } catch (_) { }
