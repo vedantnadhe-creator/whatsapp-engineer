@@ -31,6 +31,98 @@ class ClaudeManager extends EventEmitter {
         return this.startSession(userPhone, task, workingDir, imagePath, ownerId, model);
     }
 
+    async forkSession(parentSessionId, task, userPhone, ownerId = null, model = null) {
+        const parent = this.store.getSession(parentSessionId);
+        if (!parent) throw new Error(`Session ${parentSessionId} not found`);
+
+        const sessionId = `WA-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+        const dir = parent.working_dir || config.DEFAULT_WORKING_DIR;
+        const sessionModel = model || parent.model || 'opus';
+
+        // Build context summary from parent session's messages
+        const parentMessages = this.store.getMessages(parentSessionId, 50);
+        const contextSummary = this._buildForkContext(parent, parentMessages);
+
+        this.store.createSession(sessionId, userPhone, task, null, dir, ownerId, sessionModel);
+
+        // Build a user-visible summary for the forked session
+        const visibleSummary = this._buildVisibleSummary(parent, parentMessages);
+        this.store.addMessage(sessionId, 'system', visibleSummary);
+        this.store.addMessage(sessionId, 'user', task);
+        this.store.updateSession(sessionId, { status: 'running' });
+
+        // Start a fresh session with parent context + new task
+        const forkPrompt = `${contextSummary}\n\n---\n\nNew task (forked from session ${parentSessionId}):\n${task}`;
+        this._spawnNew(sessionId, forkPrompt, dir, null, sessionModel);
+        return { sessionId, forkedFrom: parentSessionId };
+    }
+
+    _buildVisibleSummary(parentSession, messages) {
+        const lines = [];
+        lines.push(`**Forked from session \`${parentSession.id}\`**`);
+        lines.push(`**Original task:** ${parentSession.task || 'N/A'}`);
+        lines.push(`**Status:** ${parentSession.status || 'unknown'}`);
+        lines.push('');
+
+        // Show conversation highlights — user messages and assistant summary
+        const exchanges = [];
+        for (const msg of messages) {
+            let content = msg.content || '';
+            content = content.replace(/<!--thinking-->[\s\S]*?<!--\/thinking-->\n?\n?/g, '').trim();
+            if (!content) continue;
+
+            if (msg.role === 'user') {
+                const text = content.length > 200 ? content.slice(0, 200) + '...' : content;
+                exchanges.push(`> **You:** ${text}`);
+            } else if (msg.role === 'assistant') {
+                // Take first 2 lines or 300 chars as summary
+                const firstLines = content.split('\n').filter(Boolean).slice(0, 3).join(' ');
+                const text = firstLines.length > 300 ? firstLines.slice(0, 300) + '...' : firstLines;
+                exchanges.push(`> **Claude:** ${text}`);
+            }
+        }
+
+        if (exchanges.length > 0) {
+            lines.push('**Previous conversation:**');
+            // Show last 6 exchanges max for readability
+            const shown = exchanges.slice(-6);
+            if (exchanges.length > 6) lines.push(`> _...${exchanges.length - 6} earlier messages omitted..._`);
+            lines.push(...shown);
+        }
+
+        return lines.join('\n');
+    }
+
+    _buildForkContext(parentSession, messages) {
+        const lines = [];
+        lines.push(`# Context from previous session ${parentSession.id}`);
+        lines.push(`Original task: ${parentSession.task || 'N/A'}`);
+        lines.push(`Status: ${parentSession.status || 'unknown'}`);
+        lines.push('');
+        lines.push('## Conversation summary:');
+        lines.push('');
+
+        for (const msg of messages) {
+            // Strip thinking blocks from assistant messages for cleaner context
+            let content = msg.content || '';
+            content = content.replace(/<!--thinking-->[\s\S]*?<!--\/thinking-->\n?\n?/g, '').trim();
+            if (!content) continue;
+
+            if (msg.role === 'user') {
+                // Truncate long user messages
+                const text = content.length > 500 ? content.slice(0, 500) + '...' : content;
+                lines.push(`**User:** ${text}`);
+            } else if (msg.role === 'assistant') {
+                // Truncate long assistant responses
+                const text = content.length > 1500 ? content.slice(0, 1500) + '...' : content;
+                lines.push(`**Assistant:** ${text}`);
+            }
+            lines.push('');
+        }
+
+        return lines.join('\n');
+    }
+
     async resumeSession(sessionId, followUp, imagePath = null) {
         const session = this.store.getSession(sessionId);
         if (!session) throw new Error(`Session ${sessionId} not found`);
@@ -160,13 +252,32 @@ class ClaudeManager extends EventEmitter {
 
         if (event.type === 'assistant' && event.message) {
             if (entry?.resultEmitted) return;
+            // Collect thinking/tool-use summaries
+            const thinking = this._extractThinking(event.message);
+            if (thinking && entry) {
+                if (!entry.thinkingLines) entry.thinkingLines = [];
+                entry.thinkingLines.push(...thinking);
+            }
             const content = this._extractText(event.message);
             if (content) {
-                this.store.upsertLastAssistantMessage(sessionId, content);
+                // Store with thinking prefix
+                const thinkingBlock = entry?.thinkingLines?.length
+                    ? `<!--thinking-->\n${entry.thinkingLines.join('\n')}\n<!--/thinking-->\n\n`
+                    : '';
+                this.store.upsertLastAssistantMessage(sessionId, thinkingBlock + content);
                 const now = Date.now();
                 if (!this._lastNotify[sessionId] || (now - this._lastNotify[sessionId]) > 10000) {
                     this._lastNotify[sessionId] = now;
-                    this.emit('assistant_message', { sessionId, content });
+                    this.emit('assistant_message', { sessionId, content: thinkingBlock + content });
+                }
+            } else if (thinking && thinking.length > 0) {
+                // No text content yet but we have thinking — still update the message
+                const thinkingBlock = `<!--thinking-->\n${entry.thinkingLines.join('\n')}\n<!--/thinking-->`;
+                this.store.upsertLastAssistantMessage(sessionId, thinkingBlock);
+                const now = Date.now();
+                if (!this._lastNotify[sessionId] || (now - this._lastNotify[sessionId]) > 10000) {
+                    this._lastNotify[sessionId] = now;
+                    this.emit('assistant_message', { sessionId, content: thinkingBlock });
                 }
             }
         }
@@ -182,8 +293,12 @@ class ClaudeManager extends EventEmitter {
             const currentCost = entry?.costUsd || entry?.baseCost || 0;
             const content = this._extractText(event.result || event.message);
             if (content) {
-                this.store.upsertLastAssistantMessage(sessionId, content);
-                this.emit('result', { sessionId, content, costUsd: currentCost });
+                // Prepend accumulated thinking to final result
+                const thinkingBlock = entry?.thinkingLines?.length
+                    ? `<!--thinking-->\n${entry.thinkingLines.join('\n')}\n<!--/thinking-->\n\n`
+                    : '';
+                this.store.upsertLastAssistantMessage(sessionId, thinkingBlock + content);
+                this.emit('result', { sessionId, content: thinkingBlock + content, costUsd: currentCost });
             }
         }
 
@@ -204,6 +319,38 @@ class ClaudeManager extends EventEmitter {
         if (typeof msg.content === 'string') return msg.content.trim() || null;
         if (msg.text) return msg.text.trim() || null;
         return null;
+    }
+
+    _extractThinking(msg) {
+        if (!msg || !Array.isArray(msg.content)) return null;
+        const lines = [];
+        for (const block of msg.content) {
+            if (block.type === 'tool_use') {
+                const name = block.name || 'unknown';
+                // Summarize tool use
+                if (name === 'Read' || name === 'read_file') {
+                    lines.push(`Reading ${block.input?.file_path || block.input?.path || 'file'}...`);
+                } else if (name === 'Write' || name === 'write_file') {
+                    lines.push(`Writing ${block.input?.file_path || block.input?.path || 'file'}...`);
+                } else if (name === 'Edit' || name === 'edit_file') {
+                    lines.push(`Editing ${block.input?.file_path || block.input?.path || 'file'}...`);
+                } else if (name === 'Bash' || name === 'execute_bash') {
+                    const cmd = block.input?.command || '';
+                    lines.push(`Running: ${cmd.length > 80 ? cmd.slice(0, 80) + '...' : cmd}`);
+                } else if (name === 'Grep' || name === 'Glob') {
+                    lines.push(`Searching: ${block.input?.pattern || ''}...`);
+                } else if (name === 'Agent') {
+                    lines.push(`Spawning agent: ${block.input?.description || 'sub-task'}...`);
+                } else {
+                    lines.push(`Using ${name}...`);
+                }
+            } else if (block.type === 'thinking' && block.thinking) {
+                // Claude thinking blocks — take first line as summary
+                const firstLine = block.thinking.split('\n')[0].trim();
+                if (firstLine) lines.push(firstLine.length > 100 ? firstLine.slice(0, 100) + '...' : firstLine);
+            }
+        }
+        return lines.length > 0 ? lines : null;
     }
 }
 

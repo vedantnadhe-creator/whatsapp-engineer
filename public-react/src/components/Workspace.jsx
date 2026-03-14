@@ -12,6 +12,7 @@ import {
   Check,
   X,
   FileText,
+  GitBranch,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -197,25 +198,119 @@ function formatTime(timestamp) {
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
+function parseThinking(content) {
+  if (!content) return { thinking: null, body: content };
+  const match = content.match(/<!--thinking-->\n?([\s\S]*?)\n?<!--\/thinking-->\n?\n?([\s\S]*)/);
+  if (!match) return { thinking: null, body: content };
+  const thinking = match[1].trim();
+  const body = match[2].trim();
+  return { thinking: thinking || null, body: body || null };
+}
+
+function ThinkingBlock({ content }) {
+  const [open, setOpen] = useState(false);
+  if (!content) return null;
+  const lines = content.split('\n').filter(Boolean);
+
+  return (
+    <div
+      className="mb-2 rounded-lg overflow-hidden text-xs"
+      style={{ backgroundColor: 'var(--c-surface-3)', border: `1px solid var(--c-border)` }}
+    >
+      <button
+        onClick={() => setOpen(!open)}
+        className="w-full flex items-center gap-2 px-3 py-2 cursor-pointer"
+        style={{ color: 'var(--c-text-secondary)' }}
+      >
+        <ChevronDown
+          size={12}
+          className="transition-transform"
+          style={{ transform: open ? 'rotate(0deg)' : 'rotate(-90deg)' }}
+        />
+        <span className="font-medium">{open ? 'Hide' : 'Show'} thinking process</span>
+        <span className="font-mono opacity-60 ml-auto">{lines.length} step{lines.length !== 1 ? 's' : ''}</span>
+      </button>
+      {open && (
+        <div
+          className="px-3 pb-2 space-y-1 font-mono"
+          style={{ color: 'var(--c-text-secondary)' }}
+        >
+          {lines.map((line, i) => (
+            <div key={i} className="flex items-start gap-2">
+              <span className="opacity-40 flex-shrink-0 select-none">&gt;</span>
+              <span className="break-all">{line}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SystemMessage({ message }) {
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <div className="flex justify-center mb-4">
+      <div
+        className="max-w-[90%] w-full rounded-lg overflow-hidden text-xs"
+        style={{ backgroundColor: 'var(--c-surface-2)', border: `1px solid var(--c-border)` }}
+      >
+        <button
+          onClick={() => setExpanded(!expanded)}
+          className="w-full flex items-center gap-2 px-4 py-2.5 cursor-pointer"
+          style={{ color: 'var(--c-text-secondary)' }}
+        >
+          <GitBranch size={12} style={{ color: 'var(--c-accent)' }} />
+          <span className="font-medium" style={{ color: 'var(--c-text)' }}>
+            Forked from previous session
+          </span>
+          <ChevronDown
+            size={12}
+            className="ml-auto transition-transform"
+            style={{ transform: expanded ? 'rotate(0deg)' : 'rotate(-90deg)' }}
+          />
+        </button>
+        {expanded && (
+          <div
+            className="px-4 pb-3 text-sm leading-relaxed"
+            style={{ color: 'var(--c-text-secondary)', borderTop: `1px solid var(--c-border)` }}
+          >
+            <div className="pt-3">
+              <MarkdownContent content={message.content} />
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function MessageBubble({ message }) {
+  if (message.role === 'system') return <SystemMessage message={message} />;
+
   const isUser = message.role === 'user';
+  const { thinking, body } = isUser ? { thinking: null, body: message.content } : parseThinking(message.content);
 
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} mb-3`}>
       <div className="max-w-[80%]">
-        <div
-          className={`px-3.5 py-2.5 text-sm leading-relaxed whitespace-pre-wrap break-words ${
-            isUser
-              ? 'rounded-xl rounded-br-sm text-white'
-              : 'rounded-xl rounded-bl-sm'
-          }`}
-          style={{
-            backgroundColor: isUser ? colors.accent : colors.surface2,
-            color: isUser ? '#ffffff' : colors.text,
-          }}
-        >
-          {isUser ? message.content : <MarkdownContent content={message.content} />}
-        </div>
+        {!isUser && thinking && <ThinkingBlock content={thinking} />}
+        {(body || isUser) && (
+          <div
+            className={`px-3.5 py-2.5 text-sm leading-relaxed whitespace-pre-wrap break-words ${
+              isUser
+                ? 'rounded-xl rounded-br-sm text-white'
+                : 'rounded-xl rounded-bl-sm'
+            }`}
+            style={{
+              backgroundColor: isUser ? colors.accent : colors.surface2,
+              color: isUser ? '#ffffff' : colors.text,
+            }}
+          >
+            {isUser ? message.content : <MarkdownContent content={body} />}
+          </div>
+        )}
         {message.timestamp && (
           <div
             className={`text-[10px] font-mono mt-1 ${isUser ? 'text-right' : 'text-left'}`}
@@ -264,6 +359,27 @@ function ModelSelector({ models, selectedModel, onChange, className = '', compac
   );
 }
 
+function TypingIndicator() {
+  return (
+    <div className="flex justify-start mb-3">
+      <div
+        className="px-3.5 py-2.5 rounded-xl rounded-bl-sm flex items-center gap-1"
+        style={{ backgroundColor: 'var(--c-surface-2)' }}
+      >
+        <span className="typing-dot w-1.5 h-1.5 rounded-full" style={{ backgroundColor: 'var(--c-text-secondary)', animation: 'typing 1.4s infinite both', animationDelay: '0s' }} />
+        <span className="typing-dot w-1.5 h-1.5 rounded-full" style={{ backgroundColor: 'var(--c-text-secondary)', animation: 'typing 1.4s infinite both', animationDelay: '0.2s' }} />
+        <span className="typing-dot w-1.5 h-1.5 rounded-full" style={{ backgroundColor: 'var(--c-text-secondary)', animation: 'typing 1.4s infinite both', animationDelay: '0.4s' }} />
+        <style>{`
+          @keyframes typing {
+            0%, 60%, 100% { opacity: 0.3; transform: translateY(0); }
+            30% { opacity: 1; transform: translateY(-4px); }
+          }
+        `}</style>
+      </div>
+    </div>
+  );
+}
+
 export default function Workspace({
   session,
   messages = [],
@@ -272,17 +388,22 @@ export default function Workspace({
   onRequestAccess,
   isNewSession = false,
   onStartSession,
+  onForkSession,
   onUploadFile,
   onTranscribe,
   models = [],
   hasAccess = true,
   busy = false,
+  typing = false,
+  wsConnected = false,
 }) {
   const [inputText, setInputText] = useState('');
   const [selectedModel, setSelectedModel] = useState(
     () => models.find((m) => m.default)?.id || models[0]?.id || ''
   );
   const [accessNote, setAccessNote] = useState('');
+  const [showFork, setShowFork] = useState(false);
+  const [forkText, setForkText] = useState('');
   const [uploading, setUploading] = useState(false);
   const [recording, setRecording] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
@@ -356,7 +477,7 @@ export default function Workspace({
       attachments.map(async (att) => {
         if (att.token) return att.token;
         const result = await onUploadFile(att.file);
-        return result?.token || `[file: ${att.name}]`;
+        return result?.token || null;
       })
     );
     return results.map((r) => r.status === 'fulfilled' ? r.value : null).filter(Boolean);
@@ -365,19 +486,17 @@ export default function Workspace({
   const handleSend = async () => {
     const text = inputText.trim();
     if (!text && attachments.length === 0) return;
-    // Upload any pending attachments and append tokens to the message
-    let finalText = text;
+    // Upload any pending attachments — get tokens for backend to resolve file paths
+    let imageTokens = [];
     if (attachments.length > 0) {
-      const tokens = await uploadAttachments();
-      if (tokens.length > 0) {
-        finalText = (finalText ? finalText + '\n' : '') + tokens.join('\n');
-      }
+      imageTokens = await uploadAttachments();
     }
-    if (!finalText) return;
+    if (!text && imageTokens.length === 0) return;
+    const finalText = text || (imageTokens.length > 0 ? '[image attached]' : '');
     if (isNewSession && onStartSession) {
-      onStartSession(finalText, selectedModel);
+      onStartSession(finalText, selectedModel, imageTokens);
     } else if (onSendMessage) {
-      onSendMessage(finalText, selectedModel);
+      onSendMessage(finalText, selectedModel, imageTokens);
     }
     // Clean up previews
     attachments.forEach((att) => { if (att.previewUrl) URL.revokeObjectURL(att.previewUrl); });
@@ -505,6 +624,20 @@ export default function Workspace({
           </span>
         )}
         <StatusDot status={session.status} />
+        {onForkSession && session.status !== 'running' && (
+          <button
+            onClick={() => setShowFork(true)}
+            className="p-1 rounded cursor-pointer hover:opacity-80 transition-opacity"
+            title="Fork session — start new session with same context"
+          >
+            <GitBranch size={14} style={{ color: colors.textSecondary }} />
+          </button>
+        )}
+        <span
+          className="w-1.5 h-1.5 rounded-full flex-shrink-0"
+          style={{ backgroundColor: wsConnected ? 'var(--c-status-running)' : 'var(--c-text-secondary)' }}
+          title={wsConnected ? 'Live connection' : 'Reconnecting...'}
+        />
       </div>
     </div>
   ) : null;
@@ -552,6 +685,7 @@ export default function Workspace({
       ) : (
         messages.map((msg, i) => <MessageBubble key={i} message={msg} />)
       )}
+      {typing && <TypingIndicator />}
       <div ref={messagesEndRef} />
     </div>
   );
@@ -729,6 +863,69 @@ export default function Workspace({
     </div>
   );
 
+  const forkDialog = showFork && (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center"
+      style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}
+      onClick={() => setShowFork(false)}
+    >
+      <div
+        className="w-full max-w-md mx-4 rounded-xl p-5"
+        style={{ backgroundColor: colors.surface, border: `1px solid ${colors.border}` }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center gap-2 mb-3">
+          <GitBranch size={16} style={{ color: colors.accent }} />
+          <h3 className="text-sm font-semibold" style={{ color: colors.text }}>
+            Fork Session
+          </h3>
+        </div>
+        <p className="text-xs mb-3" style={{ color: colors.textSecondary }}>
+          Create a new session that shares the same Claude context as <span className="font-mono">{session?.id}</span>. The original session stays intact.
+        </p>
+        <textarea
+          value={forkText}
+          onChange={(e) => setForkText(e.target.value)}
+          placeholder="What should the new session work on?"
+          rows={3}
+          className="w-full text-sm bg-transparent outline-none resize-none rounded-lg p-3 mb-3"
+          style={{ color: colors.text, border: `1px solid ${colors.border}`, backgroundColor: colors.surface2 }}
+          autoFocus
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey && forkText.trim()) {
+              e.preventDefault();
+              onForkSession(forkText.trim(), selectedModel);
+              setForkText('');
+              setShowFork(false);
+            }
+          }}
+        />
+        <div className="flex items-center gap-2 justify-end">
+          <button
+            onClick={() => setShowFork(false)}
+            className="text-xs px-3 py-1.5 rounded-md cursor-pointer"
+            style={{ color: colors.textSecondary }}
+          >
+            Cancel
+          </button>
+          <button
+            onClick={() => {
+              if (!forkText.trim()) return;
+              onForkSession(forkText.trim(), selectedModel);
+              setForkText('');
+              setShowFork(false);
+            }}
+            disabled={!forkText.trim() || busy}
+            className="text-xs px-3 py-1.5 rounded-md font-medium text-white cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+            style={{ backgroundColor: colors.accent }}
+          >
+            Fork & Start
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
   return (
     <div
       className="flex flex-col h-full"
@@ -737,6 +934,7 @@ export default function Workspace({
       {header}
       {isNewSession ? newSessionView : messagesView}
       {hasAccess ? inputArea : noAccessFooter}
+      {forkDialog}
     </div>
   );
 }

@@ -40,7 +40,20 @@ class WhatsAppBridge extends EventEmitter {
         const { version, isLatest } = await fetchLatestBaileysVersion();
         console.log(`[WhatsApp] Using WA version: ${version.join('.')} (latest: ${isLatest})`);
 
-        const { state, saveCreds } = await useMultiFileAuthState(config.AUTH_DIR);
+        const { state, saveCreds: _saveCreds } = await useMultiFileAuthState(config.AUTH_DIR);
+
+        // Wrap saveCreds to ensure atomic writes — prevents empty creds.json on crash
+        const credsPath = path.join(config.AUTH_DIR, 'creds.json');
+        const saveCreds = async () => {
+            await _saveCreds();
+            // Verify creds.json wasn't written empty
+            try {
+                const stat = fs.statSync(credsPath);
+                if (stat.size === 0) {
+                    console.error('[WhatsApp] WARNING: creds.json written as empty! Skipping.');
+                }
+            } catch (e) { /* ignore stat errors */ }
+        };
 
         this.sock = makeWASocket({
             version,

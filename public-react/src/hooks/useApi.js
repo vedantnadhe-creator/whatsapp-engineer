@@ -212,24 +212,32 @@ export function useAccessRequests() {
 // Standalone API helpers (not hooks)
 // ---------------------------------------------------------------------------
 
-export async function startSession(text, model) {
+export async function startSession(text, model, imageTokens = []) {
   return apiFetch('/api/sessions/start', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text, model }),
+    body: JSON.stringify({ text, model, imageTokens }),
   });
 }
 
-export async function sendMessage(sessionId, text) {
+export async function sendMessage(sessionId, text, imageTokens = []) {
   return apiFetch(`/api/sessions/${sessionId}/message`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text }),
+    body: JSON.stringify({ text, imageTokens }),
   });
 }
 
 export async function stopSession(sessionId) {
   return apiFetch(`/api/sessions/${sessionId}/stop`, { method: 'POST' });
+}
+
+export async function forkSession(sessionId, text, model) {
+  return apiFetch(`/api/sessions/${sessionId}/fork`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text, model }),
+  });
 }
 
 export async function uploadFile(file) {
@@ -308,11 +316,13 @@ export function useIssues() {
 export function useAutonomous() {
   const { data, loading, error, refresh } = useGet('/api/autonomous/status');
 
-  const start = useCallback(async (model) => {
+  const start = useCallback(async (model, issueIds = null) => {
+    const payload = { model };
+    if (issueIds && issueIds.length > 0) payload.issueIds = issueIds;
     const result = await apiFetch('/api/autonomous/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model }),
+      body: JSON.stringify(payload),
     });
     refresh();
     return result;

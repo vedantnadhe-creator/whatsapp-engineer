@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { AuthProvider, useAuth } from './context/AuthContext'
-import { useSessions, useStats, useSessionMessages, useModels, usePhones, useUsers, useCron, useAccessRequests, useIssues, useAutonomous, useAction, startSession, sendMessage, stopSession, uploadFile, transcribeAudio, requestAccess, getClaudePrompt, saveClaudePrompt } from './hooks/useApi'
+import { useSessions, useStats, useSessionMessages, useModels, usePhones, useUsers, useCron, useAccessRequests, useIssues, useAutonomous, useAction, startSession, sendMessage, stopSession, forkSession, uploadFile, transcribeAudio, requestAccess, getClaudePrompt, saveClaudePrompt } from './hooks/useApi'
+import useWebSocket from './hooks/useWebSocket'
 import Sidebar from './components/Sidebar'
 import Workspace from './components/Workspace'
 import IssuesBoard from './components/IssuesBoard'
@@ -30,6 +31,7 @@ function Dashboard() {
   const { requests, refresh: refreshRequests, resolve } = useAccessRequests()
   const { issues, refresh: refreshIssues, createIssue, updateIssue, deleteIssue } = useIssues()
   const { status: autonomousStatus, refresh: refreshAutonomous, start: startAutonomous, stop: stopAutonomous } = useAutonomous()
+  const { connected: wsConnected, typing: wsTyping, on: wsOn } = useWebSocket()
 
   // Keep activeSession in sync with refreshed sessions list
   useEffect(() => {
@@ -41,14 +43,45 @@ function Dashboard() {
     }
   }, [sessions])
 
-  // Poll for updates
+  // WebSocket event handlers — instant updates
+  useEffect(() => {
+    const unsubs = [
+      // Claude output / session events → refresh messages + sessions
+      wsOn('assistant_message', ({ sessionId }) => {
+        if (activeSession?.id === sessionId) refreshMessages()
+      }),
+      wsOn('result', ({ sessionId }) => {
+        if (activeSession?.id === sessionId) refreshMessages()
+        refreshSessions()
+        refreshStats()
+      }),
+      wsOn('session_end', ({ sessionId }) => {
+        if (activeSession?.id === sessionId) refreshMessages()
+        refreshSessions()
+        refreshStats()
+      }),
+      wsOn('session_error', ({ sessionId }) => {
+        if (activeSession?.id === sessionId) refreshMessages()
+        refreshSessions()
+      }),
+      // Issue events
+      wsOn('issue_created', () => { refreshIssues() }),
+      wsOn('issue_updated', () => { refreshIssues() }),
+      wsOn('issue_deleted', () => { refreshIssues() }),
+      // Autonomous engine
+      wsOn('autonomous_update', () => { refreshAutonomous() }),
+    ]
+    return () => unsubs.forEach(fn => fn())
+  }, [activeSession?.id, wsOn, refreshMessages, refreshSessions, refreshStats, refreshIssues, refreshAutonomous])
+
+  // Fallback polling — slower interval (30s) since WebSocket handles most updates
   useEffect(() => {
     const interval = setInterval(() => {
       refreshStats()
       refreshSessions()
       if (activeSession?.id) refreshMessages()
       if (view === 'issues') { refreshIssues(); refreshAutonomous() }
-    }, 5000)
+    }, 30000)
     return () => clearInterval(interval)
   }, [activeSession?.id, view])
 
@@ -64,8 +97,8 @@ function Dashboard() {
     setSelectedModel('opus')
   }, [])
 
-  const _startSession = useCallback(async (text, model) => {
-    const result = await startSession(text, model)
+  const _startSession = useCallback(async (text, model, imageTokens = []) => {
+    const result = await startSession(text, model, imageTokens)
     if (result.sessionId) {
       const newSession = {
         id: result.sessionId,
@@ -86,12 +119,34 @@ function Dashboard() {
   }, [])
   const [handleStartSession, startingSession] = useAction(_startSession)
 
-  const _sendMessage = useCallback(async (text, model) => {
+  const _sendMessage = useCallback(async (text, model, imageTokens = []) => {
     if (!activeSession?.id) return
-    await sendMessage(activeSession.id, text)
+    await sendMessage(activeSession.id, text, imageTokens)
     setTimeout(() => refreshMessages(), 1000)
   }, [activeSession?.id])
   const [handleSendMessage, sendingMessage] = useAction(_sendMessage)
+
+  const _forkSession = useCallback(async (text, model) => {
+    if (!activeSession?.id) return
+    const result = await forkSession(activeSession.id, text, model)
+    if (result.sessionId) {
+      const newSession = {
+        id: result.sessionId,
+        task: text,
+        model: model || activeSession.model || 'opus',
+        status: 'running',
+        is_mine: true,
+      }
+      setActiveSession(newSession)
+      setIsNewSession(false)
+      setTimeout(() => {
+        refreshSessions()
+        refreshStats()
+        refreshMessages()
+      }, 1500)
+    }
+  }, [activeSession?.id, activeSession?.model])
+  const [handleForkSession, forkingSession] = useAction(_forkSession)
 
   const _stopSession = useCallback(async () => {
     if (!activeSession?.id) return
@@ -159,8 +214,15 @@ function Dashboard() {
             onDeleteIssue={deleteIssue}
             onUploadFile={uploadFile}
             autonomousStatus={autonomousStatus}
-            onStartAutonomous={() => startAutonomous('opus')}
+            onStartAutonomous={(issueIds) => startAutonomous('opus', issueIds)}
             onStopAutonomous={stopAutonomous}
+            onGoToSession={(sessionId) => {
+              const session = sessions.find(s => s.id === sessionId)
+              if (session) {
+                handleSelectSession(session)
+                setView('chat')
+              }
+            }}
           />
         ) : (
           <Workspace
@@ -178,7 +240,10 @@ function Dashboard() {
             onTranscribe={transcribeAudio}
             models={models}
             hasAccess={hasAccess}
-            busy={startingSession || sendingMessage || stoppingSession}
+            busy={startingSession || sendingMessage || stoppingSession || forkingSession}
+            onForkSession={handleForkSession}
+            typing={wsTyping?.sessionId === activeSession?.id}
+            wsConnected={wsConnected}
           />
         )}
       </div>

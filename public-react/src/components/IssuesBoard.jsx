@@ -71,7 +71,7 @@ function PriorityDot({ priority }) {
   );
 }
 
-function IssueRow({ issue, onSelect, onStatusChange }) {
+function IssueRow({ issue, onSelect, onStatusChange, onGoToSession, selected, onToggleSelect }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef(null);
 
@@ -90,6 +90,15 @@ function IssueRow({ issue, onSelect, onStatusChange }) {
       onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
       onClick={() => onSelect(issue)}
     >
+      {onToggleSelect && (
+        <input
+          type="checkbox"
+          checked={!!selected}
+          onChange={(e) => { e.stopPropagation(); onToggleSelect(issue.id); }}
+          onClick={(e) => e.stopPropagation()}
+          className="flex-shrink-0 w-3.5 h-3.5 rounded cursor-pointer accent-[var(--c-accent)]"
+        />
+      )}
       <button
         onClick={(e) => {
           e.stopPropagation();
@@ -134,12 +143,14 @@ function IssueRow({ issue, onSelect, onStatusChange }) {
       )}
 
       {issue.session_id && (
-        <span
-          className="text-[10px] font-mono px-1.5 py-0.5 rounded flex-shrink-0"
+        <button
+          onClick={(e) => { e.stopPropagation(); onGoToSession?.(issue.session_id); }}
+          className="text-[10px] font-mono px-1.5 py-0.5 rounded flex-shrink-0 cursor-pointer hover:opacity-80 transition-opacity"
           style={{ backgroundColor: 'rgba(34,197,94,0.1)', color: '#22c55e' }}
+          title="Go to session"
         >
           {issue.session_id}
-        </span>
+        </button>
       )}
 
       <div className="relative flex-shrink-0" ref={menuRef}>
@@ -459,7 +470,7 @@ function renderDescription(text) {
   });
 }
 
-function IssueDetail({ issue, onBack, onUpdate, onDelete }) {
+function IssueDetail({ issue, onBack, onUpdate, onDelete, onGoToSession }) {
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(issue.title);
   const [description, setDescription] = useState(issue.description || '');
@@ -590,12 +601,14 @@ function IssueDetail({ issue, onBack, onUpdate, onDelete }) {
           {issue.session_id && (
             <div className="flex items-center gap-4">
               <span className="text-xs font-mono w-20" style={{ color: colors.textSecondary }}>Session</span>
-              <span
-                className="text-xs font-mono px-2 py-0.5 rounded"
+              <button
+                onClick={() => onGoToSession?.(issue.session_id)}
+                className="text-xs font-mono px-2 py-0.5 rounded cursor-pointer hover:opacity-80 transition-opacity"
                 style={{ backgroundColor: 'rgba(34,197,94,0.1)', color: '#22c55e' }}
+                title="Go to session"
               >
                 {issue.session_id}
-              </span>
+              </button>
             </div>
           )}
 
@@ -629,6 +642,7 @@ export default function IssuesBoard({
   autonomousStatus,
   onStartAutonomous,
   onStopAutonomous,
+  onGoToSession,
   onBack,
 }) {
   const [showCreate, setShowCreate] = useState(false);
@@ -636,8 +650,19 @@ export default function IssuesBoard({
   const [viewMode, setViewMode] = useState('list'); // 'list' or 'board'
   const [filterStatus, setFilterStatus] = useState('all');
   const [collapsedGroups, setCollapsedGroups] = useState({});
+  const [selectedIds, setSelectedIds] = useState(new Set());
 
   const isAutoRunning = autonomousStatus?.running;
+
+  const toggleSelect = useCallback((id) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const clearSelection = useCallback(() => setSelectedIds(new Set()), []);
 
   const toggleGroup = (status) => {
     setCollapsedGroups((prev) => ({ ...prev, [status]: !prev[status] }));
@@ -674,6 +699,7 @@ export default function IssuesBoard({
           onBack={() => setSelectedIssue(null)}
           onUpdate={(id, updates) => { onUpdateIssue(id, updates); }}
           onDelete={onDeleteIssue}
+          onGoToSession={onGoToSession}
         />
       </div>
     );
@@ -722,6 +748,32 @@ export default function IssuesBoard({
           ))}
         </div>
 
+        {/* Selection actions */}
+        {selectedIds.size > 0 && !isAutoRunning && (
+          <>
+            <span className="text-[10px] font-mono" style={{ color: colors.textSecondary }}>
+              {selectedIds.size} selected
+            </span>
+            <button
+              onClick={() => { onStartAutonomous([...selectedIds]); clearSelection(); }}
+              className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md font-medium cursor-pointer text-white flex-shrink-0"
+              style={{ backgroundColor: '#22c55e' }}
+            >
+              <Play size={12} />
+              <span className="hidden sm:inline">Run Selected</span>
+              <span className="sm:hidden">Run</span>
+            </button>
+            <button
+              onClick={clearSelection}
+              className="text-xs px-2 py-1.5 rounded-md cursor-pointer flex-shrink-0"
+              style={{ color: colors.textSecondary }}
+              title="Clear selection"
+            >
+              <X size={12} />
+            </button>
+          </>
+        )}
+
         {/* Autonomous run button */}
         {isAutoRunning ? (
           <button
@@ -733,15 +785,15 @@ export default function IssuesBoard({
             <span className="hidden sm:inline">Stop Run</span>
             <span className="sm:hidden">Stop</span>
           </button>
-        ) : (
+        ) : selectedIds.size === 0 && (
           <button
-            onClick={onStartAutonomous}
+            onClick={() => onStartAutonomous()}
             disabled={grouped.todo.length === 0}
             className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md font-medium cursor-pointer text-white disabled:opacity-40 disabled:cursor-not-allowed flex-shrink-0"
             style={{ backgroundColor: '#22c55e' }}
           >
             <Zap size={12} />
-            <span className="hidden sm:inline">Run Autonomous</span>
+            <span className="hidden sm:inline">Run All</span>
             <span className="sm:hidden">Run</span>
           </button>
         )}
@@ -848,6 +900,9 @@ export default function IssuesBoard({
                       issue={issue}
                       onSelect={setSelectedIssue}
                       onStatusChange={handleStatusChange}
+                      onGoToSession={onGoToSession}
+                      selected={selectedIds.has(issue.id)}
+                      onToggleSelect={toggleSelect}
                     />
                   ))}
                 </div>
@@ -860,6 +915,9 @@ export default function IssuesBoard({
                 issue={issue}
                 onSelect={setSelectedIssue}
                 onStatusChange={handleStatusChange}
+                onGoToSession={onGoToSession}
+                selected={selectedIds.has(issue.id)}
+                onToggleSelect={toggleSelect}
               />
             ))
           )
@@ -913,12 +971,14 @@ export default function IssuesBoard({
                           {issue.title}
                         </p>
                         {issue.session_id && (
-                          <span
-                            className="text-[9px] font-mono px-1 py-0.5 rounded inline-block"
+                          <button
+                            onClick={(e) => { e.stopPropagation(); onGoToSession?.(issue.session_id); }}
+                            className="text-[9px] font-mono px-1 py-0.5 rounded inline-block cursor-pointer hover:opacity-80 transition-opacity"
                             style={{ backgroundColor: 'rgba(34,197,94,0.1)', color: '#22c55e' }}
+                            title="Go to session"
                           >
                             {issue.session_id}
-                          </span>
+                          </button>
                         )}
                       </div>
                     ))}

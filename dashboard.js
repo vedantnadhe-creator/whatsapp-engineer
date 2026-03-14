@@ -4,6 +4,8 @@ import cookieParser from 'cookie-parser';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
+import http from 'http';
+import { WebSocketServer } from 'ws';
 import config from './config.js';
 // orchestrator import removed — Claude prompt is now file-based (CLAUDE.md)
 import {
@@ -286,6 +288,18 @@ export function startDashboard(store, messageHandler, port = 18790, wa = null, e
         } catch (err) { res.status(500).json({ error: err.message }); }
     });
 
+    app.post('/api/sessions/:id/fork', requireAuth, async (req, res) => {
+        try {
+            if (!executionEngine) return res.status(500).json({ error: 'Execution engine not attached' });
+            const parentId = req.params.id;
+            const { text, model } = req.body;
+            if (!text) return res.status(400).json({ error: 'text is required — describe what the new session should do' });
+            const phone = req.user.phone || req.user.email || req.user.id;
+            const result = await executionEngine.forkSession(parentId, text, String(phone), req.user.id, model);
+            res.json({ success: true, sessionId: result.sessionId, forkedFrom: result.forkedFrom });
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
     // ── Cron Jobs ─────────────────────────────────────────────
 
     app.get('/api/cron', requireAuth, requireAdmin, (req, res) => {
@@ -501,6 +515,7 @@ export function startDashboard(store, messageHandler, port = 18790, wa = null, e
             const { title, description, priority, labels } = req.body;
             if (!title) return res.status(400).json({ error: 'title is required' });
             const issue = store.createIssue({ title, description, priority, labels, createdBy: req.user.id });
+            wsBroadcast('issue_created', { issue });
             res.json(issue);
         } catch (err) { res.status(500).json({ error: err.message }); }
     });
@@ -515,12 +530,17 @@ export function startDashboard(store, messageHandler, port = 18790, wa = null, e
             if (updates.status === 'completed') updates.completed_at = new Date().toISOString();
             const issue = store.updateIssue(req.params.id, updates);
             if (!issue) return res.status(404).json({ error: 'Issue not found' });
+            wsBroadcast('issue_updated', { issue });
             res.json(issue);
         } catch (err) { res.status(500).json({ error: err.message }); }
     });
 
     app.delete('/api/issues/:id', requireAuth, (req, res) => {
-        try { store.deleteIssue(req.params.id); res.json({ success: true }); }
+        try {
+            store.deleteIssue(req.params.id);
+            wsBroadcast('issue_deleted', { issueId: req.params.id });
+            res.json({ success: true });
+        }
         catch (err) { res.status(500).json({ error: err.message }); }
     });
 
@@ -543,11 +563,20 @@ export function startDashboard(store, messageHandler, port = 18790, wa = null, e
             if (autonomousState.running) return res.status(400).json({ error: 'Autonomous runner is already active' });
             autonomousState.running = true;
 
-            // Pick first todo issue
-            const issue = store.getNextTodoIssue();
+            // Support selective issue running — if issueIds provided, queue only those
+            const issueIds = Array.isArray(req.body.issueIds) ? req.body.issueIds : null;
+            if (issueIds && issueIds.length > 0) {
+                autonomousState.queue = issueIds;
+            }
+
+            // Pick first issue — from queue if set, otherwise next todo
+            const issue = issueIds && issueIds.length > 0
+                ? store.getIssue(issueIds[0])
+                : store.getNextTodoIssue();
             if (!issue) {
                 autonomousState.running = false;
-                return res.json({ success: false, message: 'No todo issues to run' });
+                autonomousState.queue = null;
+                return res.json({ success: false, message: 'No issues to run' });
             }
 
             // Mark as in_progress
@@ -564,6 +593,7 @@ export function startDashboard(store, messageHandler, port = 18790, wa = null, e
                 autonomousState.sessionId = result.sessionId;
                 store.updateIssue(issue.id, { session_id: result.sessionId });
             }
+            wsBroadcast('autonomous_update', { ...autonomousState });
             res.json({ success: true, issueId: issue.id, sessionId: result?.sessionId });
         } catch (err) {
             autonomousState.running = false;
@@ -587,6 +617,8 @@ export function startDashboard(store, messageHandler, port = 18790, wa = null, e
             autonomousState.running = false;
             autonomousState.currentIssueId = null;
             autonomousState.sessionId = null;
+            autonomousState.queue = null;
+            wsBroadcast('autonomous_update', { ...autonomousState });
             res.json({ success: true });
         } catch (err) { res.status(500).json({ error: err.message }); }
     });
@@ -605,13 +637,24 @@ export function startDashboard(store, messageHandler, port = 18790, wa = null, e
                 });
             }
 
-            // Pick next issue
-            const next = store.getNextTodoIssue();
+            // Pick next issue — from queue if set, otherwise next todo
+            let next = null;
+            if (autonomousState.queue && autonomousState.queue.length > 0) {
+                // Remove completed issue from queue, pick next
+                autonomousState.queue = autonomousState.queue.filter(id => id !== autonomousState.currentIssueId);
+                if (autonomousState.queue.length > 0) {
+                    next = store.getIssue(autonomousState.queue[0]);
+                }
+            } else {
+                next = store.getNextTodoIssue();
+            }
             if (!next) {
-                console.log('[Autonomous] No more todo issues. Stopping runner.');
+                console.log('[Autonomous] No more issues to run. Stopping runner.');
                 autonomousState.running = false;
                 autonomousState.currentIssueId = null;
                 autonomousState.sessionId = null;
+                autonomousState.queue = null;
+                wsBroadcast('autonomous_update', { ...autonomousState });
                 return;
             }
 
@@ -637,5 +680,61 @@ export function startDashboard(store, messageHandler, port = 18790, wa = null, e
         });
     }
 
-    app.listen(port, () => console.log(`[Dashboard] 🌐 Web Dashboard running on port ${port}`));
+    // ── WebSocket Server ────────────────────────────────────────
+    const server = http.createServer(app);
+    const wss = new WebSocketServer({ server, path: '/ws' });
+
+    // Track connected clients
+    const wsClients = new Set();
+
+    wss.on('connection', (ws) => {
+        wsClients.add(ws);
+        ws.isAlive = true;
+        ws.on('pong', () => { ws.isAlive = true; });
+        ws.on('close', () => wsClients.delete(ws));
+        ws.on('error', () => wsClients.delete(ws));
+        // Send initial connection ack
+        ws.send(JSON.stringify({ type: 'connected', timestamp: Date.now() }));
+    });
+
+    // Heartbeat — drop dead connections every 30s
+    setInterval(() => {
+        for (const ws of wsClients) {
+            if (!ws.isAlive) { ws.terminate(); wsClients.delete(ws); continue; }
+            ws.isAlive = false;
+            ws.ping();
+        }
+    }, 30000);
+
+    // Broadcast helper
+    function wsBroadcast(type, payload) {
+        const msg = JSON.stringify({ type, ...payload, timestamp: Date.now() });
+        for (const ws of wsClients) {
+            if (ws.readyState === 1) ws.send(msg);
+        }
+    }
+
+    // Wire up Claude execution engine events → WebSocket
+    if (executionEngine) {
+        executionEngine.on('assistant_message', ({ sessionId, content }) => {
+            wsBroadcast('assistant_message', { sessionId, content });
+        });
+
+        executionEngine.on('result', ({ sessionId, content, costUsd }) => {
+            wsBroadcast('result', { sessionId, content, costUsd });
+        });
+
+        executionEngine.on('session_end', ({ sessionId, code, status, costUsd }) => {
+            wsBroadcast('session_end', { sessionId, code, status, costUsd });
+        });
+
+        executionEngine.on('session_error', ({ sessionId, error }) => {
+            wsBroadcast('session_error', { sessionId, error });
+        });
+    }
+
+    // Expose broadcast for external use (issues, autonomous, etc.)
+    app._wsBroadcast = wsBroadcast;
+
+    server.listen(port, () => console.log(`[Dashboard] 🌐 Web Dashboard running on port ${port} (WebSocket: /ws)`));
 }
