@@ -230,8 +230,26 @@ class WhatsAppBridge extends EventEmitter {
         if (!jid.includes('@')) jid = this.phoneToJid.get(phone) || `${phone}@s.whatsapp.net`;
         const chunks = this._chunkText(text, config.MAX_MESSAGE_LENGTH);
         for (let i = 0; i < chunks.length; i++) {
-            await this.sock.sendMessage(jid, { text: chunks[i] });
+            await this._sendWithRetry(jid, { text: chunks[i] });
             if (i < chunks.length - 1) await new Promise(r => setTimeout(r, 1500));
+        }
+    }
+
+    async _sendWithRetry(jid, content, retries = 2) {
+        for (let attempt = 0; attempt <= retries; attempt++) {
+            try {
+                await this.sock.sendMessage(jid, content);
+                return;
+            } catch (err) {
+                const isTimeout = err?.output?.statusCode === 408 || err?.message?.includes('Timed Out');
+                if (isTimeout && attempt < retries) {
+                    console.warn(`[WhatsApp] Send timed out (attempt ${attempt + 1}/${retries + 1}), retrying in ${2 + attempt}s...`);
+                    await new Promise(r => setTimeout(r, (2 + attempt) * 1000));
+                } else {
+                    console.error(`[WhatsApp] Send failed after ${attempt + 1} attempts:`, err.message);
+                    throw err;
+                }
+            }
         }
     }
 

@@ -15,6 +15,21 @@ import CronManager from './cron_manager.js';
 import { startDashboard } from './dashboard.js';
 import { createStore } from './store_factory.js';
 
+// ── Prevent crash on unhandled rejections (e.g. Baileys timeouts) ──
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('[Process] Unhandled rejection:', reason?.message || reason);
+});
+process.on('uncaughtException', (err) => {
+    console.error('[Process] Uncaught exception:', err.message);
+    // Only exit on truly fatal errors, not network timeouts
+    if (err.message?.includes('Timed Out') || err.message?.includes('ETIMEDOUT') || err.message?.includes('ECONNRESET')) {
+        console.warn('[Process] Network error — continuing...');
+    } else {
+        console.error('[Process] Fatal error — exiting.');
+        process.exit(1);
+    }
+});
+
 // ── Initialize components ─────────────────────────────────────
 
 const store = await createStore();
