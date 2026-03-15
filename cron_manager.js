@@ -1,35 +1,44 @@
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import cron from 'node-cron';
 import config from './config.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 class CronManager {
     constructor(claude, wa) {
         this.claude = claude;
         this.wa = wa;
         this.cronJobs = new Map();
-        this.cronFilePath = path.join(config.DEFAULT_WORKING_DIR || process.cwd(), 'cron_jobs.json');
+        // Store cron_jobs.json in the project directory, not the working dir
+        this.cronFilePath = path.join(__dirname, 'cron_jobs.json');
 
         // Ensure file exists
         if (!fs.existsSync(this.cronFilePath)) {
             try {
                 fs.writeFileSync(this.cronFilePath, JSON.stringify([], null, 2));
             } catch (err) {
-                console.error('[CronManager] Failed to create cron_jobs.json:', err);
+                console.error('[CronManager] Failed to create cron_jobs.json:', err.message);
             }
         }
 
         this.loadCrons();
 
-        // Watch for changes to the JSON so Claude can edit it and we naturally pick it up
-        fs.watch(this.cronFilePath, (eventType) => {
-            if (eventType === 'change') {
-                console.log('[CronManager] cron_jobs.json changed, reloading schedulers...');
-                // debounce the reload safely
-                clearTimeout(this.reloadTimer);
-                this.reloadTimer = setTimeout(() => this.loadCrons(), 1000);
+        // Watch for changes — wrapped in try/catch so it never crashes the process
+        try {
+            if (fs.existsSync(this.cronFilePath)) {
+                fs.watch(this.cronFilePath, (eventType) => {
+                    if (eventType === 'change') {
+                        console.log('[CronManager] cron_jobs.json changed, reloading schedulers...');
+                        clearTimeout(this.reloadTimer);
+                        this.reloadTimer = setTimeout(() => this.loadCrons(), 1000);
+                    }
+                });
             }
-        });
+        } catch (err) {
+            console.warn('[CronManager] Could not watch cron_jobs.json:', err.message);
+        }
     }
 
     loadCrons() {
@@ -49,7 +58,8 @@ class CronManager {
             }
             this.cronJobs.clear();
 
-            // Start reading new crons
+            const logDir = __dirname;
+
             jobs.forEach(job => {
                 if (!job.id || !job.schedule || !job.task) {
                     console.warn(`[CronManager] Skipping invalid job configuration: ${JSON.stringify(job)}`);
@@ -67,19 +77,19 @@ class CronManager {
 
                     console.log(`[CronManager] Executing cron job: ${job.id}`);
                     try {
-                        fs.appendFileSync(path.join(config.DEFAULT_WORKING_DIR || process.cwd(), 'cron_logs.jsonl'), logLine + '\n');
+                        fs.appendFileSync(path.join(logDir, 'cron_logs.jsonl'), logLine + '\n');
                     } catch (e) { }
                     try {
-                        const targetPhone = job.phone || 'system_cron'; // if a real phone is provided, user receives notifications
+                        const targetPhone = job.phone || 'system_cron';
                         const { sessionId } = await this.claude.startSession(targetPhone, job.task, null);
                         try {
-                            fs.appendFileSync(path.join(config.DEFAULT_WORKING_DIR || process.cwd(), 'cron_logs.jsonl'),
+                            fs.appendFileSync(path.join(logDir, 'cron_logs.jsonl'),
                                 JSON.stringify({ time: new Date().toISOString(), jobId: job.id, session: sessionId, status: 'spawned' }) + '\n'
                             );
                         } catch (e) { }
                     } catch (err) {
                         try {
-                            fs.appendFileSync(path.join(config.DEFAULT_WORKING_DIR || process.cwd(), 'cron_logs.jsonl'),
+                            fs.appendFileSync(path.join(logDir, 'cron_logs.jsonl'),
                                 JSON.stringify({ time: new Date().toISOString(), jobId: job.id, error: err.message, status: 'failed' }) + '\n'
                             );
                         } catch (e) { }
