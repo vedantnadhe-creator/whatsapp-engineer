@@ -121,6 +121,7 @@ function AdminDropdown({ onShowAdmin, onClose, pendingRequestsCount = 0 }) {
     { key: 'prompts', label: 'Prompts', icon: FileText },
     { key: 'cron', label: 'Cron', icon: Clock },
     { key: 'requests', label: 'Requests', icon: MessageSquare, badge: pendingRequestsCount },
+    { key: 'settings', label: 'Settings', icon: Settings },
   ];
 
   return (
@@ -172,6 +173,7 @@ function SidebarContent({
   view = 'chat',
   onViewChange,
   issueCount = 0,
+  showAllSessions = false,
 }) {
   const [adminOpen, setAdminOpen] = useState(false);
   const [sessionFilter, setSessionFilter] = useState('all'); // 'all' or 'mine'
@@ -264,8 +266,8 @@ function SidebarContent({
         </button>
       </div>
 
-      {/* Session filter: All / Mine */}
-      {view === 'chat' && (
+      {/* Session filter: All / Mine — only shown when all sessions are visible */}
+      {view === 'chat' && showAllSessions && (
         <div
           className="flex px-3 py-1.5 gap-1"
           style={{ borderBottom: '1px solid var(--c-border)' }}

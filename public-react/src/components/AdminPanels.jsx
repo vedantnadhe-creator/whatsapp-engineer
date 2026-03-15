@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { X, UserPlus, Trash2, KeyRound, Phone, Save, Clock, Check, XCircle } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import { X, UserPlus, Trash2, KeyRound, Phone, Save, Clock, Check, XCircle, ToggleLeft, ToggleRight } from 'lucide-react'
 
 export function AdminModal({ isOpen, onClose, title, children }) {
   if (!isOpen) return null
@@ -143,6 +143,34 @@ export function CronPanel({ jobs = [], onSave, onDelete }) {
             <button onClick={() => onDelete(j.id)} className="text-text-muted hover:text-danger text-xs flex items-center gap-1 transition-colors cursor-pointer"><Trash2 size={12} /></button>
           </div>
         ))}
+      </div>
+    </div>
+  )
+}
+
+export function SettingsPanel({ settings = {}, onSave }) {
+  const [showAll, setShowAll] = useState(settings.show_all_sessions === 'true')
+
+  useEffect(() => {
+    setShowAll(settings.show_all_sessions === 'true')
+  }, [settings.show_all_sessions])
+
+  const handleToggle = async () => {
+    const newVal = !showAll
+    setShowAll(newVal)
+    await onSave('show_all_sessions', String(newVal))
+  }
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between py-3 px-1">
+        <div>
+          <p className="text-sm font-medium text-text-primary">Show everyone's sessions</p>
+          <p className="text-xs text-text-muted mt-0.5">When enabled, all users can see sessions from every team member. When disabled, users only see their own sessions.</p>
+        </div>
+        <button onClick={handleToggle} className="shrink-0 ml-4 cursor-pointer transition-colors" style={{ color: showAll ? 'var(--c-accent)' : 'var(--c-text-muted)' }}>
+          {showAll ? <ToggleRight size={28} /> : <ToggleLeft size={28} />}
+        </button>
       </div>
     </div>
   )

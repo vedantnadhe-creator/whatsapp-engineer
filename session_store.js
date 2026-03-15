@@ -99,6 +99,11 @@ class SessionStore {
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 updated_by TEXT
             );
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
         `);
 
         const safeMigrations = [
@@ -187,6 +192,24 @@ class SessionStore {
              LEFT JOIN session_collaborators sc ON sc.session_id = s.id AND sc.user_id = ?
              ORDER BY s.updated_at DESC LIMIT ? OFFSET ?`
         ).all(userId, userId, limit, offset);
+    }
+
+    getOwnSessions(userId, limit = 20, offset = 0) {
+        return this.db.prepare(
+            `SELECT s.*,
+                    u.display_name as owner_name,
+                    u.email as owner_email,
+                    1 as is_mine,
+                    1 as has_access
+             FROM sessions s
+             LEFT JOIN users u ON s.owner_id = u.id
+             WHERE s.owner_id = ?
+             ORDER BY s.updated_at DESC LIMIT ? OFFSET ?`
+        ).all(userId, limit, offset);
+    }
+
+    countOwnSessions(userId) {
+        return this.db.prepare('SELECT COUNT(*) as count FROM sessions WHERE owner_id = ?').get(userId).count;
     }
 
     getAllSessions(limit = 20, offset = 0) {
@@ -426,6 +449,25 @@ class SessionStore {
     }
 
     getAllSystemPrompts() { return this.db.prepare('SELECT * FROM system_prompts ORDER BY key').all(); }
+
+    getSetting(key) {
+        const row = this.db.prepare('SELECT value FROM app_settings WHERE key = ?').get(key);
+        return row ? row.value : null;
+    }
+
+    setSetting(key, value) {
+        this.db.prepare(
+            `INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)
+             ON CONFLICT(key) DO UPDATE SET value = ?, updated_at = CURRENT_TIMESTAMP`
+        ).run(key, value, value);
+    }
+
+    getAllSettings() {
+        const rows = this.db.prepare('SELECT key, value FROM app_settings').all();
+        const settings = {};
+        for (const r of rows) settings[r.key] = r.value;
+        return settings;
+    }
 
     getSessionStore() { return this.db; }
 }

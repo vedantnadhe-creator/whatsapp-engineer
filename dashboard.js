@@ -83,9 +83,17 @@ export function startDashboard(store, messageHandler, port = 18790, wa = null, e
             const page = parseInt(req.query.page) || 1;
             const limit = parseInt(req.query.limit) || 20;
             const offset = (page - 1) * limit;
-            const sessions = store.getSessionsForUser(req.user.id, limit, offset);
-            const total = store.countAllSessions();
-            res.json({ sessions, total, page, totalPages: Math.ceil(total / limit) });
+            const showAll = store.getSetting('show_all_sessions') === 'true';
+            const isAdmin = req.user.isAdmin || req.user.is_admin;
+            let sessions, total;
+            if (showAll || isAdmin) {
+                sessions = store.getSessionsForUser(req.user.id, limit, offset);
+                total = store.countAllSessions();
+            } else {
+                sessions = store.getOwnSessions(req.user.id, limit, offset);
+                total = store.countOwnSessions(req.user.id);
+            }
+            res.json({ sessions, total, page, totalPages: Math.ceil(total / limit), showAllSessions: showAll || isAdmin });
         } catch (err) { res.status(500).json({ error: err.message }); }
     });
 
@@ -500,6 +508,29 @@ export function startDashboard(store, messageHandler, port = 18790, wa = null, e
             if (typeof prompt !== 'string') return res.status(400).json({ error: 'prompt is required' });
             fs.writeFileSync(claudeMdPath, prompt, 'utf-8');
             res.json({ success: true, message: 'CLAUDE.md updated. New sessions will use the updated prompt.' });
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    // ── Admin Settings ─────────────────────────────────────────
+    app.get('/api/admin/settings', requireAuth, requireAdmin, (req, res) => {
+        try { res.json(store.getAllSettings()); }
+        catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    app.put('/api/admin/settings', requireAuth, requireAdmin, (req, res) => {
+        try {
+            const { key, value } = req.body;
+            if (!key) return res.status(400).json({ error: 'key is required' });
+            store.setSetting(key, String(value));
+            res.json({ success: true });
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    // Public endpoint — any authenticated user can check if sessions are shared
+    app.get('/api/settings/visibility', requireAuth, (req, res) => {
+        try {
+            const val = store.getSetting('show_all_sessions');
+            res.json({ showAllSessions: val === 'true' });
         } catch (err) { res.status(500).json({ error: err.message }); }
     });
 

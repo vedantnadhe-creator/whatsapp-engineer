@@ -99,6 +99,7 @@ export function useSessions(page = 1) {
     sessions: data?.sessions ?? [],
     total: data?.total ?? 0,
     totalPages: data?.totalPages ?? 1,
+    showAllSessions: data?.showAllSessions ?? false,
     loading,
     error,
     refresh,
@@ -268,6 +269,18 @@ export async function saveClaudePrompt(prompt) {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ prompt }),
+  });
+}
+
+export async function getAdminSettings() {
+  return apiFetch('/api/admin/settings');
+}
+
+export async function saveAdminSetting(key, value) {
+  return apiFetch('/api/admin/settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ key, value }),
   });
 }
 

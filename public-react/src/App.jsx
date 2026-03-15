@@ -1,12 +1,12 @@
 import { useState, useEffect, useCallback } from 'react'
 import { AuthProvider, useAuth } from './context/AuthContext'
-import { useSessions, useStats, useSessionMessages, useModels, usePhones, useUsers, useCron, useAccessRequests, useIssues, useAutonomous, useAction, startSession, sendMessage, stopSession, forkSession, uploadFile, transcribeAudio, requestAccess, getClaudePrompt, saveClaudePrompt } from './hooks/useApi'
+import { useSessions, useStats, useSessionMessages, useModels, usePhones, useUsers, useCron, useAccessRequests, useIssues, useAutonomous, useAction, startSession, sendMessage, stopSession, forkSession, uploadFile, transcribeAudio, requestAccess, getClaudePrompt, saveClaudePrompt, getAdminSettings, saveAdminSetting } from './hooks/useApi'
 import useWebSocket from './hooks/useWebSocket'
 import Sidebar from './components/Sidebar'
 import Workspace from './components/Workspace'
 import IssuesBoard from './components/IssuesBoard'
 import Login from './pages/Login'
-import { AdminModal, UsersPanel, PhonesPanel, PromptsPanel, CronPanel, AccessRequestsPanel } from './components/AdminPanels'
+import { AdminModal, UsersPanel, PhonesPanel, PromptsPanel, CronPanel, AccessRequestsPanel, SettingsPanel } from './components/AdminPanels'
 import { ThemeProvider } from './context/ThemeContext'
 
 function Dashboard() {
@@ -19,10 +19,11 @@ function Dashboard() {
   const [selectedModel, setSelectedModel] = useState('opus')
   const [claudePrompt, setClaudePrompt] = useState('')
   const [promptLoading, setPromptLoading] = useState(false)
+  const [adminSettings, setAdminSettings] = useState({})
   const [view, setView] = useState('chat') // 'chat' or 'issues'
 
   const { stats, refresh: refreshStats } = useStats()
-  const { sessions, total, totalPages, refresh: refreshSessions } = useSessions(page)
+  const { sessions, total, totalPages, showAllSessions, refresh: refreshSessions } = useSessions(page)
   const { messages, refresh: refreshMessages } = useSessionMessages(activeSession?.id)
   const { models } = useModels()
   const { phones, refresh: refreshPhones, addPhone, removePhone } = usePhones()
@@ -170,6 +171,12 @@ function Dashboard() {
       } catch (e) { }
       setPromptLoading(false)
     }
+    if (panel === 'settings') {
+      try {
+        const data = await getAdminSettings()
+        setAdminSettings(data || {})
+      } catch (e) { }
+    }
   }, [])
 
   const handleSavePrompt = useCallback(async (prompt) => {
@@ -204,6 +211,7 @@ function Dashboard() {
         view={view}
         onViewChange={setView}
         issueCount={issues.length}
+        showAllSessions={showAllSessions}
       />
       <div className="flex-1 min-w-0 h-full">
         {view === 'issues' ? (
@@ -271,6 +279,15 @@ function Dashboard() {
       {adminPanel === 'requests' && (
         <AdminModal isOpen onClose={() => setAdminPanel(null)} title="Access Requests">
           <AccessRequestsPanel requests={requests} onResolve={async (id, approve) => { await resolve(id, approve); refreshRequests() }} />
+        </AdminModal>
+      )}
+      {adminPanel === 'settings' && (
+        <AdminModal isOpen onClose={() => setAdminPanel(null)} title="Settings">
+          <SettingsPanel settings={adminSettings} onSave={async (key, value) => {
+            await saveAdminSetting(key, value)
+            setAdminSettings(prev => ({ ...prev, [key]: value }))
+            if (key === 'show_all_sessions') refreshSessions()
+          }} />
         </AdminModal>
       )}
     </div>
