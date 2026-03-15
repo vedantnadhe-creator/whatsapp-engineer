@@ -24,7 +24,8 @@ export default function useWebSocket() {
     function connect() {
       if (unmounted) return;
       const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${proto}//${window.location.host}/ws`;
+      const prefix = window.location.pathname.startsWith('/sessions') ? '/sessions' : '';
+      const wsUrl = `${proto}//${window.location.host}${prefix}/ws`;
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 

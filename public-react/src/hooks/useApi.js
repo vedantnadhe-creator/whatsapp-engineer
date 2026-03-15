@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-const API_BASE = '';
+const API_BASE = window.location.pathname.startsWith('/sessions') ? '/sessions' : '';
 
 // Dedup: reject duplicate in-flight POST/PUT/DELETE requests to the same URL
 const inflightMutations = new Map();
