@@ -211,6 +211,16 @@ configure_env() {
     [ -z "$ADMIN_EMAIL" ] && fail "Admin email is required."
     [ -z "$ADMIN_NAME" ] && ADMIN_NAME="Admin"
 
+    # Generate admin password
+    ADMIN_PASSWORD="$(openssl rand -base64 12 2>/dev/null || echo "Admin$(date +%s | tail -c 8)")"
+    if $HAS_GUM; then
+        gum style --foreground 212 --bold "Admin Password (auto-generated if left empty)"
+        ADMIN_PASS_INPUT=$(gum input --placeholder "Leave empty for: $ADMIN_PASSWORD")
+    else
+        ADMIN_PASS_INPUT=$(prompt_input "Admin Password (auto-generated if left empty)" "Leave empty for auto-generated")
+    fi
+    [ -n "$ADMIN_PASS_INPUT" ] && ADMIN_PASSWORD="$ADMIN_PASS_INPUT"
+
     ALLOWED_PHONES_VAL=""
     if [ "$ACCESS_MODE" != "Email (dashboard only)" ]; then
         if $HAS_GUM; then
@@ -274,6 +284,7 @@ CLAUDE_BIN=$CLAUDE_BIN_INPUT
 
 ADMIN_EMAIL=$ADMIN_EMAIL
 ADMIN_NAME=$ADMIN_NAME
+ADMIN_PASSWORD=$ADMIN_PASSWORD
 
 ALLOWED_PHONES=$ALLOWED_PHONES_VAL
 
@@ -335,9 +346,12 @@ start_service() {
         echo ""
         echo -e "${GREEN}${BOLD}Setup complete!${NC}"
         echo -e "  Dashboard: ${BLUE}http://localhost:18790${NC}"
-        if [ "$ACCESS_MODE" != "WhatsApp (QR scan)" ]; then
-            echo -e "  Login:     ${BLUE}http://localhost:18790/login.html${NC}"
-        fi
+        echo ""
+        echo -e "${YELLOW}${BOLD}  Admin Login Credentials:${NC}"
+        echo -e "    Email:    ${GREEN}${ADMIN_EMAIL}${NC}"
+        echo -e "    Password: ${GREEN}${ADMIN_PASSWORD}${NC}"
+        echo -e "    ${YELLOW}(Save these! Change after first login)${NC}"
+        echo ""
         echo -e "  Logs:      tail -f /tmp/wa-engineer.log"
         echo -e "  Database:  ${BLUE}${DB_BACKEND_VAL:-sqlite}${NC}"
         echo ""

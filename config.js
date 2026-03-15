@@ -60,6 +60,7 @@ const config = {
     // First admin account seeded on first boot
     ADMIN_EMAIL: process.env.ADMIN_EMAIL || '',
     ADMIN_NAME: process.env.ADMIN_NAME || 'Admin',
+    ADMIN_PASSWORD: process.env.ADMIN_PASSWORD || '',
 };
 
 export default config;

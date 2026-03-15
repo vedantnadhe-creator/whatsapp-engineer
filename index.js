@@ -58,7 +58,7 @@ if (config.ADMIN_EMAIL) {
     const existingAdmins = await store.getAdmins();
     if (existingAdmins.length === 0) {
         const { generatePassword, sendWelcomeEmail } = await import('./auth.js');
-        const password = generatePassword();
+        const password = config.ADMIN_PASSWORD || generatePassword();
         const passwordHash = hashPassword(password);
         await store.createUser({
             email: config.ADMIN_EMAIL.toLowerCase().trim(),
