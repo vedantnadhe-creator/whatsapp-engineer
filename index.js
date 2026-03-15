@@ -386,9 +386,11 @@ export async function handleIncomingMessage({ isWeb: explicitIsWeb, phone, text,
 
                 // Fetch recent messages to generate an automatic recap of progress
                 const messages = store.getMessages(target.id, 10);
-                const recap = await orchestrator.recap(messages);
-                if (recap && !isWeb) {
-                    await wa.sendMessage(replyTo, `📝 *Last Progress:* ${recap}`);
+                if (orchestrator && !isWeb) {
+                    const recap = await orchestrator.recap(messages);
+                    if (recap) {
+                        await wa?.sendMessage(replyTo, `📝 *Last Progress:* ${recap}`);
+                    }
                 }
 
                 // When resuming, we can optionally credit the individual user who sent the follow-up
