@@ -10,6 +10,10 @@ import path from 'path';
 
 const KB_HINT = `[Context: Knowledge Base is at ${config.KB_DIR} - check relevant .md files there if you need domain knowledge.]`;
 
+// --dangerously-skip-permissions cannot be used as root — use settings-based permissions instead
+const IS_ROOT = process.getuid?.() === 0;
+const SKIP_PERMS = IS_ROOT ? [] : ['--dangerously-skip-permissions'];
+
 class ClaudeManager extends EventEmitter {
     constructor(sessionStore) {
         super();
@@ -161,14 +165,14 @@ class ClaudeManager extends EventEmitter {
     _spawnNew(sessionId, prompt, workingDir, imagePath = null, model = 'opus') {
         const fileRef = this._prepareFile(imagePath, workingDir);
         const fullPrompt = fileRef ? `${KB_HINT}\n\n${fileRef}\n\n${prompt}` : `${KB_HINT}\n\n${prompt}`;
-        const args = ['--print', '--model', model, '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions', fullPrompt];
+        const args = ['--print', '--model', model, '--output-format', 'stream-json', '--verbose', ...SKIP_PERMS, fullPrompt];
         console.log(`[Claude] NEW session ${sessionId} | model: ${model} | cwd: ${workingDir}`);
         this._runPty(sessionId, config.CLAUDE_BIN, args, workingDir, 0);
     }
 
     _spawnPlan(sessionId, prompt, workingDir, model = 'opus') {
         const planPrefix = 'PLANNING MODE: Read the codebase and relevant knowledge base docs, then write a detailed step-by-step plan of the changes you would make. Do NOT modify any files. Output the plan as a numbered list, then stop.';
-        const args = ['--print', '--model', model, '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions', `${KB_HINT}\n\n${planPrefix}\n\nTask: ${prompt}`];
+        const args = ['--print', '--model', model, '--output-format', 'stream-json', '--verbose', ...SKIP_PERMS, `${KB_HINT}\n\n${planPrefix}\n\nTask: ${prompt}`];
         console.log(`[Claude] PLAN session ${sessionId} | model: ${model} | cwd: ${workingDir}`);
         this._runPty(sessionId, config.CLAUDE_BIN, args, workingDir, 0);
     }
@@ -176,7 +180,7 @@ class ClaudeManager extends EventEmitter {
     _spawnResume(sessionId, claudeSessionId, followUp, workingDir, baseCost = 0, imagePath = null, model = 'opus') {
         const fileRef = this._prepareFile(imagePath, workingDir);
         const fullFollowUp = fileRef ? `${fileRef}\n\n${followUp}` : followUp;
-        const args = ['--resume', claudeSessionId, '--print', '--model', model, '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions', fullFollowUp];
+        const args = ['--resume', claudeSessionId, '--print', '--model', model, '--output-format', 'stream-json', '--verbose', ...SKIP_PERMS, fullFollowUp];
         console.log(`[Claude] RESUME session ${sessionId} | model: ${model} | claude_id: ${claudeSessionId}`);
         this._runPty(sessionId, config.CLAUDE_BIN, args, workingDir, baseCost);
     }
