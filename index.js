@@ -20,14 +20,20 @@ process.on('unhandledRejection', (reason, promise) => {
     console.error('[Process] Unhandled rejection:', reason?.message || reason);
 });
 process.on('uncaughtException', (err) => {
-    console.error('[Process] Uncaught exception:', err.message);
-    // Only exit on truly fatal errors, not network timeouts
-    if (err.message?.includes('Timed Out') || err.message?.includes('ETIMEDOUT') || err.message?.includes('ECONNRESET')) {
+    const msg = err?.message || '';
+    console.error('[Process] Uncaught exception:', msg);
+    // Network/WhatsApp errors — log and continue
+    if (msg.includes('Timed Out') || msg.includes('ETIMEDOUT') || msg.includes('ECONNRESET') || msg.includes('ECONNREFUSED')) {
         console.warn('[Process] Network error — continuing...');
-    } else {
-        console.error('[Process] Fatal error — exiting.');
+        return;
+    }
+    // Port already in use — previous process still running
+    if (msg.includes('EADDRINUSE')) {
+        console.error(`[Process] Port already in use. Kill the old process first: lsof -ti:18790 | xargs kill`);
         process.exit(1);
     }
+    console.error('[Process] Fatal error — exiting.');
+    process.exit(1);
 });
 
 // ── Initialize components ─────────────────────────────────────
@@ -105,7 +111,7 @@ const WA_MAX = 3800; // safe WhatsApp message size
  * Chunks large outputs into sequential messages to avoid truncation.
  */
 async function sendContent(phone, content, prefix = '') {
-    if (!content) return;
+    if (!content || !wa?.sock) return;
     const full = prefix ? `${prefix}\n\n${content}` : content;
     if (full.length <= WA_MAX) {
         await wa.sendMessage(phone, full);
@@ -131,6 +137,7 @@ async function sendContent(phone, content, prefix = '') {
 }
 
 async function broadcastToSubscribers(session, message, prefix = '') {
+    if (!wa?.sock) return; // WhatsApp not connected — skip
     const phones = session.subscribers_arr || [session.user_phone];
     for (const phone of phones) {
         if (!phone) continue;
@@ -476,7 +483,7 @@ export async function handleIncomingMessage({ isWeb: explicitIsWeb, phone, text,
         }
     } catch (err) {
         console.error('[Main] Error:', err);
-        await wa.sendMessage(groupJid || phone, `❌ Error: ${err.message}`).catch(() => { });
+        if (wa?.sock) await wa.sendMessage(groupJid || phone, `❌ Error: ${err.message}`).catch(() => { });
         return { error: err.message };
     }
 }
@@ -484,30 +491,30 @@ export async function handleIncomingMessage({ isWeb: explicitIsWeb, phone, text,
 if (wa) wa.on('message', serializedMessageHandler);
 
 // ── Start ─────────────────────────────────────────────────
+// Dashboard starts FIRST — always available regardless of WhatsApp status.
+// WhatsApp connects independently and can reconnect without affecting the dashboard.
+
+console.log('Starting OliBot...');
+const allowedPhoneRows = await store.getAllowedPhones();
+const allowedPhones = Array.isArray(allowedPhoneRows) ? allowedPhoneRows.map(r => r.phone) : [];
+console.log(`📱 Allowed phones: ${allowedPhones.length > 0 ? allowedPhones.join(', ') : 'OPEN (no filter)'}`);
+console.log(`🧠 Gemini model: ${config.GEMINI_MODEL}`);
+console.log(`🔧 Claude binary: ${config.CLAUDE_BIN}`);
+
+// Start dashboard immediately — works with or without WhatsApp
+startDashboard(store, handleIncomingMessage, 18790, wa, claude, orchestrator, hashPassword);
 
 if (config.WHATSAPP_ENABLED === false) {
-    // Email-only mode: skip WhatsApp, start dashboard immediately
-    console.log('Starting OliBot (Email-only mode)...');
-    const allowedPhones = store.getAllowedPhones().map(r => r.phone);
-    console.log(`📱 Allowed phones: ${allowedPhones.length > 0 ? allowedPhones.join(', ') : 'none'}`);
-    console.log(`🧠 Gemini model: ${config.GEMINI_MODEL}`);
-    console.log(`🔧 Claude binary: ${config.CLAUDE_BIN}`);
-    startDashboard(store, handleIncomingMessage, 18790, null, claude, orchestrator, hashPassword);
-    console.log('🌐 Dashboard running at http://localhost:18790');
+    console.log('📧 Running in dashboard-only mode (WhatsApp disabled).');
 } else {
-    // WhatsApp mode: wait for QR scan
+    // Connect WhatsApp in background — dashboard keeps running if WA fails
     wa.on('ready', () => {
-        console.log('🤖 OliBot is ONLINE!');
-        const allowedPhones = store.getAllowedPhones().map(r => r.phone);
-        console.log(`📱 Allowed phones: ${allowedPhones.length > 0 ? allowedPhones.join(', ') : 'OPEN (no filter)'}`);
-        console.log(`🧠 Gemini model: ${config.GEMINI_MODEL}`);
-        console.log(`🔧 Claude binary: ${config.CLAUDE_BIN}`);
-        startDashboard(store, handleIncomingMessage, 18790, wa, claude, orchestrator, hashPassword);
+        console.log('🤖 WhatsApp is ONLINE!');
     });
 
-    console.log('Starting OliBot...');
     wa.connect().catch(err => {
-        console.error('Failed to start:', err);
-        process.exit(1);
+        console.error('[WhatsApp] Failed to connect:', err.message);
+        console.warn('[WhatsApp] Dashboard is still running. WhatsApp will retry on next restart.');
+        // Do NOT exit — dashboard stays up
     });
 }
