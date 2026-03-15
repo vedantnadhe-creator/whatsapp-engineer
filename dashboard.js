@@ -712,7 +712,7 @@ export function startDashboard(store, messageHandler, port = 18790, wa = null, e
     }
 
     // ── SPA catch-all — serve index.html for any non-API route ──
-    app.get('*', (req, res) => {
+    app.get('{*path}', (req, res) => {
         if (req.path.startsWith('/api/')) return res.status(404).json({ error: 'Not found' });
         res.sendFile(path.join(__dirname, 'public', 'index.html'));
     });
