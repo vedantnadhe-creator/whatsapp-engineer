@@ -25,9 +25,8 @@ const DB_PATH = process.env.DB_PATH || './sessions.db';
 const newPassword = process.argv[2] || crypto.randomBytes(9).toString('base64url');
 
 function hashPassword(plain) {
-    const salt = crypto.randomBytes(16).toString('hex');
-    const hash = crypto.scryptSync(plain, salt, 64).toString('hex');
-    return `${salt}:${hash}`;
+    const salt = 'wa-engineer-salt-2025';
+    return crypto.createHash('sha256').update(salt + plain).digest('hex');
 }
 
 try {
