@@ -543,9 +543,9 @@ export function startDashboard(store, messageHandler, port = 18790, wa = null, e
 
     app.post('/api/issues', requireAuth, (req, res) => {
         try {
-            const { title, description, priority, labels } = req.body;
+            const { title, description, priority, labels, forkSessionId } = req.body;
             if (!title) return res.status(400).json({ error: 'title is required' });
-            const issue = store.createIssue({ title, description, priority, labels, createdBy: req.user.id });
+            const issue = store.createIssue({ title, description, priority, labels, createdBy: req.user.id, forkSessionId: forkSessionId || null });
             wsBroadcast('issue_created', { issue });
             res.json(issue);
         } catch (err) { res.status(500).json({ error: err.message }); }
@@ -614,11 +614,16 @@ export function startDashboard(store, messageHandler, port = 18790, wa = null, e
             store.updateIssue(issue.id, { status: 'in_progress' });
             autonomousState.currentIssueId = issue.id;
 
-            // Start a session for this issue
+            // Start a session for this issue — fork from session if specified
             const phone = req.user.phone || req.user.email || req.user.id;
             const model = req.body.model || 'opus';
             const taskPrompt = `[Issue ${issue.id}] ${issue.title}\n\n${issue.description || 'No additional details.'}`;
-            const result = await messageHandler({ isWeb: true, phone: String(phone), text: `[start fresh] ${taskPrompt}`, pushName: req.user.displayName || 'Autonomous', ownerId: req.user.id, model });
+            let result;
+            if (issue.fork_session_id && executionEngine) {
+                result = await executionEngine.forkSession(issue.fork_session_id, taskPrompt, String(phone), req.user.id, model);
+            } else {
+                result = await messageHandler({ isWeb: true, phone: String(phone), text: `[start fresh] ${taskPrompt}`, pushName: req.user.displayName || 'Autonomous', ownerId: req.user.id, model });
+            }
 
             if (result?.sessionId) {
                 autonomousState.sessionId = result.sessionId;
@@ -694,8 +699,10 @@ export function startDashboard(store, messageHandler, port = 18790, wa = null, e
             autonomousState.currentIssueId = next.id;
 
             const taskPrompt = `[Issue ${next.id}] ${next.title}\n\n${next.description || 'No additional details.'}`;
-            messageHandler({ isWeb: true, phone: 'system_autonomous', text: `[start fresh] ${taskPrompt}`, pushName: 'Autonomous Runner', ownerId: null, model: 'opus' })
-                .then(result => {
+            const startNext = next.fork_session_id && executionEngine
+                ? executionEngine.forkSession(next.fork_session_id, taskPrompt, 'system_autonomous', null, 'opus')
+                : messageHandler({ isWeb: true, phone: 'system_autonomous', text: `[start fresh] ${taskPrompt}`, pushName: 'Autonomous Runner', ownerId: null, model: 'opus' });
+            startNext.then(result => {
                     if (result?.sessionId) {
                         autonomousState.sessionId = result.sessionId;
                         store.updateIssue(next.id, { session_id: result.sessionId });

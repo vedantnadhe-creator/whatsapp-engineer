@@ -115,6 +115,7 @@ class SessionStore {
             "ALTER TABLE users ADD COLUMN role TEXT DEFAULT 'developer'",
             "ALTER TABLE users ADD COLUMN created_by TEXT",
             "ALTER TABLE sessions ADD COLUMN model TEXT DEFAULT 'opus'",
+            "ALTER TABLE issues ADD COLUMN fork_session_id TEXT",
         ];
         for (const sql of safeMigrations) {
             try { this.db.exec(sql); } catch (_) { /* column already exists */ }
@@ -391,12 +392,12 @@ class SessionStore {
 
     // ── Issues ─────────────────────────────────────────────────
 
-    createIssue({ title, description = '', priority = 'medium', labels = [], createdBy = null }) {
+    createIssue({ title, description = '', priority = 'medium', labels = [], createdBy = null, forkSessionId = null }) {
         const id = `ISS-${Date.now().toString(36)}`;
         const maxOrder = this.db.prepare("SELECT COALESCE(MAX(sort_order), 0) as m FROM issues WHERE status = 'todo'").get().m;
         this.db.prepare(
-            `INSERT INTO issues (id, title, description, priority, labels, created_by, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)`
-        ).run(id, title, description, priority, JSON.stringify(labels), createdBy, maxOrder + 1);
+            `INSERT INTO issues (id, title, description, priority, labels, created_by, sort_order, fork_session_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        ).run(id, title, description, priority, JSON.stringify(labels), createdBy, maxOrder + 1, forkSessionId);
         return this.getIssue(id);
     }
 

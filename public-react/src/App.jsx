@@ -224,6 +224,7 @@ function Dashboard() {
             autonomousStatus={autonomousStatus}
             onStartAutonomous={(issueIds) => startAutonomous('opus', issueIds)}
             onStopAutonomous={stopAutonomous}
+            sessions={sessions}
             onGoToSession={(sessionId) => {
               const session = sessions.find(s => s.id === sessionId)
               if (session) {

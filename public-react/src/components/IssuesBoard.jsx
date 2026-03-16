@@ -17,6 +17,7 @@ import {
   Tag,
   X,
   Paperclip,
+  GitBranch,
 } from 'lucide-react';
 
 // SQLite CURRENT_TIMESTAMP returns 'YYYY-MM-DD HH:MM:SS' without timezone.
@@ -213,13 +214,14 @@ function FilePreview({ file, previewUrl, isImage, onRemove }) {
   );
 }
 
-function CreateIssueForm({ onSubmit, onCancel, onUploadFile }) {
+function CreateIssueForm({ onSubmit, onCancel, onUploadFile, sessions = [] }) {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [priority, setPriority] = useState('medium');
   const [labelInput, setLabelInput] = useState('');
   const [labels, setLabels] = useState([]);
   const [attachments, setAttachments] = useState([]);
+  const [forkSessionId, setForkSessionId] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const titleRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -291,7 +293,7 @@ function CreateIssueForm({ onSubmit, onCancel, onUploadFile }) {
           desc = (desc ? desc + '\n\n' : '') + lines.join('\n');
         }
       }
-      await onSubmit({ title: title.trim(), description: desc, priority, labels });
+      await onSubmit({ title: title.trim(), description: desc, priority, labels, forkSessionId: forkSessionId || undefined });
       // Cleanup
       attachments.forEach((att) => { if (att.previewUrl) URL.revokeObjectURL(att.previewUrl); });
       setTitle('');
@@ -299,6 +301,7 @@ function CreateIssueForm({ onSubmit, onCancel, onUploadFile }) {
       setPriority('medium');
       setLabels([]);
       setAttachments([]);
+      setForkSessionId('');
     } finally {
       setSubmitting(false);
     }
@@ -369,6 +372,25 @@ function CreateIssueForm({ onSubmit, onCancel, onUploadFile }) {
           <Paperclip size={10} />
           Attach
         </button>
+
+        {/* Fork from session */}
+        <div className="flex items-center gap-1">
+          <GitBranch size={10} style={{ color: forkSessionId ? colors.accent : colors.textSecondary }} />
+          <select
+            value={forkSessionId}
+            onChange={(e) => setForkSessionId(e.target.value)}
+            className="text-xs px-2 py-1 rounded outline-none cursor-pointer font-mono"
+            style={{ backgroundColor: colors.surface2, color: forkSessionId ? colors.accent : colors.textSecondary, border: `1px solid ${forkSessionId ? colors.accent : colors.border}`, maxWidth: '160px' }}
+            title="Fork from an existing session's context"
+          >
+            <option value="">No fork</option>
+            {sessions.filter(s => s.claude_session_id || s.status === 'completed' || s.status === 'running').slice(0, 20).map(s => (
+              <option key={s.id} value={s.id}>
+                {s.id} — {(s.task || 'Untitled').slice(0, 30)}
+              </option>
+            ))}
+          </select>
+        </div>
 
         <div className="flex items-center gap-1">
           <input
@@ -644,6 +666,7 @@ export default function IssuesBoard({
   onStopAutonomous,
   onGoToSession,
   onBack,
+  sessions = [],
 }) {
   const [showCreate, setShowCreate] = useState(false);
   const [selectedIssue, setSelectedIssue] = useState(null);
@@ -869,6 +892,7 @@ export default function IssuesBoard({
           onSubmit={handleCreate}
           onCancel={() => setShowCreate(false)}
           onUploadFile={onUploadFile}
+          sessions={sessions}
         />
       )}
 

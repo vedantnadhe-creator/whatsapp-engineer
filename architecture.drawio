@@ -1,0 +1,335 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="app.diagrams.net" modified="2026-03-12T00:00:00.000Z" agent="Claude Code" version="24.0.0" type="device">
+  <diagram id="whatsapp-engineer-arch" name="Architecture">
+    <mxGraphModel dx="1800" dy="1200" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1200" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <!-- Title -->
+        <mxCell id="title" value="WhatsApp Engineer — System Architecture" style="text;html=1;fontSize=22;fontStyle=1;align=center;verticalAlign=middle;fillColor=none;strokeColor=none;fontColor=#1a1a2e;" vertex="1" parent="1">
+          <mxGeometry x="400" y="20" width="600" height="40" as="geometry" />
+        </mxCell>
+
+        <!-- ==================== EXTERNAL ACTORS ==================== -->
+
+        <!-- WhatsApp User -->
+        <mxCell id="wa_user" value="WhatsApp User" style="shape=mxgraph.basic.smiley;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=12;fontStyle=1;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="80" y="160" width="80" height="80" as="geometry" />
+        </mxCell>
+
+        <!-- Dashboard User -->
+        <mxCell id="dash_user" value="Dashboard User" style="shape=mxgraph.basic.smiley;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;fontStyle=1;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="80" y="660" width="80" height="80" as="geometry" />
+        </mxCell>
+
+        <!-- ==================== WHATSAPP LAYER ==================== -->
+
+        <!-- WhatsApp Bridge -->
+        <mxCell id="wa_bridge" value="&lt;b&gt;WhatsApp Bridge&lt;/b&gt;&lt;br&gt;(whatsapp.js)&lt;br&gt;&lt;hr&gt;&lt;font style=&quot;font-size:10px&quot;&gt;Baileys Library&lt;br&gt;QR Auth &amp; Reconnect&lt;br&gt;DM &amp; Group Handling&lt;br&gt;Phone Allowlist&lt;br&gt;Message Dedup&lt;br&gt;Media Download&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;shadow=1;fontSize=12;verticalAlign=top;spacingTop=5;" vertex="1" parent="1">
+          <mxGeometry x="280" y="130" width="180" height="150" as="geometry" />
+        </mxCell>
+
+        <!-- Arrow: User → WhatsApp Bridge -->
+        <mxCell id="e_user_wa" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;strokeColor=#9673a6;" edge="1" source="wa_user" target="wa_bridge" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_user_wa_label" value="Messages, Images, PDFs" style="edgeLabel;html=1;fontSize=10;fontColor=#666666;" vertex="1" connectable="0" parent="e_user_wa">
+          <mxGeometry x="-0.1" relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- ==================== CORE ENGINE ==================== -->
+
+        <!-- index.js — Main Router -->
+        <mxCell id="main_router" value="&lt;b&gt;Main Router&lt;/b&gt;&lt;br&gt;(index.js)&lt;br&gt;&lt;hr&gt;&lt;font style=&quot;font-size:10px&quot;&gt;Entry Point&lt;br&gt;Per-Phone Serial Queue&lt;br&gt;Message Dedup&lt;br&gt;Event Wiring&lt;br&gt;Broadcast to Subscribers&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;shadow=1;fontSize=12;verticalAlign=top;spacingTop=5;" vertex="1" parent="1">
+          <mxGeometry x="560" y="130" width="180" height="150" as="geometry" />
+        </mxCell>
+
+        <!-- Arrow: WhatsApp Bridge → Main Router -->
+        <mxCell id="e_wa_router" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;strokeColor=#d6b656;" edge="1" source="wa_bridge" target="main_router" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_wa_router_label" value="emit('message')" style="edgeLabel;html=1;fontSize=10;fontColor=#666666;" vertex="1" connectable="0" parent="e_wa_router">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Arrow: Main Router → WhatsApp Bridge (send reply) -->
+        <mxCell id="e_router_wa" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=1;strokeColor=#b85450;dashed=1;" edge="1" source="main_router" target="wa_bridge" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="530" y="280" />
+              <mxPoint x="530" y="280" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e_router_wa_label" value="sendMessage()" style="edgeLabel;html=1;fontSize=10;fontColor=#999999;" vertex="1" connectable="0" parent="e_router_wa">
+          <mxGeometry x="0.1" y="15" relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- ==================== ORCHESTRATOR ==================== -->
+
+        <!-- Orchestrator -->
+        <mxCell id="orchestrator" value="&lt;b&gt;Orchestrator&lt;/b&gt;&lt;br&gt;(orchestrator.js)&lt;br&gt;&lt;hr&gt;&lt;font style=&quot;font-size:10px&quot;&gt;Intent Classification&lt;br&gt;Fast-Path Local Match&lt;br&gt;Gemini Fallback&lt;br&gt;Thread Management&lt;br&gt;Per-User History (20 turns)&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;shadow=1;fontSize=12;verticalAlign=top;spacingTop=5;" vertex="1" parent="1">
+          <mxGeometry x="560" y="360" width="180" height="150" as="geometry" />
+        </mxCell>
+
+        <!-- Arrow: Main Router → Orchestrator -->
+        <mxCell id="e_router_orch" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;strokeColor=#b85450;" edge="1" source="main_router" target="orchestrator" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_router_orch_label" value="classify(message)" style="edgeLabel;html=1;fontSize=10;fontColor=#666666;" vertex="1" connectable="0" parent="e_router_orch">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Gemini API (external) -->
+        <mxCell id="gemini" value="&lt;b&gt;Gemini API&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:10px&quot;&gt;gemini-3-flash-preview&lt;br&gt;Intent + JSON response&lt;br&gt;$0.002/call&lt;/font&gt;" style="shape=hexagon;perimeter=hexagonPerimeter2;whiteSpace=wrap;html=1;fillColor=#e6d0de;strokeColor=#996185;shadow=1;fontSize=12;size=0.15;" vertex="1" parent="1">
+          <mxGeometry x="350" y="380" width="160" height="100" as="geometry" />
+        </mxCell>
+
+        <!-- Arrow: Orchestrator → Gemini -->
+        <mxCell id="e_orch_gemini" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;strokeColor=#82b366;" edge="1" source="orchestrator" target="gemini" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Actions Box -->
+        <mxCell id="actions" value="&lt;b&gt;Actions&lt;/b&gt;&lt;br&gt;&lt;hr&gt;&lt;font style=&quot;font-size:10px&quot;&gt;START_SESSION&lt;br&gt;PLAN_SESSION&lt;br&gt;RESUME_SESSION&lt;br&gt;STOP_SESSION&lt;br&gt;CLOSE_SESSION&lt;br&gt;LIST_SESSIONS&lt;br&gt;STATUS | GET_COST | CHAT&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#82b366;shadow=0;fontSize=11;verticalAlign=top;spacingTop=3;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="780" y="360" width="150" height="155" as="geometry" />
+        </mxCell>
+
+        <!-- Arrow: Orchestrator → Actions -->
+        <mxCell id="e_orch_actions" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=1;strokeColor=#82b366;dashed=1;" edge="1" source="orchestrator" target="actions" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_orch_actions_label" value="returns action" style="edgeLabel;html=1;fontSize=10;fontColor=#999999;" vertex="1" connectable="0" parent="e_orch_actions">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- ==================== CLAUDE MANAGER ==================== -->
+
+        <!-- Claude Manager -->
+        <mxCell id="claude_mgr" value="&lt;b&gt;Claude Manager&lt;/b&gt;&lt;br&gt;(claude_manager.js)&lt;br&gt;&lt;hr&gt;&lt;font style=&quot;font-size:10px&quot;&gt;PTY Spawning (node-pty)&lt;br&gt;Stream JSON Parsing&lt;br&gt;Cost Tracking&lt;br&gt;New / Resume / Plan modes&lt;br&gt;KB Hint Injection&lt;br&gt;File Attachment Handling&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;shadow=1;fontSize=12;verticalAlign=top;spacingTop=5;" vertex="1" parent="1">
+          <mxGeometry x="1020" y="130" width="200" height="160" as="geometry" />
+        </mxCell>
+
+        <!-- Arrow: Main Router → Claude Manager -->
+        <mxCell id="e_router_claude" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;strokeColor=#b85450;" edge="1" source="main_router" target="claude_mgr" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_router_claude_label" value="startSession() / resumeSession()" style="edgeLabel;html=1;fontSize=10;fontColor=#666666;" vertex="1" connectable="0" parent="e_router_claude">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Claude Code CLI -->
+        <mxCell id="claude_cli" value="&lt;b&gt;Claude Code CLI&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:10px&quot;&gt;claude --print --model opus&lt;br&gt;--dangerously-skip-permissions&lt;br&gt;Reads/writes codebase&lt;br&gt;Stream JSON events&lt;/font&gt;" style="shape=hexagon;perimeter=hexagonPerimeter2;whiteSpace=wrap;html=1;fillColor=#b1ddf0;strokeColor=#10739e;shadow=1;fontSize=12;size=0.15;" vertex="1" parent="1">
+          <mxGeometry x="1310" y="140" width="200" height="110" as="geometry" />
+        </mxCell>
+
+        <!-- Arrow: Claude Manager → Claude CLI -->
+        <mxCell id="e_cmgr_cli" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;strokeColor=#6c8ebf;" edge="1" source="claude_mgr" target="claude_cli" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_cmgr_cli_label" value="spawn PTY" style="edgeLabel;html=1;fontSize=10;fontColor=#666666;" vertex="1" connectable="0" parent="e_cmgr_cli">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Knowledge Base -->
+        <mxCell id="kb" value="&lt;b&gt;Knowledge Base&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:10px&quot;&gt;./kb/*.md files&lt;br&gt;Domain docs&lt;br&gt;Auto-loaded via hint&lt;/font&gt;" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=10;fillColor=#f0f0f0;strokeColor=#999999;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1350" y="290" width="120" height="80" as="geometry" />
+        </mxCell>
+
+        <!-- Arrow: Claude CLI → KB -->
+        <mxCell id="e_cli_kb" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=1;strokeColor=#999999;dashed=1;" edge="1" source="claude_cli" target="kb" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_cli_kb_label" value="reads" style="edgeLabel;html=1;fontSize=10;fontColor=#999999;" vertex="1" connectable="0" parent="e_cli_kb">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Events from Claude Manager back to Router -->
+        <mxCell id="e_claude_events" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=1;strokeColor=#6c8ebf;dashed=1;" edge="1" source="claude_mgr" target="main_router" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="980" y="120" />
+              <mxPoint x="980" y="120" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e_claude_events_label" value="events: assistant_message,&#xa;result, session_end, error" style="edgeLabel;html=1;fontSize=9;fontColor=#6c8ebf;align=center;" vertex="1" connectable="0" parent="e_claude_events">
+          <mxGeometry x="0.2" y="-20" relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- ==================== PERSISTENCE LAYER ==================== -->
+
+        <!-- Session Store -->
+        <mxCell id="session_store" value="&lt;b&gt;Session Store&lt;/b&gt;&lt;br&gt;(session_store.js)&lt;br&gt;&lt;hr&gt;&lt;font style=&quot;font-size:10px&quot;&gt;SQLite + WAL Mode&lt;br&gt;&lt;br&gt;Tables:&lt;br&gt;• sessions&lt;br&gt;• messages&lt;br&gt;• allowed_phones&lt;br&gt;• users&lt;br&gt;• session_collaborators&lt;br&gt;• access_requests&lt;br&gt;• system_prompts&lt;/font&gt;" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;fillColor=#e6d0de;strokeColor=#996185;shadow=1;fontSize=12;verticalAlign=top;spacingTop=10;" vertex="1" parent="1">
+          <mxGeometry x="1020" y="400" width="200" height="210" as="geometry" />
+        </mxCell>
+
+        <!-- Arrow: Claude Manager → Session Store -->
+        <mxCell id="e_cmgr_store" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;strokeColor=#6c8ebf;" edge="1" source="claude_mgr" target="session_store" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_cmgr_store_label" value="update cost, status" style="edgeLabel;html=1;fontSize=10;fontColor=#666666;" vertex="1" connectable="0" parent="e_cmgr_store">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Arrow: Orchestrator → Session Store -->
+        <mxCell id="e_orch_store" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;strokeColor=#82b366;" edge="1" source="orchestrator" target="session_store" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_orch_store_label" value="read sessions, history" style="edgeLabel;html=1;fontSize=10;fontColor=#666666;" vertex="1" connectable="0" parent="e_orch_store">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Arrow: Main Router → Session Store -->
+        <mxCell id="e_router_store" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=1;strokeColor=#b85450;dashed=1;" edge="1" source="main_router" target="session_store" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="770" y="210" />
+              <mxPoint x="770" y="530" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- ==================== DASHBOARD ==================== -->
+
+        <!-- Dashboard -->
+        <mxCell id="dashboard" value="&lt;b&gt;Web Dashboard&lt;/b&gt;&lt;br&gt;(dashboard.js)&lt;br&gt;&lt;hr&gt;&lt;font style=&quot;font-size:10px&quot;&gt;Express.js :18790&lt;br&gt;JWT Auth (30-day)&lt;br&gt;&lt;br&gt;APIs:&lt;br&gt;• Session CRUD&lt;br&gt;• Start/Stop/Message&lt;br&gt;• Admin: Users, Access&lt;br&gt;• Cron Management&lt;br&gt;• File Upload (50MB)&lt;br&gt;• Transcription (Deepgram)&lt;br&gt;• Phone Management&lt;br&gt;• Stats &amp; Cost&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;shadow=1;fontSize=12;verticalAlign=top;spacingTop=5;" vertex="1" parent="1">
+          <mxGeometry x="280" y="590" width="200" height="230" as="geometry" />
+        </mxCell>
+
+        <!-- Arrow: Dashboard User → Dashboard -->
+        <mxCell id="e_dashuser_dash" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;strokeColor=#6c8ebf;" edge="1" source="dash_user" target="dashboard" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_dashuser_dash_label" value="HTTP / Browser" style="edgeLabel;html=1;fontSize=10;fontColor=#666666;" vertex="1" connectable="0" parent="e_dashuser_dash">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Arrow: Dashboard → Session Store -->
+        <mxCell id="e_dash_store" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;strokeColor=#6c8ebf;" edge="1" source="dashboard" target="session_store" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_dash_store_label" value="CRUD sessions, users" style="edgeLabel;html=1;fontSize=10;fontColor=#666666;" vertex="1" connectable="0" parent="e_dash_store">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Arrow: Dashboard → Claude Manager -->
+        <mxCell id="e_dash_claude" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;strokeColor=#6c8ebf;" edge="1" source="dashboard" target="claude_mgr" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="530" y="700" />
+              <mxPoint x="960" y="700" />
+              <mxPoint x="960" y="210" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e_dash_claude_label" value="start / stop / message" style="edgeLabel;html=1;fontSize=10;fontColor=#666666;" vertex="1" connectable="0" parent="e_dash_claude">
+          <mxGeometry x="0.3" y="-15" relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- ==================== AUTH ==================== -->
+
+        <!-- Auth Module -->
+        <mxCell id="auth" value="&lt;b&gt;Auth&lt;/b&gt;&lt;br&gt;(auth.js)&lt;br&gt;&lt;hr&gt;&lt;font style=&quot;font-size:10px&quot;&gt;JWT Middleware&lt;br&gt;SHA-256 + Salt&lt;br&gt;Email (Nodemailer)&lt;br&gt;Role: admin / dev&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;shadow=1;fontSize=11;verticalAlign=top;spacingTop=3;" vertex="1" parent="1">
+          <mxGeometry x="280" y="870" width="150" height="120" as="geometry" />
+        </mxCell>
+
+        <!-- Arrow: Dashboard → Auth -->
+        <mxCell id="e_dash_auth" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=1;strokeColor=#d6b656;" edge="1" source="dashboard" target="auth" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_dash_auth_label" value="middleware" style="edgeLabel;html=1;fontSize=10;fontColor=#999999;" vertex="1" connectable="0" parent="e_dash_auth">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- SMTP -->
+        <mxCell id="smtp" value="&lt;b&gt;SMTP&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:10px&quot;&gt;Welcome emails&lt;br&gt;Access requests&lt;/font&gt;" style="shape=hexagon;perimeter=hexagonPerimeter2;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;fontSize=11;size=0.15;" vertex="1" parent="1">
+          <mxGeometry x="80" y="885" width="140" height="70" as="geometry" />
+        </mxCell>
+
+        <!-- Arrow: Auth → SMTP -->
+        <mxCell id="e_auth_smtp" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=1;strokeColor=#999999;dashed=1;" edge="1" source="auth" target="smtp" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- ==================== CRON ==================== -->
+
+        <!-- Cron Manager -->
+        <mxCell id="cron" value="&lt;b&gt;Cron Manager&lt;/b&gt;&lt;br&gt;(cron_manager.js)&lt;br&gt;&lt;hr&gt;&lt;font style=&quot;font-size:10px&quot;&gt;cron_jobs.json watcher&lt;br&gt;node-cron scheduler&lt;br&gt;JSONL logging&lt;br&gt;Auto-reload on change&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;shadow=1;fontSize=11;verticalAlign=top;spacingTop=3;" vertex="1" parent="1">
+          <mxGeometry x="1300" y="440" width="170" height="130" as="geometry" />
+        </mxCell>
+
+        <!-- Arrow: Cron → Claude Manager -->
+        <mxCell id="e_cron_claude" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;strokeColor=#82b366;" edge="1" source="cron" target="claude_mgr" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1385" y="420" />
+              <mxPoint x="1280" y="420" />
+              <mxPoint x="1280" y="210" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e_cron_claude_label" value="spawn task" style="edgeLabel;html=1;fontSize=10;fontColor=#666666;" vertex="1" connectable="0" parent="e_cron_claude">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- cron_jobs.json -->
+        <mxCell id="cron_file" value="&lt;font style=&quot;font-size:10px&quot;&gt;cron_jobs.json&lt;/font&gt;" style="shape=document;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=0.15;fillColor=#f5f5f5;strokeColor=#999999;" vertex="1" parent="1">
+          <mxGeometry x="1440" y="580" width="90" height="50" as="geometry" />
+        </mxCell>
+
+        <!-- Arrow: Cron → cron_jobs.json -->
+        <mxCell id="e_cron_file" style="rounded=1;strokeWidth=1;strokeColor=#999999;dashed=1;" edge="1" source="cron" target="cron_file" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- ==================== CONFIG ==================== -->
+
+        <!-- Config -->
+        <mxCell id="config" value="&lt;b&gt;Config&lt;/b&gt;&lt;br&gt;(config.js)&lt;br&gt;&lt;hr&gt;&lt;font style=&quot;font-size:10px&quot;&gt;CLAUDE_BIN path&lt;br&gt;GEMINI_API_KEY&lt;br&gt;ALLOWED_PHONES&lt;br&gt;JWT_SECRET&lt;br&gt;DB/KB/LOG paths&lt;br&gt;SMTP settings&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;shadow=0;fontSize=11;verticalAlign=top;spacingTop=3;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="560" y="590" width="150" height="140" as="geometry" />
+        </mxCell>
+
+        <!-- ==================== DATA FLOW LEGEND ==================== -->
+
+        <mxCell id="legend_bg" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fafafa;strokeColor=#cccccc;shadow=0;" vertex="1" parent="1">
+          <mxGeometry x="40" y="1020" width="500" height="130" as="geometry" />
+        </mxCell>
+        <mxCell id="legend_title" value="&lt;b&gt;Data Flow Summary&lt;/b&gt;" style="text;html=1;fontSize=13;fontStyle=0;align=left;verticalAlign=top;fillColor=none;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="55" y="1030" width="200" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="legend_text" value="&lt;font style=&quot;font-size:11px&quot;&gt;1. User sends WhatsApp msg → Baileys bridge → Main Router&lt;br&gt;2. Router → Orchestrator → Gemini classifies intent → returns Action&lt;br&gt;3. Router → Claude Manager → spawns Claude Code CLI via PTY&lt;br&gt;4. Claude reads KB, edits code, streams JSON events back&lt;br&gt;5. Events → Router → broadcast reply via WhatsApp&lt;br&gt;6. Dashboard provides alternative web interface to same engine&lt;br&gt;7. Cron Manager triggers scheduled tasks independently&lt;/font&gt;" style="text;html=1;fontSize=11;align=left;verticalAlign=top;fillColor=none;strokeColor=none;spacingLeft=5;" vertex="1" parent="1">
+          <mxGeometry x="55" y="1055" width="470" height="90" as="geometry" />
+        </mxCell>
+
+        <!-- ==================== TWO-STAGE LLM LABEL ==================== -->
+
+        <mxCell id="two_stage" value="&lt;b&gt;Two-Stage LLM Architecture&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:10px;color:#666&quot;&gt;Stage 1: Gemini (fast, cheap) → intent routing&lt;br&gt;Stage 2: Claude Code (powerful) → code execution&lt;/font&gt;" style="shape=callout;whiteSpace=wrap;html=1;perimeter=calloutPerimeter;size=20;position=0.5;position2=1;base=30;fillColor=#fff2cc;strokeColor=#d6b656;shadow=0;fontSize=12;rounded=1;" vertex="1" parent="1">
+          <mxGeometry x="780" y="545" width="280" height="80" as="geometry" />
+        </mxCell>
+
+        <!-- WhatsApp Auth Info -->
+        <mxCell id="auth_info" value="&lt;font style=&quot;font-size:10px&quot;&gt;auth_info/&lt;br&gt;(Baileys creds)&lt;/font&gt;" style="shape=document;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=0.15;fillColor=#f5f5f5;strokeColor=#999999;" vertex="1" parent="1">
+          <mxGeometry x="310" y="320" width="90" height="50" as="geometry" />
+        </mxCell>
+
+        <!-- Arrow: WhatsApp Bridge → auth_info -->
+        <mxCell id="e_wa_auth" style="rounded=1;strokeWidth=1;strokeColor=#999999;dashed=1;" edge="1" source="wa_bridge" target="auth_info" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- SQLite DB file -->
+        <mxCell id="db_file" value="&lt;font style=&quot;font-size:10px&quot;&gt;sessions.db&lt;br&gt;(SQLite + WAL)&lt;/font&gt;" style="shape=document;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=0.15;fillColor=#e6d0de;strokeColor=#996185;" vertex="1" parent="1">
+          <mxGeometry x="1080" y="650" width="100" height="50" as="geometry" />
+        </mxCell>
+
+        <!-- Arrow: Session Store → DB file -->
+        <mxCell id="e_store_db" style="rounded=1;strokeWidth=1;strokeColor=#996185;dashed=1;" edge="1" source="session_store" target="db_file" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
