@@ -37,3 +37,6 @@ kb/
 # OS metadata
 .DS_Store
 Thumbs.db
+sessions.db-shm
+sessions.db-wal
+cron_jobs.json
