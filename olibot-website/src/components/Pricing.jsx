@@ -5,7 +5,7 @@ const plans = [
     tier: 'Solo',
     price: '79',
     note: 'one-time payment',
-    features: ['1 user account', '1 WhatsApp phone', 'All features included', '6 months of updates', 'Email support'],
+    features: ['1 user account', '1 chat platform', 'All features included', '6 months of updates', 'Email support'],
     featured: false,
   },
   {
@@ -13,14 +13,14 @@ const plans = [
     price: '199',
     note: 'one-time payment',
     label: 'Most popular',
-    features: ['5 user accounts', '3 WhatsApp phones', 'All features included', '1 year of updates', 'Priority support', 'Setup call included'],
+    features: ['5 user accounts', '3 chat platforms', 'All features included', '1 year of updates', 'Priority support', 'Setup call included'],
     featured: true,
   },
   {
     tier: 'Agency',
     price: '499',
     note: 'one-time payment',
-    features: ['Unlimited users', '10 WhatsApp phones', 'All features included', 'Lifetime updates', 'Priority support', 'Setup call + custom config'],
+    features: ['Unlimited users', '10 chat platforms', 'All features included', 'Lifetime updates', 'Priority support', 'Setup call + custom config'],
     featured: false,
   },
 ]
@@ -43,7 +43,7 @@ export default function Pricing() {
           <p className="text-base mt-2 max-w-lg mx-auto">No subscriptions. No per-seat fees. You own the code and run it on your infrastructure.</p>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-px bg-border border border-border rounded-lg overflow-hidden">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-px bg-border border border-border rounded-lg overflow-hidden shadow-sm">
           {plans.map((plan, i) => (
             <FadeIn key={i} delay={i * 60}>
               <div className={`p-8 flex flex-col ${plan.featured ? 'bg-surface-2' : 'bg-surface'}`}>
@@ -67,8 +67,8 @@ export default function Pricing() {
                   onClick={scrollTo}
                   className={`w-full py-2.5 rounded-md text-sm font-medium text-center transition-colors cursor-pointer block ${
                     plan.featured
-                      ? 'bg-primary text-bg hover:bg-primary-hover'
-                      : 'border border-border text-text-bright hover:border-text-dim'
+                      ? 'bg-primary text-white hover:bg-primary-hover'
+                      : 'border border-border text-text-bright hover:border-border-strong'
                   }`}
                 >
                   Get Started

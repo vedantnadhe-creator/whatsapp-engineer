@@ -48,16 +48,16 @@ export default function Hero() {
       <div className="max-w-content mx-auto px-6 grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
         <div>
           <h1 className="font-heading text-[32px] md:text-[48px] font-bold text-text-bright leading-tight tracking-tight">
-            Ship code from<br/>a WhatsApp message.
+            Your AI dev team.<br/>Message in. Code out.
           </h1>
           <p className="text-base text-text-main leading-relaxed mt-4 mb-8 max-w-[440px]">
-            Oli Bot is an autonomous AI engineer that reads your codebase, writes production code, fixes bugs, and pushes to GitHub — triggered from WhatsApp or a web dashboard.
+            Oli Bot is an autonomous AI engineer that reads your codebase, writes production code, fixes bugs, and pushes to GitHub — triggered from any chat platform or the web dashboard.
           </p>
           <div className="flex flex-col sm:flex-row gap-3 mb-10">
-            <a href="#register" onClick={e => scrollTo(e, '#register')} className="px-6 py-2.5 bg-primary text-bg rounded-md text-sm font-medium hover:bg-primary-hover transition-colors text-center cursor-pointer">
+            <a href="#register" onClick={e => scrollTo(e, '#register')} className="px-6 py-2.5 bg-primary text-white rounded-md text-sm font-medium hover:bg-primary-hover transition-colors text-center cursor-pointer">
               Request Access
             </a>
-            <a href="#demo" onClick={e => scrollTo(e, '#demo')} className="px-6 py-2.5 border border-border text-text-bright rounded-md text-sm font-medium hover:border-text-dim transition-colors text-center cursor-pointer">
+            <a href="#demo" onClick={e => scrollTo(e, '#demo')} className="px-6 py-2.5 border border-border text-text-bright rounded-md text-sm font-medium hover:border-border-strong transition-colors text-center cursor-pointer">
               See it in action
             </a>
           </div>
@@ -70,14 +70,15 @@ export default function Hero() {
           </div>
         </div>
 
-        <div id="terminal" className="bg-code-bg border border-border rounded-lg overflow-hidden">
-          <div className="flex items-center gap-3 px-3.5 py-2.5 bg-surface border-b border-border">
+        {/* Terminal stays dark — it's a code block */}
+        <div id="terminal" className="bg-code-bg border border-[#1e293b] rounded-lg overflow-hidden shadow-sm">
+          <div className="flex items-center gap-3 px-3.5 py-2.5 bg-[#1e293b] border-b border-[#334155]">
             <div className="flex gap-1.5">
               <span className="w-2.5 h-2.5 rounded-full bg-red-500" />
               <span className="w-2.5 h-2.5 rounded-full bg-yellow-500" />
               <span className="w-2.5 h-2.5 rounded-full bg-green-500" />
             </div>
-            <span className="font-mono text-xs text-text-dim">oli-bot session</span>
+            <span className="font-mono text-xs text-[#64748b]">oli-bot session</span>
           </div>
           <div className="p-4 flex flex-col gap-2.5">
             {terminalLines.map((line, i) => (
@@ -87,12 +88,12 @@ export default function Hero() {
                 className="flex gap-2.5 font-mono text-[13px] leading-relaxed"
                 style={{ opacity: 0, transform: 'translateY(4px)', transition: 'opacity 300ms ease, transform 300ms ease' }}
               >
-                <span className={`min-w-[28px] shrink-0 select-none ${line.type === 'user' ? 'text-primary' : 'text-text-dim'}`}>
+                <span className={`min-w-[28px] shrink-0 select-none ${line.type === 'user' ? 'text-[#22c55e]' : 'text-[#64748b]'}`}>
                   {line.prompt}
                 </span>
                 <span className={
-                  line.type === 'done' ? 'text-primary' :
-                  line.type === 'user' ? 'text-text-bright' : 'text-text-main'
+                  line.type === 'done' ? 'text-[#22c55e]' :
+                  line.type === 'user' ? 'text-[#f8fafc]' : 'text-[#94a3b8]'
                 }>
                   {line.text}
                 </span>

@@ -14,7 +14,7 @@ export default function UseCases() {
           <h2 className="font-heading text-2xl md:text-[32px] text-text-bright tracking-tight">Built for teams that move fast</h2>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-px bg-border border border-border rounded-lg overflow-hidden">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-px bg-border border border-border rounded-lg overflow-hidden shadow-sm">
           {cases.map((c, i) => (
             <FadeIn key={i} delay={i * 60}>
               <div className="bg-surface p-7">

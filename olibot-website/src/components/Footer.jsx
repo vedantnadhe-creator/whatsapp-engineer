@@ -4,8 +4,8 @@ export default function Footer() {
       <div className="max-w-content mx-auto px-6 flex flex-col md:flex-row items-center justify-between gap-4">
         <div className="flex items-center gap-2 font-heading font-semibold text-sm text-text-bright">
           <svg width="20" height="20" viewBox="0 0 32 32" fill="none">
-            <rect width="32" height="32" rx="8" fill="#22C55E"/>
-            <path d="M10 16l4 4 8-8" stroke="#0F172A" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/>
+            <rect width="32" height="32" rx="8" fill="#16a34a"/>
+            <path d="M10 16l4 4 8-8" stroke="#fff" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/>
           </svg>
           Oli Bot
         </div>

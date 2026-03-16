@@ -11,7 +11,7 @@ const features = [
 ]
 
 const integrations = [
-  'GitHub', 'Jira', 'Notion', 'Slack', 'Linear', 'WhatsApp', 'PostgreSQL', 'Browser',
+  'GitHub', 'Jira', 'Notion', 'Slack', 'Linear', 'WhatsApp', 'Telegram', 'PostgreSQL', 'Browser',
 ]
 
 export default function Features() {
@@ -25,17 +25,17 @@ export default function Features() {
 
         {/* Large feature card */}
         <FadeIn>
-          <div className="border border-border rounded-lg bg-surface p-6 md:p-8 grid grid-cols-1 md:grid-cols-2 gap-6 mb-px">
+          <div className="border border-border rounded-lg bg-surface p-6 md:p-8 grid grid-cols-1 md:grid-cols-2 gap-6 mb-px shadow-sm">
             <div>
               <span className="font-mono text-[11px] font-medium text-primary uppercase tracking-wider">Core</span>
               <h3 className="font-heading text-xl md:text-[22px] text-text-bright mt-2 mb-2">Code from anywhere</h3>
-              <p className="text-sm leading-relaxed">Send a WhatsApp message or use the web dashboard. Describe what you need in plain English — Oli Bot handles the rest. No IDE required.</p>
+              <p className="text-sm leading-relaxed">Send a message from WhatsApp, Telegram, or the web dashboard. Describe what you need in plain English — Oli Bot handles the rest. No IDE required.</p>
             </div>
-            <div className="bg-code-bg border border-border rounded-lg p-4 flex flex-col gap-2.5">
-              <div className="self-end bg-primary text-bg text-[13px] px-3.5 py-2 rounded-lg rounded-br-sm max-w-[85%]">
+            <div className="bg-code-bg border border-[#1e293b] rounded-lg p-4 flex flex-col gap-2.5">
+              <div className="self-end bg-[#22c55e] text-[#0f172a] text-[13px] px-3.5 py-2 rounded-lg rounded-br-sm max-w-[85%] font-medium">
                 Add pagination to the users API endpoint
               </div>
-              <div className="self-start bg-surface-2 text-text-main text-[13px] px-3.5 py-2 rounded-lg rounded-bl-sm max-w-[85%]">
+              <div className="self-start bg-[#1e293b] text-[#94a3b8] text-[13px] px-3.5 py-2 rounded-lg rounded-bl-sm max-w-[85%]">
                 On it. Reading routes/users.js... Adding offset/limit params with cursor-based pagination. Done — pushed to dev branch.
               </div>
             </div>
@@ -43,7 +43,7 @@ export default function Features() {
         </FadeIn>
 
         {/* Feature grid */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-px bg-border border border-border rounded-lg overflow-hidden">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-px bg-border border border-border rounded-lg overflow-hidden mt-px shadow-sm">
           {features.map((f, i) => (
             <FadeIn key={i} delay={i * 60}>
               <div className="bg-surface p-6">

@@ -26,8 +26,8 @@ export default function Nav() {
       <div className="max-w-content mx-auto px-6 h-14 flex items-center justify-between">
         <a href="#" className="flex items-center gap-2 font-heading font-semibold text-base text-text-bright">
           <svg width="24" height="24" viewBox="0 0 32 32" fill="none">
-            <rect width="32" height="32" rx="8" fill="#22C55E"/>
-            <path d="M10 16l4 4 8-8" stroke="#0F172A" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/>
+            <rect width="32" height="32" rx="8" fill="#16a34a"/>
+            <path d="M10 16l4 4 8-8" stroke="#fff" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/>
           </svg>
           Oli Bot
         </a>
@@ -36,7 +36,7 @@ export default function Nav() {
           <a href="#features" onClick={e => handleClick(e, '#features')} className="text-sm text-text-main hover:text-text-bright transition-colors cursor-pointer">Features</a>
           <a href="#how" onClick={e => handleClick(e, '#how')} className="text-sm text-text-main hover:text-text-bright transition-colors cursor-pointer">How it works</a>
           <a href="#pricing" onClick={e => handleClick(e, '#pricing')} className="text-sm text-text-main hover:text-text-bright transition-colors cursor-pointer">Pricing</a>
-          <a href="#register" onClick={e => handleClick(e, '#register')} className="px-4 py-1.5 bg-primary text-bg rounded-md text-sm font-medium hover:bg-primary-hover transition-colors cursor-pointer">Get Access</a>
+          <a href="#register" onClick={e => handleClick(e, '#register')} className="px-4 py-1.5 bg-primary text-white rounded-md text-sm font-medium hover:bg-primary-hover transition-colors cursor-pointer">Get Access</a>
         </div>
 
         <button onClick={() => setOpen(!open)} className="md:hidden text-text-main cursor-pointer bg-transparent border-none p-1">
@@ -49,7 +49,7 @@ export default function Nav() {
           <a href="#features" onClick={e => handleClick(e, '#features')} className="text-sm text-text-main cursor-pointer">Features</a>
           <a href="#how" onClick={e => handleClick(e, '#how')} className="text-sm text-text-main cursor-pointer">How it works</a>
           <a href="#pricing" onClick={e => handleClick(e, '#pricing')} className="text-sm text-text-main cursor-pointer">Pricing</a>
-          <a href="#register" onClick={e => handleClick(e, '#register')} className="px-4 py-2 bg-primary text-bg rounded-md text-sm font-medium text-center cursor-pointer">Get Access</a>
+          <a href="#register" onClick={e => handleClick(e, '#register')} className="px-4 py-2 bg-primary text-white rounded-md text-sm font-medium text-center cursor-pointer">Get Access</a>
         </div>
       )}
     </nav>

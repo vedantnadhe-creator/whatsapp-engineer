@@ -13,8 +13,8 @@ html {
 body {
   margin: 0;
   font-family: 'DM Sans', system-ui, sans-serif;
-  background: #0F172A;
-  color: #94A3B8;
+  background: #f8fafb;
+  color: #475569;
 }
 
 @media (prefers-reduced-motion: reduce) {

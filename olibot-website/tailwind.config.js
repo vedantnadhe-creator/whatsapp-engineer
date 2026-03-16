@@ -4,16 +4,18 @@ export default {
   theme: {
     extend: {
       colors: {
-        bg: '#0F172A',
-        surface: '#1E293B',
-        'surface-2': '#253449',
-        border: '#334155',
-        primary: '#22C55E',
-        'primary-hover': '#16A34A',
-        'text-bright': '#F8FAFC',
-        'text-main': '#94A3B8',
-        'text-dim': '#64748B',
-        'code-bg': '#0B1120',
+        bg: '#f8fafb',
+        surface: '#ffffff',
+        'surface-2': '#f1f5f9',
+        border: '#e2e8f0',
+        'border-strong': '#cbd5e1',
+        primary: '#16a34a',
+        'primary-hover': '#15803d',
+        'primary-light': 'rgba(22, 163, 74, 0.08)',
+        'text-bright': '#0f172a',
+        'text-main': '#475569',
+        'text-dim': '#94a3b8',
+        'code-bg': '#0f172a',
       },
       fontFamily: {
         heading: ['"Space Grotesk"', 'system-ui', 'sans-serif'],
