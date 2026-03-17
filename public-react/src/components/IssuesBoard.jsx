@@ -492,7 +492,7 @@ function renderDescription(text) {
   });
 }
 
-function IssueDetail({ issue, onBack, onUpdate, onDelete, onGoToSession }) {
+function IssueDetail({ issue, onBack, onUpdate, onDelete, onGoToSession, isTester = false }) {
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(issue.title);
   const [description, setDescription] = useState(issue.description || '');
@@ -519,13 +519,15 @@ function IssueDetail({ issue, onBack, onUpdate, onDelete, onGoToSession }) {
           {issue.id}
         </span>
         <div className="flex-1" />
-        <button
-          onClick={() => { if (confirm('Delete this issue?')) { onDelete(issue.id); onBack(); } }}
-          className="p-1 rounded cursor-pointer hover:opacity-80"
-          title="Delete issue"
-        >
-          <Trash2 size={14} style={{ color: '#ef4444' }} />
-        </button>
+        {!isTester && (
+          <button
+            onClick={() => { if (confirm('Delete this issue?')) { onDelete(issue.id); onBack(); } }}
+            className="p-1 rounded cursor-pointer hover:opacity-80"
+            title="Delete issue"
+          >
+            <Trash2 size={14} style={{ color: '#ef4444' }} />
+          </button>
+        )}
       </div>
 
       <div className="flex-1 overflow-y-auto p-6">
@@ -667,6 +669,7 @@ export default function IssuesBoard({
   onGoToSession,
   onBack,
   sessions = [],
+  userRole = 'developer',
 }) {
   const [showCreate, setShowCreate] = useState(false);
   const [selectedIssue, setSelectedIssue] = useState(null);
@@ -676,6 +679,7 @@ export default function IssuesBoard({
   const [selectedIds, setSelectedIds] = useState(new Set());
 
   const isAutoRunning = autonomousStatus?.running;
+  const isTester = userRole === 'tester';
 
   const toggleSelect = useCallback((id) => {
     setSelectedIds(prev => {
@@ -723,6 +727,7 @@ export default function IssuesBoard({
           onUpdate={(id, updates) => { onUpdateIssue(id, updates); }}
           onDelete={onDeleteIssue}
           onGoToSession={onGoToSession}
+          isTester={isTester}
         />
       </div>
     );
@@ -777,15 +782,17 @@ export default function IssuesBoard({
             <span className="text-[10px] font-mono" style={{ color: colors.textSecondary }}>
               {selectedIds.size} selected
             </span>
-            <button
-              onClick={() => { onStartAutonomous([...selectedIds]); clearSelection(); }}
-              className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md font-medium cursor-pointer text-white flex-shrink-0"
-              style={{ backgroundColor: '#22c55e' }}
-            >
-              <Play size={12} />
-              <span className="hidden sm:inline">Run Selected</span>
-              <span className="sm:hidden">Run</span>
-            </button>
+            {!isTester && (
+              <button
+                onClick={() => { onStartAutonomous([...selectedIds]); clearSelection(); }}
+                className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md font-medium cursor-pointer text-white flex-shrink-0"
+                style={{ backgroundColor: '#22c55e' }}
+              >
+                <Play size={12} />
+                <span className="hidden sm:inline">Run Selected</span>
+                <span className="sm:hidden">Run</span>
+              </button>
+            )}
             <button
               onClick={clearSelection}
               className="text-xs px-2 py-1.5 rounded-md cursor-pointer flex-shrink-0"
@@ -797,8 +804,8 @@ export default function IssuesBoard({
           </>
         )}
 
-        {/* Autonomous run button */}
-        {isAutoRunning ? (
+        {/* Autonomous run button — hidden for testers */}
+        {!isTester && (isAutoRunning ? (
           <button
             onClick={onStopAutonomous}
             className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md font-medium cursor-pointer text-white flex-shrink-0"
@@ -819,7 +826,7 @@ export default function IssuesBoard({
             <span className="hidden sm:inline">Run All</span>
             <span className="sm:hidden">Run</span>
           </button>
-        )}
+        ))}
 
         <button
           onClick={() => setShowCreate(!showCreate)}

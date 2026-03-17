@@ -35,6 +35,7 @@ export function UsersPanel({ users = [], onAdd, onDelete, onResetPassword }) {
         <input value={name} onChange={e => setName(e.target.value)} placeholder="Display name" className="bg-surface-2 border border-border rounded-lg px-3 py-2 text-sm text-text-primary placeholder-text-muted outline-none focus:border-accent" />
         <select value={role} onChange={e => setRole(e.target.value)} className="bg-surface-2 border border-border rounded-lg px-3 py-2 text-sm text-text-primary outline-none focus:border-accent cursor-pointer">
           <option value="developer">Developer</option>
+          <option value="tester">Tester</option>
           <option value="viewer">Viewer</option>
           <option value="admin">Admin</option>
         </select>

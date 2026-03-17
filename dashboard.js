@@ -568,6 +568,7 @@ export function startDashboard(store, messageHandler, port = 18790, wa = null, e
 
     app.delete('/api/issues/:id', requireAuth, (req, res) => {
         try {
+            if (req.user.role === 'tester') return res.status(403).json({ error: 'Testers cannot delete issues' });
             store.deleteIssue(req.params.id);
             wsBroadcast('issue_deleted', { issueId: req.params.id });
             res.json({ success: true });
@@ -591,6 +592,7 @@ export function startDashboard(store, messageHandler, port = 18790, wa = null, e
 
     app.post('/api/autonomous/start', requireAuth, async (req, res) => {
         try {
+            if (req.user.role === 'tester') return res.status(403).json({ error: 'Testers cannot run issues' });
             if (autonomousState.running) return res.status(400).json({ error: 'Autonomous runner is already active' });
             autonomousState.running = true;
 
@@ -640,6 +642,7 @@ export function startDashboard(store, messageHandler, port = 18790, wa = null, e
 
     app.post('/api/autonomous/stop', requireAuth, (req, res) => {
         try {
+            if (req.user.role === 'tester') return res.status(403).json({ error: 'Testers cannot stop runs' });
             if (autonomousState.sessionId && executionEngine) {
                 try { executionEngine.stopSession(autonomousState.sessionId); } catch (_) { }
             }

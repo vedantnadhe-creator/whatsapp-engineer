@@ -225,6 +225,7 @@ function Dashboard() {
             onStartAutonomous={(issueIds) => startAutonomous('opus', issueIds)}
             onStopAutonomous={stopAutonomous}
             sessions={sessions}
+            userRole={user?.role || 'developer'}
             onGoToSession={(sessionId) => {
               const session = sessions.find(s => s.id === sessionId)
               if (session) {
