@@ -1,28 +1,13 @@
+import { Check, Phone } from 'lucide-react'
 import FadeIn from './FadeIn'
 
-const plans = [
-  {
-    tier: 'Solo',
-    price: '79',
-    note: 'one-time payment',
-    features: ['1 user account', '1 chat platform', 'All features included', '6 months of updates', 'Email support'],
-    featured: false,
-  },
-  {
-    tier: 'Team',
-    price: '199',
-    note: 'one-time payment',
-    label: 'Most popular',
-    features: ['5 user accounts', '3 chat platforms', 'All features included', '1 year of updates', 'Priority support', 'Setup call included'],
-    featured: true,
-  },
-  {
-    tier: 'Agency',
-    price: '499',
-    note: 'one-time payment',
-    features: ['Unlimited users', '10 chat platforms', 'All features included', 'Lifetime updates', 'Priority support', 'Setup call + custom config'],
-    featured: false,
-  },
+const highlights = [
+  'Self-hosted — your data never leaves your servers',
+  'One-time purchase — no subscriptions, no per-seat fees',
+  'Custom setup tailored to your team and stack',
+  'Priority support and onboarding included',
+  'All connectors and integrations unlocked',
+  'Lifetime updates with every plan',
 ]
 
 export default function Pricing() {
@@ -37,46 +22,41 @@ export default function Pricing() {
 
   return (
     <section id="pricing" className="py-20 border-t border-border">
-      <div className="max-w-content mx-auto px-6">
+      <div className="max-w-narrow mx-auto px-6">
         <div className="text-center mb-12">
-          <h2 className="font-heading text-2xl md:text-[32px] text-text-bright tracking-tight">One-time purchase. Self-hosted. Yours forever.</h2>
-          <p className="text-base mt-2 max-w-lg mx-auto">No subscriptions. No per-seat fees. You own the code and run it on your infrastructure.</p>
+          <h2 className="font-heading text-2xl md:text-[32px] text-text-bright tracking-tight">Your AI engineer. Your price.</h2>
+          <p className="text-base mt-2 max-w-lg mx-auto">Every team is different. We'll hop on a quick call, understand your workflow, and put together a plan that fits.</p>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-px bg-border border border-border rounded-lg overflow-hidden shadow-sm">
-          {plans.map((plan, i) => (
-            <FadeIn key={i} delay={i * 60}>
-              <div className={`p-8 flex flex-col ${plan.featured ? 'bg-surface-2' : 'bg-surface'}`}>
-                {plan.label && (
-                  <span className="font-mono text-[11px] text-primary uppercase tracking-wider mb-2">{plan.label}</span>
-                )}
-                <span className="font-heading text-sm font-medium text-text-main">{plan.tier}</span>
-                <div className="font-heading text-[44px] font-bold text-text-bright tracking-tight leading-none mt-2 mb-1">
-                  <span className="text-2xl font-medium align-top leading-[1.6]">$</span>{plan.price}
+        <FadeIn>
+          <div className="border border-border bg-surface rounded-lg p-8 md:p-10 text-center shadow-sm">
+            <div className="inline-flex items-center gap-2 px-3 py-1 bg-primary-light border border-primary/20 rounded-full text-xs font-medium text-primary mb-6">
+              <Phone size={12} />
+              15-minute call
+            </div>
+
+            <h3 className="font-heading text-xl md:text-2xl text-text-bright mb-3">Let's talk and figure out the right fit.</h3>
+            <p className="text-sm text-text-main max-w-md mx-auto mb-8">No sales pitch. No pressure. Just a quick conversation to see how Oli Bot can plug into your team — and what it should cost for your setup.</p>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-left mb-8 max-w-lg mx-auto">
+              {highlights.map((item, i) => (
+                <div key={i} className="flex items-start gap-2.5">
+                  <Check size={16} className="text-primary mt-0.5 shrink-0" strokeWidth={2} />
+                  <span className="text-sm text-text-main">{item}</span>
                 </div>
-                <span className="text-[13px] text-text-dim mb-6">{plan.note}</span>
+              ))}
+            </div>
 
-                <ul className="flex-1 mb-6">
-                  {plan.features.map((f, j) => (
-                    <li key={j} className="py-2 text-sm text-text-main border-b border-border/50 last:border-b-0">{f}</li>
-                  ))}
-                </ul>
-
-                <a
-                  href="#register"
-                  onClick={scrollTo}
-                  className={`w-full py-2.5 rounded-md text-sm font-medium text-center transition-colors cursor-pointer block ${
-                    plan.featured
-                      ? 'bg-primary text-white hover:bg-primary-hover'
-                      : 'border border-border text-text-bright hover:border-border-strong'
-                  }`}
-                >
-                  Get Started
-                </a>
-              </div>
-            </FadeIn>
-          ))}
-        </div>
+            <a
+              href="#register"
+              onClick={scrollTo}
+              className="inline-block px-8 py-3 bg-primary text-white rounded-md text-sm font-medium hover:bg-primary-hover transition-colors cursor-pointer"
+            >
+              Book a Call
+            </a>
+            <p className="text-[13px] text-text-dim mt-4">No commitment. Cancel anytime before setup.</p>
+          </div>
+        </FadeIn>
       </div>
     </section>
   )

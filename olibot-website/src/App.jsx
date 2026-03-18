@@ -2,6 +2,7 @@ import Nav from './components/Nav'
 import Hero from './components/Hero'
 import Demo from './components/Demo'
 import Features from './components/Features'
+import Connectors from './components/Connectors'
 import HowItWorks from './components/HowItWorks'
 import UseCases from './components/UseCases'
 import Pricing from './components/Pricing'
@@ -15,6 +16,7 @@ function App() {
       <Hero />
       <Demo />
       <Features />
+      <Connectors />
       <HowItWorks />
       <UseCases />
       <Pricing />

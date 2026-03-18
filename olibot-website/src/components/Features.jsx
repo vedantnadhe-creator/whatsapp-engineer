@@ -10,9 +10,6 @@ const features = [
   { icon: BarChart3, title: 'Cost tracking', desc: 'Real-time spend per session and per user. Know exactly how much each task costs across Claude and Gemini models.' },
 ]
 
-const integrations = [
-  'GitHub', 'Jira', 'Notion', 'Slack', 'Linear', 'WhatsApp', 'Telegram', 'PostgreSQL', 'Browser',
-]
 
 export default function Features() {
   return (
@@ -55,15 +52,6 @@ export default function Features() {
           ))}
         </div>
 
-        {/* Integrations */}
-        <div className="mt-12 text-center">
-          <p className="text-[13px] text-text-dim mb-5">Connects with your stack</p>
-          <div className="flex justify-center gap-6 md:gap-8 flex-wrap">
-            {integrations.map(name => (
-              <span key={name} className="text-xs text-text-dim hover:text-text-main transition-colors cursor-default">{name}</span>
-            ))}
-          </div>
-        </div>
       </div>
     </section>
   )

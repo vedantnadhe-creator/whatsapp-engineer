@@ -37,6 +37,7 @@ export function startDashboard(store, messageHandler, port = 18790, wa = null, e
     app.use(express.json({ strict: false }));
     app.use(cookieParser());
     app.use(express.static(path.join(__dirname, 'public')));
+    app.use('/sessions', express.static(path.join(__dirname, 'public')));
 
     // ── Auth ──────────────────────────────────────────────
 
