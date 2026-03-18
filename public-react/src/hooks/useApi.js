@@ -292,6 +292,50 @@ export async function transcribeAudio(blob) {
 }
 
 // ---------------------------------------------------------------------------
+// Team members (for assignment dropdowns)
+// ---------------------------------------------------------------------------
+
+export function useTeamMembers() {
+  const { data, loading, error, refresh } = useGet('/api/users');
+  return { members: data ?? [], loading, error, refresh };
+}
+
+// ---------------------------------------------------------------------------
+// Sprints
+// ---------------------------------------------------------------------------
+
+export function useSprints() {
+  const { data, loading, error, refresh } = useGet('/api/sprints');
+
+  const createSprint = useCallback(async (sprintData) => {
+    const result = await apiFetch('/api/sprints', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(sprintData),
+    });
+    refresh();
+    return result;
+  }, [refresh]);
+
+  const updateSprint = useCallback(async (id, updates) => {
+    const result = await apiFetch(`/api/sprints/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updates),
+    });
+    refresh();
+    return result;
+  }, [refresh]);
+
+  const deleteSprint = useCallback(async (id) => {
+    await apiFetch(`/api/sprints/${id}`, { method: 'DELETE' });
+    refresh();
+  }, [refresh]);
+
+  return { sprints: data ?? [], loading, error, refresh, createSprint, updateSprint, deleteSprint };
+}
+
+// ---------------------------------------------------------------------------
 // Issues hooks & helpers
 // ---------------------------------------------------------------------------
 

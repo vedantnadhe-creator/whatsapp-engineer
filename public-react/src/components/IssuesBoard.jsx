@@ -13,15 +13,19 @@ import {
   Trash2,
   ArrowLeft,
   Zap,
-  GripVertical,
   Tag,
   X,
   Paperclip,
   GitBranch,
+  User,
+  Calendar,
+  Bug,
+  Lightbulb,
+  Wrench,
+  ListTodo,
 } from 'lucide-react';
 
 // SQLite CURRENT_TIMESTAMP returns 'YYYY-MM-DD HH:MM:SS' without timezone.
-// Append 'Z' so the browser treats it as UTC, then toLocale* converts to local.
 function parseUTC(ts) {
   if (!ts) return null;
   const s = String(ts);
@@ -53,6 +57,13 @@ const PRIORITY_CONFIG = {
   low: { label: 'Low', color: '#6b7280', weight: 3 },
 };
 
+const TYPE_CONFIG = {
+  bug: { label: 'Bug', icon: Bug, color: '#ef4444' },
+  feature: { label: 'Feature', icon: Lightbulb, color: '#8b5cf6' },
+  task: { label: 'Task', icon: ListTodo, color: '#3b82f6' },
+  improvement: { label: 'Improvement', icon: Wrench, color: '#06b6d4' },
+};
+
 const STATUS_ORDER = ['todo', 'in_progress', 'completed', 'question'];
 
 function StatusIcon({ status, size = 14 }) {
@@ -69,6 +80,36 @@ function PriorityDot({ priority }) {
       style={{ backgroundColor: config.color }}
       title={config.label}
     />
+  );
+}
+
+function TypeBadge({ type }) {
+  const config = TYPE_CONFIG[type] || TYPE_CONFIG.task;
+  const Icon = config.icon;
+  return (
+    <span
+      className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded font-medium flex-shrink-0"
+      style={{ backgroundColor: `${config.color}15`, color: config.color }}
+      title={config.label}
+    >
+      <Icon size={10} />
+      {config.label}
+    </span>
+  );
+}
+
+function AssigneeBadge({ name }) {
+  if (!name) return null;
+  const initials = name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
+  return (
+    <span
+      className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded font-mono flex-shrink-0"
+      style={{ backgroundColor: colors.surface3, color: colors.textSecondary }}
+      title={name}
+    >
+      <User size={9} />
+      {initials}
+    </span>
   );
 }
 
@@ -120,6 +161,8 @@ function IssueRow({ issue, onSelect, onStatusChange, onGoToSession, selected, on
         {issue.id}
       </span>
 
+      <TypeBadge type={issue.type || 'task'} />
+
       <span
         className="text-sm flex-1 min-w-0 truncate"
         style={{ color: colors.text }}
@@ -128,6 +171,8 @@ function IssueRow({ issue, onSelect, onStatusChange, onGoToSession, selected, on
       </span>
 
       <PriorityDot priority={issue.priority} />
+
+      <AssigneeBadge name={issue.assignee_name} />
 
       {issue.labels && JSON.parse(issue.labels || '[]').length > 0 && (
         <div className="flex gap-1 flex-shrink-0">
@@ -214,14 +259,17 @@ function FilePreview({ file, previewUrl, isImage, onRemove }) {
   );
 }
 
-function CreateIssueForm({ onSubmit, onCancel, onUploadFile, sessions = [] }) {
+function CreateIssueForm({ onSubmit, onCancel, onUploadFile, sessions = [], members = [], sprints = [], currentSprintId = '' }) {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [priority, setPriority] = useState('medium');
+  const [type, setType] = useState('task');
   const [labelInput, setLabelInput] = useState('');
   const [labels, setLabels] = useState([]);
   const [attachments, setAttachments] = useState([]);
   const [forkSessionId, setForkSessionId] = useState('');
+  const [assignedTo, setAssignedTo] = useState('');
+  const [sprintId, setSprintId] = useState(currentSprintId);
   const [submitting, setSubmitting] = useState(false);
   const titleRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -270,16 +318,13 @@ function CreateIssueForm({ onSubmit, onCancel, onUploadFile, sessions = [] }) {
     if (!title.trim()) return;
     setSubmitting(true);
     try {
-      // Upload attachments and collect URLs
       let desc = description.trim();
       const uploadedFiles = [];
       if (attachments.length > 0 && onUploadFile) {
         const results = await Promise.allSettled(
           attachments.map(async (att) => {
             const result = await onUploadFile(att.file);
-            if (result?.url) {
-              return { name: att.file.name, url: result.url, isImage: att.isImage };
-            }
+            if (result?.url) return { name: att.file.name, url: result.url, isImage: att.isImage };
             return null;
           })
         );
@@ -293,15 +338,19 @@ function CreateIssueForm({ onSubmit, onCancel, onUploadFile, sessions = [] }) {
           desc = (desc ? desc + '\n\n' : '') + lines.join('\n');
         }
       }
-      await onSubmit({ title: title.trim(), description: desc, priority, labels, forkSessionId: forkSessionId || undefined });
-      // Cleanup
+      await onSubmit({
+        title: title.trim(),
+        description: desc,
+        priority,
+        type,
+        labels,
+        forkSessionId: forkSessionId || undefined,
+        assignedTo: assignedTo || undefined,
+        sprintId: sprintId || undefined,
+      });
       attachments.forEach((att) => { if (att.previewUrl) URL.revokeObjectURL(att.previewUrl); });
-      setTitle('');
-      setDescription('');
-      setPriority('medium');
-      setLabels([]);
-      setAttachments([]);
-      setForkSessionId('');
+      setTitle(''); setDescription(''); setPriority('medium'); setType('task');
+      setLabels([]); setAttachments([]); setForkSessionId(''); setAssignedTo(''); setSprintId(currentSprintId);
     } finally {
       setSubmitting(false);
     }
@@ -333,22 +382,28 @@ function CreateIssueForm({ onSubmit, onCancel, onUploadFile, sessions = [] }) {
         style={{ color: colors.textSecondary }}
       />
 
-      {/* Attachment previews */}
       {attachments.length > 0 && (
         <div className="flex gap-2 mb-3 overflow-x-auto pb-1">
           {attachments.map((att, i) => (
-            <FilePreview
-              key={i}
-              file={att.file}
-              previewUrl={att.previewUrl}
-              isImage={att.isImage}
-              onRemove={() => removeAttachment(i)}
-            />
+            <FilePreview key={i} file={att.file} previewUrl={att.previewUrl} isImage={att.isImage} onRemove={() => removeAttachment(i)} />
           ))}
         </div>
       )}
 
       <div className="flex items-center gap-2 mb-3 flex-wrap">
+        {/* Type */}
+        <select
+          value={type}
+          onChange={(e) => setType(e.target.value)}
+          className="text-xs px-2 py-1 rounded outline-none cursor-pointer font-mono"
+          style={{ backgroundColor: `${TYPE_CONFIG[type]?.color || colors.surface2}15`, color: TYPE_CONFIG[type]?.color || colors.textSecondary, border: `1px solid ${TYPE_CONFIG[type]?.color || colors.border}40` }}
+        >
+          {Object.entries(TYPE_CONFIG).map(([k, v]) => (
+            <option key={k} value={k}>{v.label}</option>
+          ))}
+        </select>
+
+        {/* Priority */}
         <select
           value={priority}
           onChange={(e) => setPriority(e.target.value)}
@@ -360,7 +415,35 @@ function CreateIssueForm({ onSubmit, onCancel, onUploadFile, sessions = [] }) {
           ))}
         </select>
 
-        {/* File upload button */}
+        {/* Assignee */}
+        <select
+          value={assignedTo}
+          onChange={(e) => setAssignedTo(e.target.value)}
+          className="text-xs px-2 py-1 rounded outline-none cursor-pointer font-mono"
+          style={{ backgroundColor: colors.surface2, color: assignedTo ? colors.text : colors.textSecondary, border: `1px solid ${colors.border}` }}
+        >
+          <option value="">Unassigned</option>
+          {members.map(m => (
+            <option key={m.id} value={m.id}>{m.displayName || m.email}</option>
+          ))}
+        </select>
+
+        {/* Sprint */}
+        {sprints.length > 0 && (
+          <select
+            value={sprintId}
+            onChange={(e) => setSprintId(e.target.value)}
+            className="text-xs px-2 py-1 rounded outline-none cursor-pointer font-mono"
+            style={{ backgroundColor: colors.surface2, color: sprintId ? colors.accent : colors.textSecondary, border: `1px solid ${sprintId ? colors.accent : colors.border}` }}
+          >
+            <option value="">No Sprint</option>
+            {sprints.filter(s => s.status === 'active' || s.status === 'planning').map(s => (
+              <option key={s.id} value={s.id}>{s.name}</option>
+            ))}
+          </select>
+        )}
+
+        {/* File upload */}
         <input ref={fileInputRef} type="file" multiple className="hidden" onChange={handleFileSelect} />
         <button
           type="button"
@@ -392,6 +475,7 @@ function CreateIssueForm({ onSubmit, onCancel, onUploadFile, sessions = [] }) {
           </select>
         </div>
 
+        {/* Labels */}
         <div className="flex items-center gap-1">
           <input
             value={labelInput}
@@ -401,49 +485,22 @@ function CreateIssueForm({ onSubmit, onCancel, onUploadFile, sessions = [] }) {
             className="text-xs px-2 py-1 rounded outline-none w-20"
             style={{ backgroundColor: colors.surface2, color: colors.textSecondary, border: `1px solid ${colors.border}` }}
           />
-          <button
-            type="button"
-            onClick={addLabel}
-            className="text-xs px-1.5 py-1 rounded cursor-pointer"
-            style={{ backgroundColor: colors.surface3, color: colors.textSecondary }}
-          >
+          <button type="button" onClick={addLabel} className="text-xs px-1.5 py-1 rounded cursor-pointer" style={{ backgroundColor: colors.surface3, color: colors.textSecondary }}>
             <Tag size={10} />
           </button>
         </div>
         {labels.map((l, i) => (
-          <span
-            key={i}
-            className="text-[10px] px-1.5 py-0.5 rounded font-mono flex items-center gap-1"
-            style={{ backgroundColor: colors.surface3, color: colors.textSecondary }}
-          >
+          <span key={i} className="text-[10px] px-1.5 py-0.5 rounded font-mono flex items-center gap-1" style={{ backgroundColor: colors.surface3, color: colors.textSecondary }}>
             {l}
-            <button
-              type="button"
-              onClick={() => setLabels(labels.filter((_, j) => j !== i))}
-              className="cursor-pointer hover:opacity-80"
-            >
-              <X size={8} />
-            </button>
+            <button type="button" onClick={() => setLabels(labels.filter((_, j) => j !== i))} className="cursor-pointer hover:opacity-80"><X size={8} /></button>
           </span>
         ))}
       </div>
       <div className="flex items-center gap-2">
-        <button
-          type="submit"
-          disabled={!title.trim() || submitting}
-          className="text-xs px-3 py-1.5 rounded-md font-medium text-white cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-          style={{ backgroundColor: colors.accent }}
-        >
+        <button type="submit" disabled={!title.trim() || submitting} className="text-xs px-3 py-1.5 rounded-md font-medium text-white cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed" style={{ backgroundColor: colors.accent }}>
           {submitting ? 'Creating...' : 'Create Issue'}
         </button>
-        <button
-          type="button"
-          onClick={onCancel}
-          className="text-xs px-3 py-1.5 rounded-md cursor-pointer"
-          style={{ color: colors.textSecondary }}
-        >
-          Cancel
-        </button>
+        <button type="button" onClick={onCancel} className="text-xs px-3 py-1.5 rounded-md cursor-pointer" style={{ color: colors.textSecondary }}>Cancel</button>
         {attachments.length > 0 && (
           <span className="text-[10px] font-mono" style={{ color: colors.textSecondary }}>
             {attachments.length} file{attachments.length > 1 ? 's' : ''} attached
@@ -456,35 +513,20 @@ function CreateIssueForm({ onSubmit, onCancel, onUploadFile, sessions = [] }) {
 
 // Render description with inline images and file links
 function renderDescription(text) {
-  // Split by markdown image/link patterns: ![name](url) or [name](url)
   const parts = text.split(/(!\[[^\]]*\]\([^)]+\)|\[[^\]]*\]\([^)]+\))/g);
   return parts.map((part, i) => {
     const imgMatch = part.match(/^!\[([^\]]*)\]\(([^)]+)\)$/);
     if (imgMatch) {
-      return (
-        <img
-          key={i}
-          src={imgMatch[2]}
-          alt={imgMatch[1]}
-          className="max-w-full rounded-lg my-2"
-          style={{ maxHeight: 300, border: `1px solid ${colors.border}` }}
-        />
-      );
+      return <img key={i} src={imgMatch[2]} alt={imgMatch[1]} className="max-w-full rounded-lg my-2" style={{ maxHeight: 300, border: `1px solid ${colors.border}` }} />;
     }
     const linkMatch = part.match(/^\[([^\]]*)\]\(([^)]+)\)$/);
     if (linkMatch) {
       return (
-        <a
-          key={i}
-          href={linkMatch[2]}
-          target="_blank"
-          rel="noopener noreferrer"
+        <a key={i} href={linkMatch[2]} target="_blank" rel="noopener noreferrer"
           className="text-xs font-mono px-2 py-1 rounded inline-flex items-center gap-1 my-1"
           style={{ backgroundColor: colors.surface2, color: colors.accent, border: `1px solid ${colors.border}` }}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <Paperclip size={10} />
-          {linkMatch[1]}
+          onClick={(e) => e.stopPropagation()}>
+          <Paperclip size={10} />{linkMatch[1]}
         </a>
       );
     }
@@ -492,7 +534,7 @@ function renderDescription(text) {
   });
 }
 
-function IssueDetail({ issue, onBack, onUpdate, onDelete, onGoToSession, isTester = false }) {
+function IssueDetail({ issue, onBack, onUpdate, onDelete, onGoToSession, isTester = false, members = [], sprints = [] }) {
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(issue.title);
   const [description, setDescription] = useState(issue.description || '');
@@ -505,26 +547,15 @@ function IssueDetail({ issue, onBack, onUpdate, onDelete, onGoToSession, isTeste
 
   return (
     <div className="flex flex-col h-full">
-      <div
-        className="h-12 flex items-center gap-3 px-4 flex-shrink-0"
-        style={{ borderBottom: `1px solid ${colors.border}` }}
-      >
-        <button
-          onClick={onBack}
-          className="p-1 rounded cursor-pointer hover:opacity-80"
-        >
+      <div className="h-12 flex items-center gap-3 px-4 flex-shrink-0" style={{ borderBottom: `1px solid ${colors.border}` }}>
+        <button onClick={onBack} className="p-1 rounded cursor-pointer hover:opacity-80">
           <ArrowLeft size={16} style={{ color: colors.textSecondary }} />
         </button>
-        <span className="font-mono text-xs" style={{ color: colors.textSecondary }}>
-          {issue.id}
-        </span>
+        <span className="font-mono text-xs" style={{ color: colors.textSecondary }}>{issue.id}</span>
+        <TypeBadge type={issue.type || 'task'} />
         <div className="flex-1" />
         {!isTester && (
-          <button
-            onClick={() => { if (confirm('Delete this issue?')) { onDelete(issue.id); onBack(); } }}
-            className="p-1 rounded cursor-pointer hover:opacity-80"
-            title="Delete issue"
-          >
+          <button onClick={() => { if (confirm('Delete this issue?')) { onDelete(issue.id); onBack(); } }} className="p-1 rounded cursor-pointer hover:opacity-80" title="Delete issue">
             <Trash2 size={14} style={{ color: '#ef4444' }} />
           </button>
         )}
@@ -533,56 +564,24 @@ function IssueDetail({ issue, onBack, onUpdate, onDelete, onGoToSession, isTeste
       <div className="flex-1 overflow-y-auto p-6">
         {editing ? (
           <div className="space-y-4">
-            <input
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              className="w-full text-lg font-semibold bg-transparent outline-none"
-              style={{ color: colors.text }}
-            />
-            <textarea
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              rows={8}
-              className="w-full text-sm bg-transparent outline-none resize-none"
-              style={{ color: colors.text, border: `1px solid ${colors.border}`, borderRadius: 8, padding: 12 }}
-            />
+            <input value={title} onChange={(e) => setTitle(e.target.value)} className="w-full text-lg font-semibold bg-transparent outline-none" style={{ color: colors.text }} />
+            <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={8} className="w-full text-sm bg-transparent outline-none resize-none" style={{ color: colors.text, border: `1px solid ${colors.border}`, borderRadius: 8, padding: 12 }} />
             <div className="flex gap-2">
-              <button
-                onClick={handleSave}
-                className="text-xs px-3 py-1.5 rounded-md font-medium text-white cursor-pointer"
-                style={{ backgroundColor: colors.accent }}
-              >
-                Save
-              </button>
-              <button
-                onClick={() => { setTitle(issue.title); setDescription(issue.description || ''); setEditing(false); }}
-                className="text-xs px-3 py-1.5 rounded-md cursor-pointer"
-                style={{ color: colors.textSecondary }}
-              >
-                Cancel
-              </button>
+              <button onClick={handleSave} className="text-xs px-3 py-1.5 rounded-md font-medium text-white cursor-pointer" style={{ backgroundColor: colors.accent }}>Save</button>
+              <button onClick={() => { setTitle(issue.title); setDescription(issue.description || ''); setEditing(false); }} className="text-xs px-3 py-1.5 rounded-md cursor-pointer" style={{ color: colors.textSecondary }}>Cancel</button>
             </div>
           </div>
         ) : (
           <div className="space-y-4">
-            <h1
-              className="text-lg font-semibold cursor-pointer"
-              style={{ color: colors.text }}
-              onClick={() => setEditing(true)}
-            >
-              {issue.title}
-            </h1>
-            <div
-              className="text-sm whitespace-pre-wrap cursor-pointer"
-              style={{ color: issue.description ? colors.text : colors.textSecondary }}
-              onClick={() => setEditing(true)}
-            >
+            <h1 className="text-lg font-semibold cursor-pointer" style={{ color: colors.text }} onClick={() => setEditing(true)}>{issue.title}</h1>
+            <div className="text-sm whitespace-pre-wrap cursor-pointer" style={{ color: issue.description ? colors.text : colors.textSecondary }} onClick={() => setEditing(true)}>
               {issue.description ? renderDescription(issue.description) : 'Click to add a description...'}
             </div>
           </div>
         )}
 
         <div className="mt-8 space-y-3">
+          {/* Status */}
           <div className="flex items-center gap-4">
             <span className="text-xs font-mono w-20" style={{ color: colors.textSecondary }}>Status</span>
             <div className="flex gap-1">
@@ -590,47 +589,64 @@ function IssueDetail({ issue, onBack, onUpdate, onDelete, onGoToSession, isTeste
                 const cfg = STATUS_CONFIG[s];
                 const active = issue.status === s;
                 return (
-                  <button
-                    key={s}
-                    onClick={() => onUpdate(issue.id, { status: s })}
+                  <button key={s} onClick={() => onUpdate(issue.id, { status: s })}
                     className="text-xs px-2 py-1 rounded-md flex items-center gap-1.5 cursor-pointer transition-colors"
-                    style={{
-                      backgroundColor: active ? `${cfg.color}20` : 'transparent',
-                      color: active ? cfg.color : colors.textSecondary,
-                      border: `1px solid ${active ? cfg.color : colors.border}`,
-                    }}
-                  >
-                    <StatusIcon status={s} size={10} />
-                    {cfg.label}
+                    style={{ backgroundColor: active ? `${cfg.color}20` : 'transparent', color: active ? cfg.color : colors.textSecondary, border: `1px solid ${active ? cfg.color : colors.border}` }}>
+                    <StatusIcon status={s} size={10} />{cfg.label}
                   </button>
                 );
               })}
             </div>
           </div>
 
+          {/* Type */}
+          <div className="flex items-center gap-4">
+            <span className="text-xs font-mono w-20" style={{ color: colors.textSecondary }}>Type</span>
+            <select value={issue.type || 'task'} onChange={(e) => onUpdate(issue.id, { type: e.target.value })}
+              className="text-xs px-2 py-1 rounded outline-none cursor-pointer font-mono"
+              style={{ backgroundColor: `${TYPE_CONFIG[issue.type || 'task']?.color}15`, color: TYPE_CONFIG[issue.type || 'task']?.color, border: `1px solid ${TYPE_CONFIG[issue.type || 'task']?.color}40` }}>
+              {Object.entries(TYPE_CONFIG).map(([k, v]) => (<option key={k} value={k}>{v.label}</option>))}
+            </select>
+          </div>
+
+          {/* Priority */}
           <div className="flex items-center gap-4">
             <span className="text-xs font-mono w-20" style={{ color: colors.textSecondary }}>Priority</span>
-            <select
-              value={issue.priority}
-              onChange={(e) => onUpdate(issue.id, { priority: e.target.value })}
+            <select value={issue.priority} onChange={(e) => onUpdate(issue.id, { priority: e.target.value })}
               className="text-xs px-2 py-1 rounded outline-none cursor-pointer font-mono"
-              style={{ backgroundColor: colors.surface2, color: colors.textSecondary, border: `1px solid ${colors.border}` }}
-            >
-              {Object.entries(PRIORITY_CONFIG).map(([k, v]) => (
-                <option key={k} value={k}>{v.label}</option>
-              ))}
+              style={{ backgroundColor: colors.surface2, color: colors.textSecondary, border: `1px solid ${colors.border}` }}>
+              {Object.entries(PRIORITY_CONFIG).map(([k, v]) => (<option key={k} value={k}>{v.label}</option>))}
+            </select>
+          </div>
+
+          {/* Assignee */}
+          <div className="flex items-center gap-4">
+            <span className="text-xs font-mono w-20" style={{ color: colors.textSecondary }}>Assignee</span>
+            <select value={issue.assigned_to || ''} onChange={(e) => onUpdate(issue.id, { assigned_to: e.target.value || null })}
+              className="text-xs px-2 py-1 rounded outline-none cursor-pointer font-mono"
+              style={{ backgroundColor: colors.surface2, color: issue.assigned_to ? colors.text : colors.textSecondary, border: `1px solid ${colors.border}` }}>
+              <option value="">Unassigned</option>
+              {members.map(m => (<option key={m.id} value={m.id}>{m.displayName || m.email}</option>))}
+            </select>
+          </div>
+
+          {/* Sprint */}
+          <div className="flex items-center gap-4">
+            <span className="text-xs font-mono w-20" style={{ color: colors.textSecondary }}>Sprint</span>
+            <select value={issue.sprint_id || ''} onChange={(e) => onUpdate(issue.id, { sprint_id: e.target.value || null })}
+              className="text-xs px-2 py-1 rounded outline-none cursor-pointer font-mono"
+              style={{ backgroundColor: colors.surface2, color: issue.sprint_id ? colors.accent : colors.textSecondary, border: `1px solid ${issue.sprint_id ? colors.accent : colors.border}` }}>
+              <option value="">No Sprint</option>
+              {sprints.map(s => (<option key={s.id} value={s.id}>{s.name}</option>))}
             </select>
           </div>
 
           {issue.session_id && (
             <div className="flex items-center gap-4">
               <span className="text-xs font-mono w-20" style={{ color: colors.textSecondary }}>Session</span>
-              <button
-                onClick={() => onGoToSession?.(issue.session_id)}
+              <button onClick={() => onGoToSession?.(issue.session_id)}
                 className="text-xs font-mono px-2 py-0.5 rounded cursor-pointer hover:opacity-80 transition-opacity"
-                style={{ backgroundColor: 'rgba(34,197,94,0.1)', color: '#22c55e' }}
-                title="Go to session"
-              >
+                style={{ backgroundColor: 'rgba(34,197,94,0.1)', color: '#22c55e' }} title="Go to session">
                 {issue.session_id}
               </button>
             </div>
@@ -638,17 +654,13 @@ function IssueDetail({ issue, onBack, onUpdate, onDelete, onGoToSession, isTeste
 
           <div className="flex items-center gap-4">
             <span className="text-xs font-mono w-20" style={{ color: colors.textSecondary }}>Created</span>
-            <span className="text-xs" style={{ color: colors.textSecondary }}>
-              {parseUTC(issue.created_at)?.toLocaleString() || ''}
-            </span>
+            <span className="text-xs" style={{ color: colors.textSecondary }}>{parseUTC(issue.created_at)?.toLocaleString() || ''}</span>
           </div>
 
           {issue.creator_name && (
             <div className="flex items-center gap-4">
               <span className="text-xs font-mono w-20" style={{ color: colors.textSecondary }}>Creator</span>
-              <span className="text-xs" style={{ color: colors.textSecondary }}>
-                {issue.creator_name}
-              </span>
+              <span className="text-xs" style={{ color: colors.textSecondary }}>{issue.creator_name}</span>
             </div>
           )}
         </div>
@@ -656,6 +668,120 @@ function IssueDetail({ issue, onBack, onUpdate, onDelete, onGoToSession, isTeste
     </div>
   );
 }
+
+// ── Sprint Management Bar ────────────────────────────────────────
+
+function SprintBar({ sprints, activeSprint, onSelectSprint, onCreateSprint, onUpdateSprint, onDeleteSprint }) {
+  const [showCreate, setShowCreate] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [menuSprintId, setMenuSprintId] = useState(null);
+  const menuRef = useRef(null);
+
+  useEffect(() => {
+    if (!menuSprintId) return;
+    const handler = (e) => { if (!menuRef.current?.contains(e.target)) setMenuSprintId(null); };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [menuSprintId]);
+
+  const handleCreate = async () => {
+    if (!newName.trim()) return;
+    await onCreateSprint({ name: newName.trim() });
+    setNewName('');
+    setShowCreate(false);
+  };
+
+  return (
+    <div className="flex items-center gap-1.5 px-4 py-2 overflow-x-auto flex-shrink-0" style={{ borderBottom: `1px solid ${colors.border}` }}>
+      <Calendar size={12} style={{ color: colors.textSecondary }} className="flex-shrink-0" />
+      <button
+        onClick={() => onSelectSprint(null)}
+        className="text-xs px-2.5 py-1 rounded-md cursor-pointer transition-colors whitespace-nowrap flex-shrink-0"
+        style={{
+          backgroundColor: !activeSprint ? colors.surface2 : 'transparent',
+          color: !activeSprint ? colors.text : colors.textSecondary,
+        }}
+      >
+        All Issues
+      </button>
+      <button
+        onClick={() => onSelectSprint('backlog')}
+        className="text-xs px-2.5 py-1 rounded-md cursor-pointer transition-colors whitespace-nowrap flex-shrink-0"
+        style={{
+          backgroundColor: activeSprint === 'backlog' ? colors.surface2 : 'transparent',
+          color: activeSprint === 'backlog' ? colors.text : colors.textSecondary,
+        }}
+      >
+        Backlog
+      </button>
+      {sprints.map(s => (
+        <div key={s.id} className="relative flex-shrink-0" ref={menuSprintId === s.id ? menuRef : null}>
+          <button
+            onClick={() => onSelectSprint(s.id)}
+            onContextMenu={(e) => { e.preventDefault(); setMenuSprintId(s.id); }}
+            className="text-xs px-2.5 py-1 rounded-md cursor-pointer transition-colors whitespace-nowrap flex items-center gap-1.5"
+            style={{
+              backgroundColor: activeSprint === s.id ? `${colors.accent}20` : 'transparent',
+              color: activeSprint === s.id ? colors.accent : colors.textSecondary,
+              border: activeSprint === s.id ? `1px solid ${colors.accent}40` : '1px solid transparent',
+            }}
+          >
+            {s.name}
+            <span className="text-[9px] font-mono opacity-60">{s.completed_count}/{s.issue_count}</span>
+            <button
+              onClick={(e) => { e.stopPropagation(); setMenuSprintId(menuSprintId === s.id ? null : s.id); }}
+              className="p-0.5 rounded hover:opacity-80 cursor-pointer"
+            >
+              <MoreHorizontal size={10} />
+            </button>
+          </button>
+          {menuSprintId === s.id && (
+            <div className="absolute left-0 top-full mt-1 py-1 rounded-lg shadow-lg z-50 min-w-[140px]" style={{ backgroundColor: colors.surface, border: `1px solid ${colors.border}` }}>
+              {s.status === 'active' && (
+                <button onClick={() => { onUpdateSprint(s.id, { status: 'completed' }); setMenuSprintId(null); }}
+                  className="w-full text-left px-3 py-1.5 text-xs cursor-pointer" style={{ color: colors.text }}
+                  onMouseEnter={(e) => e.currentTarget.style.backgroundColor = colors.surface2}
+                  onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}>
+                  Complete Sprint
+                </button>
+              )}
+              {s.status !== 'active' && (
+                <button onClick={() => { onUpdateSprint(s.id, { status: 'active' }); setMenuSprintId(null); }}
+                  className="w-full text-left px-3 py-1.5 text-xs cursor-pointer" style={{ color: colors.text }}
+                  onMouseEnter={(e) => e.currentTarget.style.backgroundColor = colors.surface2}
+                  onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}>
+                  Activate Sprint
+                </button>
+              )}
+              <button onClick={() => { if (confirm(`Delete sprint "${s.name}"?`)) { onDeleteSprint(s.id); setMenuSprintId(null); if (activeSprint === s.id) onSelectSprint(null); } }}
+                className="w-full text-left px-3 py-1.5 text-xs cursor-pointer" style={{ color: '#ef4444' }}
+                onMouseEnter={(e) => e.currentTarget.style.backgroundColor = colors.surface2}
+                onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}>
+                Delete Sprint
+              </button>
+            </div>
+          )}
+        </div>
+      ))}
+      {showCreate ? (
+        <div className="flex items-center gap-1 flex-shrink-0">
+          <input value={newName} onChange={(e) => setNewName(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') handleCreate(); if (e.key === 'Escape') setShowCreate(false); }}
+            placeholder="Sprint name" autoFocus className="text-xs px-2 py-1 rounded outline-none w-28"
+            style={{ backgroundColor: colors.surface2, color: colors.text, border: `1px solid ${colors.accent}` }} />
+          <button onClick={handleCreate} className="text-xs px-2 py-1 rounded cursor-pointer text-white" style={{ backgroundColor: colors.accent }}>Add</button>
+          <button onClick={() => setShowCreate(false)} className="text-xs px-1 py-1 rounded cursor-pointer" style={{ color: colors.textSecondary }}><X size={10} /></button>
+        </div>
+      ) : (
+        <button onClick={() => setShowCreate(true)} className="text-xs px-2 py-1 rounded cursor-pointer flex items-center gap-1 flex-shrink-0"
+          style={{ color: colors.textSecondary }} title="New Sprint">
+          <Plus size={10} /> Sprint
+        </button>
+      )}
+    </div>
+  );
+}
+
+// ── Main IssuesBoard ─────────────────────────────────────────────
 
 export default function IssuesBoard({
   issues = [],
@@ -670,13 +796,19 @@ export default function IssuesBoard({
   onBack,
   sessions = [],
   userRole = 'developer',
+  members = [],
+  sprints = [],
+  onCreateSprint,
+  onUpdateSprint,
+  onDeleteSprint,
 }) {
   const [showCreate, setShowCreate] = useState(false);
   const [selectedIssue, setSelectedIssue] = useState(null);
-  const [viewMode, setViewMode] = useState('list'); // 'list' or 'board'
+  const [viewMode, setViewMode] = useState('list');
   const [filterStatus, setFilterStatus] = useState('all');
   const [collapsedGroups, setCollapsedGroups] = useState({});
   const [selectedIds, setSelectedIds] = useState(new Set());
+  const [activeSprint, setActiveSprint] = useState(null); // null = all, 'backlog' = no sprint, sprintId = specific
 
   const isAutoRunning = autonomousStatus?.running;
   const isTester = userRole === 'tester';
@@ -702,21 +834,26 @@ export default function IssuesBoard({
 
   const handleStatusChange = (id, status) => {
     onUpdateIssue(id, { status });
-    if (selectedIssue?.id === id) {
-      setSelectedIssue({ ...selectedIssue, status });
-    }
+    if (selectedIssue?.id === id) setSelectedIssue({ ...selectedIssue, status });
   };
 
-  const filteredIssues = filterStatus === 'all'
+  // Filter by sprint first, then by status
+  const sprintFiltered = activeSprint === null
     ? issues
-    : issues.filter((i) => i.status === filterStatus);
+    : activeSprint === 'backlog'
+      ? issues.filter(i => !i.sprint_id)
+      : issues.filter(i => i.sprint_id === activeSprint);
+
+  const filteredIssues = filterStatus === 'all'
+    ? sprintFiltered
+    : sprintFiltered.filter((i) => i.status === filterStatus);
 
   const grouped = STATUS_ORDER.reduce((acc, s) => {
     acc[s] = filteredIssues.filter((i) => i.status === s);
     return acc;
   }, {});
 
-  // If viewing a specific issue detail
+  // Issue detail view
   if (selectedIssue) {
     const fresh = issues.find((i) => i.id === selectedIssue.id) || selectedIssue;
     return (
@@ -728,6 +865,8 @@ export default function IssuesBoard({
           onDelete={onDeleteIssue}
           onGoToSession={onGoToSession}
           isTester={isTester}
+          members={members}
+          sprints={sprints}
         />
       </div>
     );
@@ -735,42 +874,25 @@ export default function IssuesBoard({
 
   return (
     <div className="flex flex-col h-full" style={{ backgroundColor: colors.bg }}>
-      {/* Header — wraps to two rows on mobile */}
-      <div
-        className="flex flex-wrap items-center gap-2 px-4 py-2 flex-shrink-0"
-        style={{ borderBottom: `1px solid ${colors.border}` }}
-      >
+      {/* Header */}
+      <div className="flex flex-wrap items-center gap-2 px-4 py-2 flex-shrink-0" style={{ borderBottom: `1px solid ${colors.border}` }}>
         {onBack && (
           <button onClick={onBack} className="p-1 rounded cursor-pointer hover:opacity-80">
             <ArrowLeft size={16} style={{ color: colors.textSecondary }} />
           </button>
         )}
-        <h2 className="text-sm font-semibold" style={{ color: colors.text }}>
-          Issues
-        </h2>
-        <span
-          className="text-xs font-mono px-1.5 py-0.5 rounded"
-          style={{ backgroundColor: colors.surface2, color: colors.textSecondary }}
-        >
-          {issues.length}
+        <h2 className="text-sm font-semibold" style={{ color: colors.text }}>Issues</h2>
+        <span className="text-xs font-mono px-1.5 py-0.5 rounded" style={{ backgroundColor: colors.surface2, color: colors.textSecondary }}>
+          {sprintFiltered.length}
         </span>
         <div className="flex-1 min-w-[20px]" />
 
-        {/* View toggle — always visible */}
-        <div
-          className="flex rounded-md overflow-hidden flex-shrink-0"
-          style={{ border: `1px solid ${colors.border}` }}
-        >
+        {/* View toggle */}
+        <div className="flex rounded-md overflow-hidden flex-shrink-0" style={{ border: `1px solid ${colors.border}` }}>
           {['list', 'board'].map((mode) => (
-            <button
-              key={mode}
-              onClick={() => setViewMode(mode)}
+            <button key={mode} onClick={() => setViewMode(mode)}
               className="text-[11px] font-mono uppercase px-3 py-1.5 cursor-pointer transition-colors"
-              style={{
-                backgroundColor: viewMode === mode ? colors.surface2 : 'transparent',
-                color: viewMode === mode ? colors.text : colors.textSecondary,
-              }}
-            >
+              style={{ backgroundColor: viewMode === mode ? colors.surface2 : 'transparent', color: viewMode === mode ? colors.text : colors.textSecondary }}>
               {mode}
             </button>
           ))}
@@ -779,115 +901,78 @@ export default function IssuesBoard({
         {/* Selection actions */}
         {selectedIds.size > 0 && !isAutoRunning && (
           <>
-            <span className="text-[10px] font-mono" style={{ color: colors.textSecondary }}>
-              {selectedIds.size} selected
-            </span>
+            <span className="text-[10px] font-mono" style={{ color: colors.textSecondary }}>{selectedIds.size} selected</span>
             {!isTester && (
-              <button
-                onClick={() => { onStartAutonomous([...selectedIds]); clearSelection(); }}
-                className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md font-medium cursor-pointer text-white flex-shrink-0"
-                style={{ backgroundColor: '#22c55e' }}
-              >
-                <Play size={12} />
-                <span className="hidden sm:inline">Run Selected</span>
-                <span className="sm:hidden">Run</span>
+              <button onClick={() => { onStartAutonomous([...selectedIds]); clearSelection(); }}
+                className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md font-medium cursor-pointer text-white flex-shrink-0" style={{ backgroundColor: '#22c55e' }}>
+                <Play size={12} /><span className="hidden sm:inline">Run Selected</span><span className="sm:hidden">Run</span>
               </button>
             )}
-            <button
-              onClick={clearSelection}
-              className="text-xs px-2 py-1.5 rounded-md cursor-pointer flex-shrink-0"
-              style={{ color: colors.textSecondary }}
-              title="Clear selection"
-            >
+            <button onClick={clearSelection} className="text-xs px-2 py-1.5 rounded-md cursor-pointer flex-shrink-0" style={{ color: colors.textSecondary }} title="Clear selection">
               <X size={12} />
             </button>
           </>
         )}
 
-        {/* Autonomous run button — hidden for testers */}
+        {/* Autonomous run button */}
         {!isTester && (isAutoRunning ? (
-          <button
-            onClick={onStopAutonomous}
-            className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md font-medium cursor-pointer text-white flex-shrink-0"
-            style={{ backgroundColor: '#ef4444' }}
-          >
-            <Square size={12} fill="white" />
-            <span className="hidden sm:inline">Stop Run</span>
-            <span className="sm:hidden">Stop</span>
+          <button onClick={onStopAutonomous} className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md font-medium cursor-pointer text-white flex-shrink-0" style={{ backgroundColor: '#ef4444' }}>
+            <Square size={12} fill="white" /><span className="hidden sm:inline">Stop Run</span><span className="sm:hidden">Stop</span>
           </button>
         ) : selectedIds.size === 0 && (
-          <button
-            onClick={() => onStartAutonomous()}
-            disabled={grouped.todo.length === 0}
-            className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md font-medium cursor-pointer text-white disabled:opacity-40 disabled:cursor-not-allowed flex-shrink-0"
-            style={{ backgroundColor: '#22c55e' }}
-          >
-            <Zap size={12} />
-            <span className="hidden sm:inline">Run All</span>
-            <span className="sm:hidden">Run</span>
+          <button onClick={() => onStartAutonomous()} disabled={grouped.todo.length === 0}
+            className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md font-medium cursor-pointer text-white disabled:opacity-40 disabled:cursor-not-allowed flex-shrink-0" style={{ backgroundColor: '#22c55e' }}>
+            <Zap size={12} /><span className="hidden sm:inline">Run All</span><span className="sm:hidden">Run</span>
           </button>
         ))}
 
-        <button
-          onClick={() => setShowCreate(!showCreate)}
-          className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md font-medium cursor-pointer text-white flex-shrink-0"
-          style={{ backgroundColor: colors.accent }}
-        >
-          <Plus size={12} />
-          <span className="hidden sm:inline">New Issue</span>
-          <span className="sm:hidden">New</span>
+        <button onClick={() => setShowCreate(!showCreate)}
+          className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md font-medium cursor-pointer text-white flex-shrink-0" style={{ backgroundColor: colors.accent }}>
+          <Plus size={12} /><span className="hidden sm:inline">New Issue</span><span className="sm:hidden">New</span>
         </button>
       </div>
 
-      {/* Auto-runner status bar */}
+      {/* Auto-runner status */}
       {isAutoRunning && (
-        <div
-          className="px-4 py-2 flex items-center gap-2 text-xs"
-          style={{ backgroundColor: 'rgba(34,197,94,0.08)', borderBottom: `1px solid ${colors.border}` }}
-        >
+        <div className="px-4 py-2 flex items-center gap-2 text-xs" style={{ backgroundColor: 'rgba(34,197,94,0.08)', borderBottom: `1px solid ${colors.border}` }}>
           <span className="relative flex h-2 w-2">
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
             <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500" />
           </span>
           <span style={{ color: '#22c55e' }} className="font-medium">Autonomous mode active</span>
           {autonomousStatus?.currentIssueId && (
-            <span style={{ color: colors.textSecondary }} className="font-mono">
-              Working on {autonomousStatus.currentIssueId}
-            </span>
+            <span style={{ color: colors.textSecondary }} className="font-mono">Working on {autonomousStatus.currentIssueId}</span>
           )}
         </div>
       )}
 
+      {/* Sprint bar */}
+      {(sprints.length > 0 || !isTester) && (
+        <SprintBar
+          sprints={sprints}
+          activeSprint={activeSprint}
+          onSelectSprint={setActiveSprint}
+          onCreateSprint={onCreateSprint}
+          onUpdateSprint={onUpdateSprint}
+          onDeleteSprint={onDeleteSprint}
+        />
+      )}
+
       {/* Filter tabs */}
-      <div
-        className="flex items-center gap-1 px-4 py-2 flex-shrink-0"
-        style={{ borderBottom: `1px solid ${colors.border}` }}
-      >
-        <button
-          onClick={() => setFilterStatus('all')}
+      <div className="flex items-center gap-1 px-4 py-2 flex-shrink-0" style={{ borderBottom: `1px solid ${colors.border}` }}>
+        <button onClick={() => setFilterStatus('all')}
           className="text-xs px-2.5 py-1 rounded-md cursor-pointer transition-colors"
-          style={{
-            backgroundColor: filterStatus === 'all' ? colors.surface2 : 'transparent',
-            color: filterStatus === 'all' ? colors.text : colors.textSecondary,
-          }}
-        >
-          All ({issues.length})
+          style={{ backgroundColor: filterStatus === 'all' ? colors.surface2 : 'transparent', color: filterStatus === 'all' ? colors.text : colors.textSecondary }}>
+          All ({sprintFiltered.length})
         </button>
         {STATUS_ORDER.map((s) => {
           const cfg = STATUS_CONFIG[s];
-          const count = issues.filter((i) => i.status === s).length;
+          const count = sprintFiltered.filter((i) => i.status === s).length;
           return (
-            <button
-              key={s}
-              onClick={() => setFilterStatus(s)}
+            <button key={s} onClick={() => setFilterStatus(s)}
               className="text-xs px-2.5 py-1 rounded-md cursor-pointer flex items-center gap-1.5 transition-colors"
-              style={{
-                backgroundColor: filterStatus === s ? `${cfg.color}15` : 'transparent',
-                color: filterStatus === s ? cfg.color : colors.textSecondary,
-              }}
-            >
-              <StatusIcon status={s} size={10} />
-              {cfg.label} ({count})
+              style={{ backgroundColor: filterStatus === s ? `${cfg.color}15` : 'transparent', color: filterStatus === s ? cfg.color : colors.textSecondary }}>
+              <StatusIcon status={s} size={10} />{cfg.label} ({count})
             </button>
           );
         })}
@@ -900,13 +985,15 @@ export default function IssuesBoard({
           onCancel={() => setShowCreate(false)}
           onUploadFile={onUploadFile}
           sessions={sessions}
+          members={members}
+          sprints={sprints}
+          currentSprintId={activeSprint && activeSprint !== 'backlog' ? activeSprint : ''}
         />
       )}
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto">
         {viewMode === 'list' ? (
-          /* ── List View ── */
           filterStatus === 'all' ? (
             STATUS_ORDER.map((s) => {
               const items = grouped[s];
@@ -915,108 +1002,66 @@ export default function IssuesBoard({
               const collapsed = collapsedGroups[s];
               return (
                 <div key={s}>
-                  <button
-                    onClick={() => toggleGroup(s)}
+                  <button onClick={() => toggleGroup(s)}
                     className="w-full flex items-center gap-2 px-4 py-2 text-xs font-medium cursor-pointer"
-                    style={{ backgroundColor: colors.surface2, color: colors.textSecondary }}
-                  >
+                    style={{ backgroundColor: colors.surface2, color: colors.textSecondary }}>
                     {collapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
-                    <StatusIcon status={s} size={12} />
-                    {cfg.label}
-                    <span className="font-mono ml-1">({items.length})</span>
+                    <StatusIcon status={s} size={12} />{cfg.label}<span className="font-mono ml-1">({items.length})</span>
                   </button>
                   {!collapsed && items.map((issue) => (
-                    <IssueRow
-                      key={issue.id}
-                      issue={issue}
-                      onSelect={setSelectedIssue}
-                      onStatusChange={handleStatusChange}
-                      onGoToSession={onGoToSession}
-                      selected={selectedIds.has(issue.id)}
-                      onToggleSelect={toggleSelect}
-                    />
+                    <IssueRow key={issue.id} issue={issue} onSelect={setSelectedIssue} onStatusChange={handleStatusChange}
+                      onGoToSession={onGoToSession} selected={selectedIds.has(issue.id)} onToggleSelect={toggleSelect} />
                   ))}
                 </div>
               );
             })
           ) : (
             filteredIssues.map((issue) => (
-              <IssueRow
-                key={issue.id}
-                issue={issue}
-                onSelect={setSelectedIssue}
-                onStatusChange={handleStatusChange}
-                onGoToSession={onGoToSession}
-                selected={selectedIds.has(issue.id)}
-                onToggleSelect={toggleSelect}
-              />
+              <IssueRow key={issue.id} issue={issue} onSelect={setSelectedIssue} onStatusChange={handleStatusChange}
+                onGoToSession={onGoToSession} selected={selectedIds.has(issue.id)} onToggleSelect={toggleSelect} />
             ))
           )
         ) : (
-          /* ── Board View (Kanban) ── */
+          /* Board View */
           <div className="flex gap-0 h-full overflow-x-auto">
             {STATUS_ORDER.map((s) => {
               const items = grouped[s];
               const cfg = STATUS_CONFIG[s];
               return (
-                <div
-                  key={s}
-                  className="flex-1 min-w-[220px] flex flex-col h-full"
-                  style={{ borderRight: `1px solid ${colors.border}` }}
-                >
-                  <div
-                    className="flex items-center gap-2 px-3 py-2.5 flex-shrink-0"
-                    style={{ borderBottom: `1px solid ${colors.border}`, backgroundColor: colors.surface2 }}
-                  >
+                <div key={s} className="flex-1 min-w-[220px] flex flex-col h-full" style={{ borderRight: `1px solid ${colors.border}` }}>
+                  <div className="flex items-center gap-2 px-3 py-2.5 flex-shrink-0" style={{ borderBottom: `1px solid ${colors.border}`, backgroundColor: colors.surface2 }}>
                     <StatusIcon status={s} size={12} />
-                    <span className="text-xs font-medium" style={{ color: colors.text }}>
-                      {cfg.label}
-                    </span>
-                    <span
-                      className="text-[10px] font-mono px-1.5 py-0.5 rounded"
-                      style={{ backgroundColor: colors.surface3, color: colors.textSecondary }}
-                    >
-                      {items.length}
-                    </span>
+                    <span className="text-xs font-medium" style={{ color: colors.text }}>{cfg.label}</span>
+                    <span className="text-[10px] font-mono px-1.5 py-0.5 rounded" style={{ backgroundColor: colors.surface3, color: colors.textSecondary }}>{items.length}</span>
                   </div>
                   <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
                     {items.map((issue) => (
-                      <div
-                        key={issue.id}
-                        onClick={() => setSelectedIssue(issue)}
+                      <div key={issue.id} onClick={() => setSelectedIssue(issue)}
                         className="p-3 rounded-lg cursor-pointer group transition-colors duration-150"
                         style={{ backgroundColor: colors.surface, border: `1px solid ${colors.border}` }}
                         onMouseEnter={(e) => e.currentTarget.style.borderColor = colors.accent}
-                        onMouseLeave={(e) => e.currentTarget.style.borderColor = colors.border}
-                      >
+                        onMouseLeave={(e) => e.currentTarget.style.borderColor = colors.border}>
                         <div className="flex items-start gap-2 mb-1.5">
-                          <span
-                            className="font-mono text-[9px] flex-shrink-0 mt-0.5"
-                            style={{ color: colors.textSecondary }}
-                          >
-                            {issue.id}
-                          </span>
+                          <span className="font-mono text-[9px] flex-shrink-0 mt-0.5" style={{ color: colors.textSecondary }}>{issue.id}</span>
+                          <TypeBadge type={issue.type || 'task'} />
+                          <div className="flex-1" />
                           <PriorityDot priority={issue.priority} />
                         </div>
-                        <p className="text-xs font-medium leading-snug mb-1.5" style={{ color: colors.text }}>
-                          {issue.title}
-                        </p>
-                        {issue.session_id && (
-                          <button
-                            onClick={(e) => { e.stopPropagation(); onGoToSession?.(issue.session_id); }}
-                            className="text-[9px] font-mono px-1 py-0.5 rounded inline-block cursor-pointer hover:opacity-80 transition-opacity"
-                            style={{ backgroundColor: 'rgba(34,197,94,0.1)', color: '#22c55e' }}
-                            title="Go to session"
-                          >
-                            {issue.session_id}
-                          </button>
-                        )}
+                        <p className="text-xs font-medium leading-snug mb-1.5" style={{ color: colors.text }}>{issue.title}</p>
+                        <div className="flex items-center gap-1.5">
+                          {issue.assignee_name && <AssigneeBadge name={issue.assignee_name} />}
+                          {issue.session_id && (
+                            <button onClick={(e) => { e.stopPropagation(); onGoToSession?.(issue.session_id); }}
+                              className="text-[9px] font-mono px-1 py-0.5 rounded inline-block cursor-pointer hover:opacity-80 transition-opacity"
+                              style={{ backgroundColor: 'rgba(34,197,94,0.1)', color: '#22c55e' }} title="Go to session">
+                              {issue.session_id}
+                            </button>
+                          )}
+                        </div>
                       </div>
                     ))}
                     {items.length === 0 && (
-                      <p className="text-xs text-center py-6" style={{ color: colors.textSecondary }}>
-                        No issues
-                      </p>
+                      <p className="text-xs text-center py-6" style={{ color: colors.textSecondary }}>No issues</p>
                     )}
                   </div>
                 </div>
@@ -1028,14 +1073,8 @@ export default function IssuesBoard({
         {filteredIssues.length === 0 && !showCreate && viewMode === 'list' && (
           <div className="flex flex-col items-center justify-center h-full py-20">
             <Circle size={32} style={{ color: colors.textSecondary }} className="mb-3 opacity-30" />
-            <p className="text-sm" style={{ color: colors.textSecondary }}>
-              No issues yet
-            </p>
-            <button
-              onClick={() => setShowCreate(true)}
-              className="mt-3 text-xs px-3 py-1.5 rounded-md cursor-pointer"
-              style={{ color: colors.accent }}
-            >
+            <p className="text-sm" style={{ color: colors.textSecondary }}>No issues yet</p>
+            <button onClick={() => setShowCreate(true)} className="mt-3 text-xs px-3 py-1.5 rounded-md cursor-pointer" style={{ color: colors.accent }}>
               Create your first issue
             </button>
           </div>

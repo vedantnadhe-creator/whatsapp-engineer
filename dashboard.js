@@ -535,6 +535,45 @@ export function startDashboard(store, messageHandler, port = 18790, wa = null, e
         } catch (err) { res.status(500).json({ error: err.message }); }
     });
 
+    // ── Sprints ────────────────────────────────────────────────
+
+    app.get('/api/sprints', requireAuth, (req, res) => {
+        try { res.json(store.getAllSprints()); }
+        catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    app.post('/api/sprints', requireAuth, (req, res) => {
+        try {
+            const { name, description, startDate, endDate } = req.body;
+            if (!name) return res.status(400).json({ error: 'name is required' });
+            const sprint = store.createSprint({ name, description, startDate, endDate, createdBy: req.user.id });
+            wsBroadcast('sprint_created', { sprint });
+            res.json(sprint);
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    app.put('/api/sprints/:id', requireAuth, (req, res) => {
+        try {
+            const allowed = ['name', 'description', 'status', 'start_date', 'end_date'];
+            const updates = {};
+            for (const key of allowed) {
+                if (req.body[key] !== undefined) updates[key] = req.body[key];
+            }
+            const sprint = store.updateSprint(req.params.id, updates);
+            if (!sprint) return res.status(404).json({ error: 'Sprint not found' });
+            wsBroadcast('sprint_updated', { sprint });
+            res.json(sprint);
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    app.delete('/api/sprints/:id', requireAuth, (req, res) => {
+        try {
+            store.deleteSprint(req.params.id);
+            wsBroadcast('sprint_deleted', { sprintId: req.params.id });
+            res.json({ success: true });
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
     // ── Issues (Linear-like task board) ──────────────────────────
 
     app.get('/api/issues', requireAuth, (req, res) => {
@@ -544,9 +583,9 @@ export function startDashboard(store, messageHandler, port = 18790, wa = null, e
 
     app.post('/api/issues', requireAuth, (req, res) => {
         try {
-            const { title, description, priority, labels, forkSessionId } = req.body;
+            const { title, description, priority, labels, forkSessionId, sprintId, assignedTo, type } = req.body;
             if (!title) return res.status(400).json({ error: 'title is required' });
-            const issue = store.createIssue({ title, description, priority, labels, createdBy: req.user.id, forkSessionId: forkSessionId || null });
+            const issue = store.createIssue({ title, description, priority, labels, createdBy: req.user.id, forkSessionId: forkSessionId || null, sprintId: sprintId || null, assignedTo: assignedTo || null, type: type || 'task' });
             wsBroadcast('issue_created', { issue });
             res.json(issue);
         } catch (err) { res.status(500).json({ error: err.message }); }
@@ -554,7 +593,7 @@ export function startDashboard(store, messageHandler, port = 18790, wa = null, e
 
     app.put('/api/issues/:id', requireAuth, (req, res) => {
         try {
-            const allowed = ['title', 'description', 'status', 'priority', 'labels', 'assigned_to', 'sort_order'];
+            const allowed = ['title', 'description', 'status', 'priority', 'labels', 'assigned_to', 'sort_order', 'sprint_id', 'type'];
             const updates = {};
             for (const key of allowed) {
                 if (req.body[key] !== undefined) updates[key] = req.body[key];

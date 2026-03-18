@@ -93,6 +93,19 @@ class SessionStore {
             );
             CREATE INDEX IF NOT EXISTS idx_issues_status ON issues(status);
             CREATE INDEX IF NOT EXISTS idx_issues_created_by ON issues(created_by);
+            CREATE TABLE IF NOT EXISTS sprints (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                description TEXT DEFAULT '',
+                status TEXT DEFAULT 'active',
+                start_date TEXT,
+                end_date TEXT,
+                created_by TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_sprints_status ON sprints(status);
+            CREATE INDEX IF NOT EXISTS idx_issues_sprint ON issues(sprint_id);
             CREATE TABLE IF NOT EXISTS system_prompts (
                 key TEXT PRIMARY KEY,
                 prompt TEXT NOT NULL,
@@ -116,6 +129,8 @@ class SessionStore {
             "ALTER TABLE users ADD COLUMN created_by TEXT",
             "ALTER TABLE sessions ADD COLUMN model TEXT DEFAULT 'opus'",
             "ALTER TABLE issues ADD COLUMN fork_session_id TEXT",
+            "ALTER TABLE issues ADD COLUMN sprint_id TEXT",
+            "ALTER TABLE issues ADD COLUMN type TEXT DEFAULT 'task'",
         ];
         for (const sql of safeMigrations) {
             try { this.db.exec(sql); } catch (_) { /* column already exists */ }
@@ -392,19 +407,25 @@ class SessionStore {
 
     // ── Issues ─────────────────────────────────────────────────
 
-    createIssue({ title, description = '', priority = 'medium', labels = [], createdBy = null, forkSessionId = null }) {
+    createIssue({ title, description = '', priority = 'medium', labels = [], createdBy = null, forkSessionId = null, sprintId = null, assignedTo = null, type = 'task' }) {
         const id = `ISS-${Date.now().toString(36)}`;
         const maxOrder = this.db.prepare("SELECT COALESCE(MAX(sort_order), 0) as m FROM issues WHERE status = 'todo'").get().m;
         this.db.prepare(
-            `INSERT INTO issues (id, title, description, priority, labels, created_by, sort_order, fork_session_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-        ).run(id, title, description, priority, JSON.stringify(labels), createdBy, maxOrder + 1, forkSessionId);
+            `INSERT INTO issues (id, title, description, priority, labels, created_by, sort_order, fork_session_id, sprint_id, assigned_to, type) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ).run(id, title, description, priority, JSON.stringify(labels), createdBy, maxOrder + 1, forkSessionId, sprintId, assignedTo, type);
         return this.getIssue(id);
     }
 
     getIssue(id) { return this.db.prepare('SELECT * FROM issues WHERE id = ?').get(id); }
 
     getAllIssues() {
-        return this.db.prepare('SELECT i.*, u.display_name as creator_name FROM issues i LEFT JOIN users u ON i.created_by = u.id ORDER BY i.sort_order ASC, i.created_at DESC').all();
+        return this.db.prepare(
+            `SELECT i.*, u.display_name as creator_name, a.display_name as assignee_name
+             FROM issues i
+             LEFT JOIN users u ON i.created_by = u.id
+             LEFT JOIN users a ON i.assigned_to = a.id
+             ORDER BY i.sort_order ASC, i.created_at DESC`
+        ).all();
     }
 
     getIssuesByStatus(status) {
@@ -437,6 +458,58 @@ class SessionStore {
 
     countIssuesByStatus() {
         return this.db.prepare("SELECT status, COUNT(*) as count FROM issues GROUP BY status").all();
+    }
+
+    // ── Sprints ──────────────────────────────────────────────────
+
+    createSprint({ name, description = '', startDate = null, endDate = null, createdBy = null }) {
+        const id = `SPR-${Date.now().toString(36)}`;
+        this.db.prepare(
+            `INSERT INTO sprints (id, name, description, start_date, end_date, created_by) VALUES (?, ?, ?, ?, ?, ?)`
+        ).run(id, name, description, startDate, endDate, createdBy);
+        return this.getSprint(id);
+    }
+
+    getSprint(id) { return this.db.prepare('SELECT * FROM sprints WHERE id = ?').get(id); }
+
+    getAllSprints() {
+        return this.db.prepare(
+            `SELECT s.*, u.display_name as creator_name,
+                    (SELECT COUNT(*) FROM issues WHERE sprint_id = s.id) as issue_count,
+                    (SELECT COUNT(*) FROM issues WHERE sprint_id = s.id AND status = 'completed') as completed_count
+             FROM sprints s LEFT JOIN users u ON s.created_by = u.id
+             ORDER BY CASE s.status WHEN 'active' THEN 0 WHEN 'planning' THEN 1 ELSE 2 END, s.created_at DESC`
+        ).all();
+    }
+
+    updateSprint(id, updates) {
+        const fields = [];
+        const values = [];
+        for (const [key, val] of Object.entries(updates)) {
+            fields.push(`${key} = ?`);
+            values.push(val);
+        }
+        if (fields.length === 0) return;
+        values.push(id);
+        this.db.prepare(`UPDATE sprints SET ${fields.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(...values);
+        return this.getSprint(id);
+    }
+
+    deleteSprint(id) {
+        // Unlink issues from this sprint
+        this.db.prepare('UPDATE issues SET sprint_id = NULL WHERE sprint_id = ?').run(id);
+        this.db.prepare('DELETE FROM sprints WHERE id = ?').run(id);
+    }
+
+    getIssuesBySprint(sprintId) {
+        return this.db.prepare(
+            `SELECT i.*, u.display_name as creator_name, a.display_name as assignee_name
+             FROM issues i
+             LEFT JOIN users u ON i.created_by = u.id
+             LEFT JOIN users a ON i.assigned_to = a.id
+             WHERE i.sprint_id = ?
+             ORDER BY i.sort_order ASC, i.created_at DESC`
+        ).all(sprintId);
     }
 
     getSystemPrompt(key) { return this.db.prepare('SELECT * FROM system_prompts WHERE key = ?').get(key); }

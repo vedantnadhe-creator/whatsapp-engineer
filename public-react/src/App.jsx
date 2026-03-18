@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { AuthProvider, useAuth } from './context/AuthContext'
-import { useSessions, useStats, useSessionMessages, useModels, usePhones, useUsers, useCron, useAccessRequests, useIssues, useAutonomous, useAction, startSession, sendMessage, stopSession, forkSession, uploadFile, transcribeAudio, requestAccess, getClaudePrompt, saveClaudePrompt, getAdminSettings, saveAdminSetting } from './hooks/useApi'
+import { useSessions, useStats, useSessionMessages, useModels, usePhones, useUsers, useCron, useAccessRequests, useIssues, useAutonomous, useSprints, useTeamMembers, useAction, startSession, sendMessage, stopSession, forkSession, uploadFile, transcribeAudio, requestAccess, getClaudePrompt, saveClaudePrompt, getAdminSettings, saveAdminSetting } from './hooks/useApi'
 import useWebSocket from './hooks/useWebSocket'
 import Sidebar from './components/Sidebar'
 import Workspace from './components/Workspace'
@@ -32,6 +32,8 @@ function Dashboard() {
   const { requests, refresh: refreshRequests, resolve } = useAccessRequests()
   const { issues, refresh: refreshIssues, createIssue, updateIssue, deleteIssue } = useIssues()
   const { status: autonomousStatus, refresh: refreshAutonomous, start: startAutonomous, stop: stopAutonomous } = useAutonomous()
+  const { sprints, refresh: refreshSprints, createSprint, updateSprint, deleteSprint } = useSprints()
+  const { members } = useTeamMembers()
   const { connected: wsConnected, typing: wsTyping, on: wsOn } = useWebSocket()
 
   // Keep activeSession in sync with refreshed sessions list
@@ -71,9 +73,13 @@ function Dashboard() {
       wsOn('issue_deleted', () => { refreshIssues() }),
       // Autonomous engine
       wsOn('autonomous_update', () => { refreshAutonomous() }),
+      // Sprints
+      wsOn('sprint_created', () => { refreshSprints() }),
+      wsOn('sprint_updated', () => { refreshSprints() }),
+      wsOn('sprint_deleted', () => { refreshSprints() }),
     ]
     return () => unsubs.forEach(fn => fn())
-  }, [activeSession?.id, wsOn, refreshMessages, refreshSessions, refreshStats, refreshIssues, refreshAutonomous])
+  }, [activeSession?.id, wsOn, refreshMessages, refreshSessions, refreshStats, refreshIssues, refreshAutonomous, refreshSprints])
 
   // Fallback polling — slower interval (30s) since WebSocket handles most updates
   useEffect(() => {
@@ -226,6 +232,11 @@ function Dashboard() {
             onStopAutonomous={stopAutonomous}
             sessions={sessions}
             userRole={user?.role || 'developer'}
+            members={members}
+            sprints={sprints}
+            onCreateSprint={createSprint}
+            onUpdateSprint={updateSprint}
+            onDeleteSprint={deleteSprint}
             onGoToSession={(sessionId) => {
               const session = sessions.find(s => s.id === sessionId)
               if (session) {
