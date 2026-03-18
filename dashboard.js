@@ -587,6 +587,20 @@ export function startDashboard(store, messageHandler, port = 18790, wa = null, e
             if (!title) return res.status(400).json({ error: 'title is required' });
             const issue = store.createIssue({ title, description, priority, labels, createdBy: req.user.id, forkSessionId: forkSessionId || null, sprintId: sprintId || null, assignedTo: assignedTo || null, type: type || 'task' });
             wsBroadcast('issue_created', { issue });
+
+            // Notify assignee
+            if (assignedTo) {
+                const assignee = store.getUserById(assignedTo);
+                const assignedCount = store.getAllIssues().filter(i => i.assigned_to === assignedTo && i.status !== 'completed').length;
+                wsBroadcast('issue_assigned', {
+                    issue,
+                    assigneeId: assignedTo,
+                    assigneeName: assignee?.display_name || 'Someone',
+                    assignedBy: req.user.displayName || req.user.email,
+                    totalAssigned: assignedCount,
+                });
+            }
+
             res.json(issue);
         } catch (err) { res.status(500).json({ error: err.message }); }
     });
@@ -599,9 +613,27 @@ export function startDashboard(store, messageHandler, port = 18790, wa = null, e
                 if (req.body[key] !== undefined) updates[key] = req.body[key];
             }
             if (updates.status === 'completed') updates.completed_at = new Date().toISOString();
+
+            // Detect assignment change
+            const oldIssue = updates.assigned_to !== undefined ? store.getIssue(req.params.id) : null;
+
             const issue = store.updateIssue(req.params.id, updates);
             if (!issue) return res.status(404).json({ error: 'Issue not found' });
             wsBroadcast('issue_updated', { issue });
+
+            // Notify assignee if assignment changed
+            if (updates.assigned_to && updates.assigned_to !== oldIssue?.assigned_to) {
+                const assignee = store.getUserById(updates.assigned_to);
+                const assignedCount = store.getAllIssues().filter(i => i.assigned_to === updates.assigned_to && i.status !== 'completed').length;
+                wsBroadcast('issue_assigned', {
+                    issue,
+                    assigneeId: updates.assigned_to,
+                    assigneeName: assignee?.display_name || 'Someone',
+                    assignedBy: req.user.displayName || req.user.email,
+                    totalAssigned: assignedCount,
+                });
+            }
+
             res.json(issue);
         } catch (err) { res.status(500).json({ error: err.message }); }
     });

@@ -21,6 +21,7 @@ function Dashboard() {
   const [promptLoading, setPromptLoading] = useState(false)
   const [adminSettings, setAdminSettings] = useState({})
   const [view, setView] = useState('chat') // 'chat' or 'issues'
+  const [notification, setNotification] = useState(null)
 
   const { stats, refresh: refreshStats } = useStats()
   const { sessions, total, totalPages, showAllSessions, refresh: refreshSessions } = useSessions(page)
@@ -73,6 +74,18 @@ function Dashboard() {
       wsOn('issue_deleted', () => { refreshIssues() }),
       // Autonomous engine
       wsOn('autonomous_update', () => { refreshAutonomous() }),
+      // Assignment notifications
+      wsOn('issue_assigned', ({ issue, assigneeId, assignedBy, totalAssigned }) => {
+        if (assigneeId === user?.id) {
+          setNotification({
+            message: `${assignedBy} assigned you "${issue.title}" (${totalAssigned} active)`,
+            type: issue.type || 'task',
+            issueId: issue.id,
+          })
+          setTimeout(() => setNotification(null), 6000)
+        }
+        refreshIssues()
+      }),
       // Sprints
       wsOn('sprint_created', () => { refreshSprints() }),
       wsOn('sprint_updated', () => { refreshSprints() }),
@@ -232,6 +245,7 @@ function Dashboard() {
             onStopAutonomous={stopAutonomous}
             sessions={sessions}
             userRole={user?.role || 'developer'}
+            userId={user?.id}
             members={members}
             sprints={sprints}
             onCreateSprint={createSprint}
@@ -302,6 +316,21 @@ function Dashboard() {
             if (key === 'show_all_sessions') refreshSessions()
           }} />
         </AdminModal>
+      )}
+
+      {/* Assignment notification toast */}
+      {notification && (
+        <div
+          className="fixed bottom-4 right-4 z-50 px-4 py-3 rounded-lg shadow-lg flex items-center gap-3 text-sm animate-in slide-in-from-bottom cursor-pointer max-w-sm"
+          style={{ backgroundColor: 'var(--c-surface)', border: '1px solid var(--c-accent)', color: 'var(--c-text)' }}
+          onClick={() => { setView('issues'); setNotification(null) }}
+        >
+          <span className="text-lg">
+            {notification.type === 'bug' ? '\uD83D\uDC1B' : notification.type === 'feature' ? '\uD83D\uDCA1' : '\uD83D\uDCCB'}
+          </span>
+          <span>{notification.message}</span>
+          <button onClick={(e) => { e.stopPropagation(); setNotification(null) }} className="ml-2 opacity-50 hover:opacity-100 cursor-pointer text-xs">&times;</button>
+        </div>
       )}
     </div>
   )

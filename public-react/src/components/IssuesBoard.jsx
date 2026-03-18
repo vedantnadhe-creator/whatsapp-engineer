@@ -796,6 +796,7 @@ export default function IssuesBoard({
   onBack,
   sessions = [],
   userRole = 'developer',
+  userId = null,
   members = [],
   sprints = [],
   onCreateSprint,
@@ -809,9 +810,11 @@ export default function IssuesBoard({
   const [collapsedGroups, setCollapsedGroups] = useState({});
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [activeSprint, setActiveSprint] = useState(null); // null = all, 'backlog' = no sprint, sprintId = specific
+  const [showMyAssigned, setShowMyAssigned] = useState(false);
 
   const isAutoRunning = autonomousStatus?.running;
   const isTester = userRole === 'tester';
+  const myAssignedCount = userId ? issues.filter(i => i.assigned_to === userId && i.status !== 'completed').length : 0;
 
   const toggleSelect = useCallback((id) => {
     setSelectedIds(prev => {
@@ -837,12 +840,16 @@ export default function IssuesBoard({
     if (selectedIssue?.id === id) setSelectedIssue({ ...selectedIssue, status });
   };
 
-  // Filter by sprint first, then by status
-  const sprintFiltered = activeSprint === null
+  // Filter by sprint, then "assigned to me", then by status
+  let sprintFiltered = activeSprint === null
     ? issues
     : activeSprint === 'backlog'
       ? issues.filter(i => !i.sprint_id)
       : issues.filter(i => i.sprint_id === activeSprint);
+
+  if (showMyAssigned && userId) {
+    sprintFiltered = sprintFiltered.filter(i => i.assigned_to === userId);
+  }
 
   const filteredIssues = filterStatus === 'all'
     ? sprintFiltered
@@ -959,9 +966,9 @@ export default function IssuesBoard({
       )}
 
       {/* Filter tabs */}
-      <div className="flex items-center gap-1 px-4 py-2 flex-shrink-0" style={{ borderBottom: `1px solid ${colors.border}` }}>
+      <div className="flex items-center gap-1 px-4 py-2 flex-shrink-0 overflow-x-auto" style={{ borderBottom: `1px solid ${colors.border}` }}>
         <button onClick={() => setFilterStatus('all')}
-          className="text-xs px-2.5 py-1 rounded-md cursor-pointer transition-colors"
+          className="text-xs px-2.5 py-1 rounded-md cursor-pointer transition-colors whitespace-nowrap"
           style={{ backgroundColor: filterStatus === 'all' ? colors.surface2 : 'transparent', color: filterStatus === 'all' ? colors.text : colors.textSecondary }}>
           All ({sprintFiltered.length})
         </button>
@@ -970,12 +977,23 @@ export default function IssuesBoard({
           const count = sprintFiltered.filter((i) => i.status === s).length;
           return (
             <button key={s} onClick={() => setFilterStatus(s)}
-              className="text-xs px-2.5 py-1 rounded-md cursor-pointer flex items-center gap-1.5 transition-colors"
+              className="text-xs px-2.5 py-1 rounded-md cursor-pointer flex items-center gap-1.5 transition-colors whitespace-nowrap"
               style={{ backgroundColor: filterStatus === s ? `${cfg.color}15` : 'transparent', color: filterStatus === s ? cfg.color : colors.textSecondary }}>
               <StatusIcon status={s} size={10} />{cfg.label} ({count})
             </button>
           );
         })}
+        <div className="w-px h-4 mx-1 flex-shrink-0" style={{ backgroundColor: colors.border }} />
+        <button onClick={() => setShowMyAssigned(!showMyAssigned)}
+          className="text-xs px-2.5 py-1 rounded-md cursor-pointer flex items-center gap-1.5 transition-colors whitespace-nowrap"
+          style={{
+            backgroundColor: showMyAssigned ? `${colors.accent}20` : 'transparent',
+            color: showMyAssigned ? colors.accent : colors.textSecondary,
+            border: showMyAssigned ? `1px solid ${colors.accent}40` : '1px solid transparent',
+          }}>
+          <User size={10} />
+          My Issues {myAssignedCount > 0 ? `(${myAssignedCount})` : ''}
+        </button>
       </div>
 
       {/* Create form */}

@@ -105,7 +105,6 @@ class SessionStore {
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
             );
             CREATE INDEX IF NOT EXISTS idx_sprints_status ON sprints(status);
-            CREATE INDEX IF NOT EXISTS idx_issues_sprint ON issues(sprint_id);
             CREATE TABLE IF NOT EXISTS system_prompts (
                 key TEXT PRIMARY KEY,
                 prompt TEXT NOT NULL,
@@ -136,6 +135,7 @@ class SessionStore {
             try { this.db.exec(sql); } catch (_) { /* column already exists */ }
         }
         try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_owner ON sessions(owner_id)'); } catch (_) { }
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_issues_sprint ON issues(sprint_id)'); } catch (_) { }
     }
 
     createSession(id, userPhone, task, claudeSessionId, workingDir, ownerId = null, model = 'opus') {
