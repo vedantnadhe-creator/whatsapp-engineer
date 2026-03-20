@@ -151,10 +151,12 @@ export function CronPanel({ jobs = [], onSave, onDelete }) {
 
 export function SettingsPanel({ settings = {}, onSave }) {
   const [showAll, setShowAll] = useState(settings.show_all_sessions === 'true')
+  const [billingMode, setBillingMode] = useState(settings.claude_billing_mode || 'api')
 
   useEffect(() => {
     setShowAll(settings.show_all_sessions === 'true')
-  }, [settings.show_all_sessions])
+    setBillingMode(settings.claude_billing_mode || 'api')
+  }, [settings.show_all_sessions, settings.claude_billing_mode])
 
   const handleToggle = async () => {
     const newVal = !showAll
@@ -162,16 +164,38 @@ export function SettingsPanel({ settings = {}, onSave }) {
     await onSave('show_all_sessions', String(newVal))
   }
 
+  const handleBillingMode = async (mode) => {
+    setBillingMode(mode)
+    await onSave('claude_billing_mode', mode)
+  }
+
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between py-3 px-1">
         <div>
           <p className="text-sm font-medium text-text-primary">Show everyone's sessions</p>
-          <p className="text-xs text-text-muted mt-0.5">When enabled, all users can see sessions from every team member. When disabled, users only see their own sessions.</p>
+          <p className="text-xs text-text-muted mt-0.5">When enabled, all users can see sessions from every team member.</p>
         </div>
         <button onClick={handleToggle} className="shrink-0 ml-4 cursor-pointer transition-colors" style={{ color: showAll ? 'var(--c-accent)' : 'var(--c-text-muted)' }}>
           {showAll ? <ToggleRight size={28} /> : <ToggleLeft size={28} />}
         </button>
+      </div>
+
+      <div className="py-3 px-1" style={{ borderTop: '1px solid var(--c-border)' }}>
+        <p className="text-sm font-medium text-text-primary mb-1">Claude billing mode</p>
+        <p className="text-xs text-text-muted mb-3">Choose based on how Claude is authenticated. API mode shows cost ($), CLI/subscription mode shows token usage instead.</p>
+        <div className="flex gap-2">
+          <button onClick={() => handleBillingMode('api')}
+            className="text-xs px-3 py-1.5 rounded-md font-medium cursor-pointer transition-colors"
+            style={{ backgroundColor: billingMode === 'api' ? 'var(--c-accent)' : 'var(--c-surface-2)', color: billingMode === 'api' ? '#fff' : 'var(--c-text-secondary)', border: `1px solid ${billingMode === 'api' ? 'var(--c-accent)' : 'var(--c-border)'}` }}>
+            API Key (show cost)
+          </button>
+          <button onClick={() => handleBillingMode('cli')}
+            className="text-xs px-3 py-1.5 rounded-md font-medium cursor-pointer transition-colors"
+            style={{ backgroundColor: billingMode === 'cli' ? 'var(--c-accent)' : 'var(--c-surface-2)', color: billingMode === 'cli' ? '#fff' : 'var(--c-text-secondary)', border: `1px solid ${billingMode === 'cli' ? 'var(--c-accent)' : 'var(--c-border)'}` }}>
+            CLI Auth (show tokens)
+          </button>
+        </div>
       </div>
     </div>
   )

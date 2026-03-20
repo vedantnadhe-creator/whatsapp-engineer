@@ -69,11 +69,22 @@ export function startDashboard(store, messageHandler, port = 18790, wa = null, e
     app.get('/api/stats', optionalAuth, (req, res) => {
         try {
             const totalCost = store.getTotalCost();
+            const totalTokens = store.getTotalTokens();
             const activeSessions = store.getAllActiveSessions();
             const allSessions = store.countAllSessions();
             const allMessages = store.db.prepare('SELECT COUNT(*) as count FROM messages').get().count;
             const pendingRequests = req.user?.isAdmin ? store.countPendingRequests() : 0;
-            res.json({ totalCost, activeCount: activeSessions.length, totalSessions: allSessions, totalMessages: allMessages, pendingRequests });
+            const billingMode = store.getSetting('claude_billing_mode') || 'api';
+            res.json({
+                totalCost,
+                totalInputTokens: totalTokens.input,
+                totalOutputTokens: totalTokens.output,
+                billingMode,
+                activeCount: activeSessions.length,
+                totalSessions: allSessions,
+                totalMessages: allMessages,
+                pendingRequests,
+            });
         } catch (err) { res.status(500).json({ error: err.message }); }
     });
 

@@ -205,7 +205,7 @@ class ClaudeManager extends EventEmitter {
     }
 
     _runPty(sessionId, bin, args, workingDir, baseCost = 0) {
-        const entry = { proc: null, baseCost, costUsd: baseCost, lastOutput: '', lineBuffer: '', resultEmitted: false };
+        const entry = { proc: null, baseCost, costUsd: baseCost, inputTokens: 0, outputTokens: 0, lastOutput: '', lineBuffer: '', resultEmitted: false };
         this.processes.set(sessionId, entry);
 
         const proc = pty.spawn(bin, args, {
@@ -251,6 +251,18 @@ class ClaudeManager extends EventEmitter {
             if (totalSessionCost > entry.costUsd) {
                 entry.costUsd = totalSessionCost;
                 this.store.updateSession(sessionId, { cost_usd: totalSessionCost });
+            }
+        }
+
+        // Track tokens from usage object
+        const usage = event.usage;
+        if (usage && entry) {
+            const newInput = usage.input_tokens ?? usage.total_input_tokens ?? 0;
+            const newOutput = usage.output_tokens ?? usage.total_output_tokens ?? 0;
+            if (newInput > entry.inputTokens || newOutput > entry.outputTokens) {
+                entry.inputTokens = Math.max(entry.inputTokens, newInput);
+                entry.outputTokens = Math.max(entry.outputTokens, newOutput);
+                this.store.updateSession(sessionId, { input_tokens: entry.inputTokens, output_tokens: entry.outputTokens });
             }
         }
 

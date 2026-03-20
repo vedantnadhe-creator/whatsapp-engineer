@@ -130,6 +130,8 @@ class SessionStore {
             "ALTER TABLE issues ADD COLUMN fork_session_id TEXT",
             "ALTER TABLE issues ADD COLUMN sprint_id TEXT",
             "ALTER TABLE issues ADD COLUMN type TEXT DEFAULT 'task'",
+            "ALTER TABLE sessions ADD COLUMN input_tokens INTEGER DEFAULT 0",
+            "ALTER TABLE sessions ADD COLUMN output_tokens INTEGER DEFAULT 0",
         ];
         for (const sql of safeMigrations) {
             try { this.db.exec(sql); } catch (_) { /* column already exists */ }
@@ -194,6 +196,10 @@ class SessionStore {
 
     getTotalCost() {
         return this.db.prepare('SELECT COALESCE(SUM(cost_usd), 0) as total FROM sessions').get().total;
+    }
+
+    getTotalTokens() {
+        return this.db.prepare('SELECT COALESCE(SUM(input_tokens), 0) as input, COALESCE(SUM(output_tokens), 0) as output FROM sessions').get();
     }
 
     getSessionsForUser(userId, limit = 20, offset = 0) {

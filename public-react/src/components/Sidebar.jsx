@@ -11,6 +11,7 @@ import {
   ChevronDown,
   Activity,
   DollarSign,
+  Hash,
   MessageSquare,
   Sun,
   Moon,
@@ -43,7 +44,13 @@ function StatusDot({ status }) {
   );
 }
 
-function SessionItem({ session, isActive, onSelect }) {
+function formatTokens(n) {
+  if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+  if (n >= 1000) return (n / 1000).toFixed(1) + 'k';
+  return String(n);
+}
+
+function SessionItem({ session, isActive, onSelect, billingMode = 'api' }) {
   const ownerLabel = session.owner_name || session.owner_email || null;
   return (
     <button
@@ -92,10 +99,18 @@ function SessionItem({ session, isActive, onSelect }) {
             >
               {session.model || 'unknown'}
             </span>
-            {session.cost_usd != null && (
-              <span className="font-mono text-xs" style={{ color: 'var(--c-text-muted)' }}>
-                ${Number(session.cost_usd).toFixed(2)}
-              </span>
+            {billingMode === 'api' ? (
+              session.cost_usd != null && (
+                <span className="font-mono text-xs" style={{ color: 'var(--c-text-muted)' }}>
+                  ${Number(session.cost_usd).toFixed(2)}
+                </span>
+              )
+            ) : (
+              (session.input_tokens > 0 || session.output_tokens > 0) && (
+                <span className="font-mono text-xs" style={{ color: 'var(--c-text-muted)' }}>
+                  {formatTokens((session.input_tokens || 0) + (session.output_tokens || 0))} tok
+                </span>
+              )
             )}
           </div>
         </div>
@@ -214,10 +229,17 @@ function SidebarContent({
           className="flex items-center gap-3 px-4 py-2 font-mono text-xs"
           style={{ color: 'var(--c-text-secondary)', borderBottom: '1px solid var(--c-border)' }}
         >
-          <span className="flex items-center gap-1">
-            <DollarSign size={12} />
-            {Number(stats.totalCost || 0).toFixed(2)}
-          </span>
+          {stats.billingMode === 'cli' ? (
+            <span className="flex items-center gap-1" title={`In: ${formatTokens(stats.totalInputTokens || 0)} / Out: ${formatTokens(stats.totalOutputTokens || 0)}`}>
+              <Hash size={12} />
+              {formatTokens((stats.totalInputTokens || 0) + (stats.totalOutputTokens || 0))} tok
+            </span>
+          ) : (
+            <span className="flex items-center gap-1">
+              <DollarSign size={12} />
+              {Number(stats.totalCost || 0).toFixed(2)}
+            </span>
+          )}
           <span className="flex items-center gap-1">
             <Activity size={12} />
             {stats.activeCount || 0}
@@ -298,6 +320,7 @@ function SidebarContent({
                 session={session}
                 isActive={session.id === activeSessionId}
                 onSelect={onSelectSession}
+                billingMode={stats?.billingMode || 'api'}
               />
             ))}
             {hasMore && (
