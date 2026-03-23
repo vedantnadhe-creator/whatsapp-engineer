@@ -233,6 +233,10 @@ export async function stopSession(sessionId) {
   return apiFetch(`/api/sessions/${sessionId}/stop`, { method: 'POST' });
 }
 
+export async function toggleBookmark(sessionId) {
+  return apiFetch(`/api/sessions/${sessionId}/bookmark`, { method: 'POST' });
+}
+
 export async function forkSession(sessionId, text, model) {
   return apiFetch(`/api/sessions/${sessionId}/fork`, {
     method: 'POST',

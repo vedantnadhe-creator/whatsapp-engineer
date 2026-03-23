@@ -93,6 +93,12 @@ class SessionStore {
             );
             CREATE INDEX IF NOT EXISTS idx_issues_status ON issues(status);
             CREATE INDEX IF NOT EXISTS idx_issues_created_by ON issues(created_by);
+            CREATE TABLE IF NOT EXISTS bookmarks (
+                user_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (user_id, session_id)
+            );
             CREATE TABLE IF NOT EXISTS sprints (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
@@ -464,6 +470,23 @@ class SessionStore {
 
     countIssuesByStatus() {
         return this.db.prepare("SELECT status, COUNT(*) as count FROM issues GROUP BY status").all();
+    }
+
+    // ── Bookmarks ────────────────────────────────────────────────
+
+    toggleBookmark(userId, sessionId) {
+        const existing = this.db.prepare('SELECT 1 FROM bookmarks WHERE user_id = ? AND session_id = ?').get(userId, sessionId);
+        if (existing) {
+            this.db.prepare('DELETE FROM bookmarks WHERE user_id = ? AND session_id = ?').run(userId, sessionId);
+            return false;
+        } else {
+            this.db.prepare('INSERT INTO bookmarks (user_id, session_id) VALUES (?, ?)').run(userId, sessionId);
+            return true;
+        }
+    }
+
+    getBookmarkedSessionIds(userId) {
+        return new Set(this.db.prepare('SELECT session_id FROM bookmarks WHERE user_id = ?').all(userId).map(r => r.session_id));
     }
 
     // ── Sprints ──────────────────────────────────────────────────

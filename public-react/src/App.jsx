@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { AuthProvider, useAuth } from './context/AuthContext'
-import { useSessions, useStats, useSessionMessages, useModels, usePhones, useUsers, useCron, useAccessRequests, useIssues, useAutonomous, useSprints, useTeamMembers, useAction, startSession, sendMessage, stopSession, forkSession, uploadFile, transcribeAudio, requestAccess, getClaudePrompt, saveClaudePrompt, getAdminSettings, saveAdminSetting } from './hooks/useApi'
+import { useSessions, useStats, useSessionMessages, useModels, usePhones, useUsers, useCron, useAccessRequests, useIssues, useAutonomous, useSprints, useTeamMembers, useAction, startSession, sendMessage, stopSession, forkSession, toggleBookmark, uploadFile, transcribeAudio, requestAccess, getClaudePrompt, saveClaudePrompt, getAdminSettings, saveAdminSetting } from './hooks/useApi'
 import useWebSocket from './hooks/useWebSocket'
 import Sidebar from './components/Sidebar'
 import Workspace from './components/Workspace'
@@ -231,6 +231,10 @@ function Dashboard() {
         onViewChange={setView}
         issueCount={issues.length}
         showAllSessions={showAllSessions}
+        onToggleBookmark={async (sessionId) => {
+          await toggleBookmark(sessionId)
+          refreshSessions()
+        }}
       />
       <div className="flex-1 min-w-0 h-full">
         {view === 'issues' ? (

@@ -13,6 +13,7 @@ import {
   DollarSign,
   Hash,
   MessageSquare,
+  Star,
   Sun,
   Moon,
   CircleDot,
@@ -50,12 +51,12 @@ function formatTokens(n) {
   return String(n);
 }
 
-function SessionItem({ session, isActive, onSelect, billingMode = 'api' }) {
+function SessionItem({ session, isActive, onSelect, billingMode = 'api', onToggleBookmark }) {
   const ownerLabel = session.owner_name || session.owner_email || null;
   return (
     <button
       onClick={() => onSelect(session)}
-      className="w-full text-left px-3 py-2.5 transition-colors duration-150 cursor-pointer"
+      className="w-full text-left px-3 py-2.5 transition-colors duration-150 cursor-pointer group"
       style={{
         backgroundColor: isActive ? 'var(--c-surface-2)' : 'transparent',
         borderLeft: isActive ? '2px solid var(--c-accent)' : '2px solid transparent',
@@ -114,6 +115,14 @@ function SessionItem({ session, isActive, onSelect, billingMode = 'api' }) {
             )}
           </div>
         </div>
+        {/* Bookmark star */}
+        <span
+          onClick={(e) => { e.stopPropagation(); onToggleBookmark?.(session.id); }}
+          className={`flex-shrink-0 mt-0.5 cursor-pointer transition-opacity ${session.bookmarked ? 'opacity-100' : 'opacity-0 group-hover:opacity-50'}`}
+          title={session.bookmarked ? 'Remove bookmark' : 'Bookmark'}
+        >
+          <Star size={13} style={{ color: 'var(--c-accent)' }} fill={session.bookmarked ? 'var(--c-accent)' : 'none'} />
+        </span>
       </div>
     </button>
   );
@@ -189,13 +198,16 @@ function SidebarContent({
   onViewChange,
   issueCount = 0,
   showAllSessions = false,
+  onToggleBookmark,
 }) {
   const [adminOpen, setAdminOpen] = useState(false);
-  const [sessionFilter, setSessionFilter] = useState('all'); // 'all' or 'mine'
+  const [sessionFilter, setSessionFilter] = useState('all'); // 'all', 'mine', or 'saved'
   const { theme, toggle } = useTheme();
 
   const filteredSessions = sessionFilter === 'mine'
     ? (sessions || []).filter((s) => s.is_mine)
+    : sessionFilter === 'saved'
+    ? (sessions || []).filter((s) => s.bookmarked)
     : (sessions || []);
 
   return (
@@ -289,22 +301,26 @@ function SidebarContent({
       </div>
 
       {/* Session filter: All / Mine — only shown when all sessions are visible */}
-      {view === 'chat' && showAllSessions && (
+      {view === 'chat' && (
         <div
           className="flex px-3 py-1.5 gap-1"
           style={{ borderBottom: '1px solid var(--c-border)' }}
         >
-          {['all', 'mine'].map((f) => (
+          {[
+            { key: 'all', label: `All (${(sessions || []).length})` },
+            ...(showAllSessions ? [{ key: 'mine', label: `Mine (${(sessions || []).filter(s => s.is_mine).length})` }] : []),
+            { key: 'saved', label: `Saved (${(sessions || []).filter(s => s.bookmarked).length})` },
+          ].map(({ key, label }) => (
             <button
-              key={f}
-              onClick={() => setSessionFilter(f)}
+              key={key}
+              onClick={() => setSessionFilter(key)}
               className="text-[10px] font-mono uppercase px-2 py-1 rounded cursor-pointer transition-colors"
               style={{
-                backgroundColor: sessionFilter === f ? 'var(--c-surface-2)' : 'transparent',
-                color: sessionFilter === f ? 'var(--c-text)' : 'var(--c-text-secondary)',
+                backgroundColor: sessionFilter === key ? 'var(--c-surface-2)' : 'transparent',
+                color: sessionFilter === key ? 'var(--c-text)' : 'var(--c-text-secondary)',
               }}
             >
-              {f === 'all' ? `All (${(sessions || []).length})` : `Mine (${(sessions || []).filter(s => s.is_mine).length})`}
+              {label}
             </button>
           ))}
         </div>
@@ -321,6 +337,7 @@ function SidebarContent({
                 isActive={session.id === activeSessionId}
                 onSelect={onSelectSession}
                 billingMode={stats?.billingMode || 'api'}
+                onToggleBookmark={onToggleBookmark}
               />
             ))}
             {hasMore && (
@@ -337,7 +354,7 @@ function SidebarContent({
           </>
         ) : (
           <div className="px-4 py-8 text-center text-sm" style={{ color: 'var(--c-text-muted)' }}>
-            {sessionFilter === 'mine' ? 'No sessions by you yet' : 'No sessions yet'}
+            {sessionFilter === 'mine' ? 'No sessions by you yet' : sessionFilter === 'saved' ? 'No saved sessions yet' : 'No sessions yet'}
           </div>
         )}
       </div>

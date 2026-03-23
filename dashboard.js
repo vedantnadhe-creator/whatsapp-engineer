@@ -105,7 +105,17 @@ export function startDashboard(store, messageHandler, port = 18790, wa = null, e
                 sessions = store.getOwnSessions(req.user.id, limit, offset);
                 total = store.countOwnSessions(req.user.id);
             }
+            // Attach bookmark status
+            const bookmarks = store.getBookmarkedSessionIds(req.user.id);
+            sessions = sessions.map(s => ({ ...s, bookmarked: bookmarks.has(s.id) }));
             res.json({ sessions, total, page, totalPages: Math.ceil(total / limit), showAllSessions: showAll || isAdmin });
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    app.post('/api/sessions/:id/bookmark', requireAuth, (req, res) => {
+        try {
+            const bookmarked = store.toggleBookmark(req.user.id, req.params.id);
+            res.json({ bookmarked });
         } catch (err) { res.status(500).json({ error: err.message }); }
     });
 
