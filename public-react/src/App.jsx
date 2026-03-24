@@ -140,6 +140,13 @@ function Dashboard() {
   }, [])
   const [handleStartSession, startingSession] = useAction(_startSession)
 
+  const _sendMessage = useCallback(async (text, model, imageTokens = []) => {
+    if (!activeSession?.id) return
+    await sendMessage(activeSession.id, text, imageTokens)
+    setTimeout(() => refreshMessages(), 1000)
+  }, [activeSession?.id])
+  const [handleSendMessage, sendingMessage] = useAction(_sendMessage)
+
   const CHECKPOINT_PROMPT = `🚩 CHECKPOINT — Run the following steps in order. Do NOT ask for confirmation, proceed automatically through each step:
 
 1. **Code Review** — Use the /requesting-code-review skill to review all changes made in this session. Fix any critical issues found.
@@ -152,16 +159,8 @@ Proceed now.`
 
   const handleCheckpoint = useCallback(() => {
     if (!activeSession?.id) return
-    // Send the checkpoint prompt as a visible user message
     handleSendMessage(CHECKPOINT_PROMPT, selectedModel)
   }, [activeSession?.id, selectedModel, handleSendMessage])
-
-  const _sendMessage = useCallback(async (text, model, imageTokens = []) => {
-    if (!activeSession?.id) return
-    await sendMessage(activeSession.id, text, imageTokens)
-    setTimeout(() => refreshMessages(), 1000)
-  }, [activeSession?.id])
-  const [handleSendMessage, sendingMessage] = useAction(_sendMessage)
 
   const _forkSession = useCallback(async (text, model) => {
     if (!activeSession?.id) return
