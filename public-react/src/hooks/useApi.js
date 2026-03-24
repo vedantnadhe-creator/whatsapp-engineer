@@ -245,8 +245,20 @@ export async function getSprintChangelog(sprintId) {
   return apiFetch(`/api/sprints/${sprintId}/changelog`);
 }
 
-export async function generateSprintChangelog(sprintId) {
-  return apiFetch(`/api/sprints/${sprintId}/generate-changelog`, { method: 'POST' });
+export async function requestSessionSummary(sessionId) {
+  return apiFetch(`/api/sessions/${sessionId}/request-summary`, { method: 'POST' });
+}
+
+export async function getSessionLastResponse(sessionId) {
+  return apiFetch(`/api/sessions/${sessionId}/last-response`);
+}
+
+export async function generateSprintChangelog(sprintId, summaries) {
+  return apiFetch(`/api/sprints/${sprintId}/generate-changelog`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ summaries }),
+  });
 }
 
 export async function updateSessionSprint(sessionId, sprintId) {

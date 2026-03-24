@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { AuthProvider, useAuth } from './context/AuthContext'
-import { useSessions, useStats, useSessionMessages, useModels, usePhones, useUsers, useCron, useAccessRequests, useIssues, useAutonomous, useSprints, useTeamMembers, useAction, startSession, sendMessage, stopSession, forkSession, toggleBookmark, updateSessionSprint, getSprintChangelog, generateSprintChangelog, uploadFile, transcribeAudio, requestAccess, getClaudePrompt, saveClaudePrompt, getAdminSettings, saveAdminSetting } from './hooks/useApi'
+import { useSessions, useStats, useSessionMessages, useModels, usePhones, useUsers, useCron, useAccessRequests, useIssues, useAutonomous, useSprints, useTeamMembers, useAction, startSession, sendMessage, stopSession, forkSession, toggleBookmark, updateSessionSprint, getSprintChangelog, requestSessionSummary, getSessionLastResponse, generateSprintChangelog, uploadFile, transcribeAudio, requestAccess, getClaudePrompt, saveClaudePrompt, getAdminSettings, saveAdminSetting } from './hooks/useApi'
 import useWebSocket from './hooks/useWebSocket'
 import Sidebar from './components/Sidebar'
 import Workspace from './components/Workspace'
@@ -279,8 +279,10 @@ Proceed now.`
               }
             }}
             onGetChangelog={getSprintChangelog}
-            onGenerateChangelog={async (sprintId) => {
-              const result = await generateSprintChangelog(sprintId)
+            onRequestSummary={requestSessionSummary}
+            onGetLastResponse={getSessionLastResponse}
+            onGenerateChangelog={async (sprintId, summaries) => {
+              const result = await generateSprintChangelog(sprintId, summaries)
               if (result?.sessionId) {
                 setTimeout(() => { refreshSessions(); refreshMessages() }, 2000)
               }

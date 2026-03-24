@@ -661,7 +661,6 @@ Do NOT ask for confirmation — proceed through each step automatically. If any 
             const sessions = store.getSessionsBySprint(req.params.id);
             const issues = store.getIssuesBySprint(req.params.id);
 
-            // Build summary from each session's last assistant message
             const sessionSummaries = sessions.map(s => {
                 const msgs = store.getSessionSummaryMessages(s.id, 30);
                 const lastAssistant = [...msgs].reverse().find(m => m.role === 'assistant');
@@ -681,56 +680,90 @@ Do NOT ask for confirmation — proceed through each step automatically. If any 
         } catch (err) { res.status(500).json({ error: err.message }); }
     });
 
-    // Generate changelog via new Claude session
+    // Request summary from a session — sends a "summarize" message, returns immediately
+    app.post('/api/sessions/:id/request-summary', requireAuth, async (req, res) => {
+        try {
+            const sessionId = req.params.id;
+            const session = store.getSession(sessionId);
+            if (!session) return res.status(404).json({ error: 'Session not found' });
+
+            const summaryPrompt = `Provide a concise summary of everything that was done in this session. Include:
+- What was implemented or changed
+- Key files modified
+- Any bugs fixed
+- Current status of the work
+
+Keep it to 3-5 bullet points, be specific about what changed. Do NOT start any new work.`;
+
+            const phone = req.user.phone || req.user.email || req.user.id;
+            await messageHandler({ isWeb: true, phone: String(phone), text: `[resume ${sessionId}] ${summaryPrompt}`, pushName: req.user.displayName || 'Dashboard' });
+
+            res.json({ success: true, sessionId });
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    // Get session status + last assistant response
+    app.get('/api/sessions/:id/last-response', requireAuth, (req, res) => {
+        try {
+            const session = store.getSession(req.params.id);
+            if (!session) return res.status(404).json({ error: 'Session not found' });
+
+            const msgs = store.getSessionSummaryMessages(req.params.id, 10);
+            const lastAssistant = [...msgs].reverse().find(m => m.role === 'assistant');
+
+            res.json({
+                sessionId: req.params.id,
+                status: session.status,
+                task: session.task,
+                lastResponse: lastAssistant?.content || '',
+                lastTimestamp: lastAssistant?.timestamp || null,
+            });
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    // Generate changelog — accepts pre-collected summaries, starts new Claude session
     app.post('/api/sprints/:id/generate-changelog', requireAuth, async (req, res) => {
         try {
             const sprint = store.getSprint(req.params.id);
             if (!sprint) return res.status(404).json({ error: 'Sprint not found' });
-            const sessions = store.getSessionsBySprint(req.params.id);
+            const { summaries = [] } = req.body;
             const issues = store.getIssuesBySprint(req.params.id);
 
-            // Build a prompt with all session data
-            let sessionDetails = sessions.map(s => {
-                const msgs = store.getSessionSummaryMessages(s.id, 20);
-                const lastAssistant = [...msgs].reverse().find(m => m.role === 'assistant');
-                const firstUser = msgs.find(m => m.role === 'user');
-                return `### Session: ${s.id} — "${s.task || 'Untitled'}"
-- Status: ${s.status}
-- Owner: ${s.owner_name || 'Unknown'}
-- Created: ${s.created_at}
-- Task: ${firstUser?.content?.slice(0, 300) || s.task || 'N/A'}
-- Last Output: ${lastAssistant?.content?.slice(0, 600) || 'No output yet'}`;
+            let sessionDetails = summaries.map(s => {
+                return `### Session: ${s.sessionId} — "${s.task || 'Untitled'}"
+- Summary:\n${s.summary || 'No summary available'}`;
             }).join('\n\n');
 
             let issueDetails = issues.map(i => {
                 return `- [${i.status}] ${i.title} (${i.type || 'task'}, ${i.priority}) — assigned to ${i.assignee_name || 'unassigned'}${i.session_id ? ` — Session: ${i.session_id}` : ''}`;
             }).join('\n');
 
-            const changelogPrompt = `Generate a clean, professional changelog for Sprint "${sprint.name}".
+            const changelogPrompt = `You are generating a professional changelog for Sprint "${sprint.name}". I've collected summaries from each session in this sprint. Create a structured, detailed changelog.
 
 ## Sprint Details
 - Name: ${sprint.name}
 - Status: ${sprint.status}
 - Start: ${sprint.start_date || 'N/A'} | End: ${sprint.end_date || 'N/A'}
+- Total Sessions: ${summaries.length}
 
-## Sessions in this Sprint
+## Session Summaries
 ${sessionDetails || 'No sessions'}
 
 ## Issues in this Sprint
 ${issueDetails || 'No issues'}
 
-## Instructions
-Create a structured changelog with:
-1. A brief sprint summary (2-3 sentences)
-2. For EACH session, create an entry with:
-   - Session ID and name (so users can click to visit)
-   - What was implemented/changed (summarize from the session output)
-   - Key files modified (if mentioned)
-   - Status (completed/in-progress)
-3. A section listing all issues and their final status
-4. Any notable bugs fixed or improvements made
+## Your Task
+Create a clean, professional changelog with:
+1. **Sprint Overview** — A brief 2-3 sentence summary of what was accomplished
+2. **Changes by Session** — For EACH session, create an entry:
+   - **[Session: <ID>] <title>** — so users can identify and visit each session
+   - Bullet points of what was implemented/changed
+   - Status indicator
+3. **Issues Summary** — Table or list of all issues with final status
+4. **Notable Fixes & Improvements** — Highlight important bug fixes or improvements
 
-Format as clean Markdown. Use session IDs like [Session: WA-xxxxx] so they are identifiable.`;
+Format as clean Markdown. This changelog will be used for team review and stakeholder updates.
+The user may ask follow-up questions about the changelog — answer based on the session data provided above.`;
 
             const phone = req.user.phone || req.user.email || req.user.id;
             const result = await messageHandler({ isWeb: true, phone: String(phone), text: `[start fresh] ${changelogPrompt}`, pushName: req.user.displayName || 'Dashboard', ownerId: req.user.id, model: 'sonnet' });

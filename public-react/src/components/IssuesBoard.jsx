@@ -806,6 +806,8 @@ export default function IssuesBoard({
   onUpdateSprint,
   onDeleteSprint,
   onGetChangelog,
+  onRequestSummary,
+  onGetLastResponse,
   onGenerateChangelog,
 }) {
   const [showCreate, setShowCreate] = useState(false);
@@ -814,11 +816,13 @@ export default function IssuesBoard({
   const [filterStatus, setFilterStatus] = useState('all');
   const [collapsedGroups, setCollapsedGroups] = useState({});
   const [selectedIds, setSelectedIds] = useState(new Set());
-  const [activeSprint, setActiveSprint] = useState(null); // null = all, 'backlog' = no sprint, sprintId = specific
+  const [activeSprint, setActiveSprint] = useState(null);
   const [showMyAssigned, setShowMyAssigned] = useState(false);
-  const [changelogData, setChangelogData] = useState(null); // { sprint, sessions, issues }
+  const [changelogData, setChangelogData] = useState(null);
   const [changelogLoading, setChangelogLoading] = useState(false);
-  const [generatingChangelog, setGeneratingChangelog] = useState(false);
+  const [changelogSelected, setChangelogSelected] = useState(new Set());
+  const [changelogProgress, setChangelogProgress] = useState(null); // { current, total, sessionId, phase }
+  const [changelogSummaries, setChangelogSummaries] = useState({}); // { sessionId: summary }
 
   const isAutoRunning = autonomousStatus?.running;
   const isTester = userRole === 'tester';
@@ -1130,10 +1134,11 @@ export default function IssuesBoard({
       {/* Changelog Modal */}
       {changelogData && (
         <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}
-          onClick={() => setChangelogData(null)}>
+          onClick={() => { if (!changelogProgress) setChangelogData(null); }}>
           <div className="w-full max-w-2xl mx-4 max-h-[80vh] flex flex-col rounded-xl overflow-hidden"
             style={{ backgroundColor: colors.surface, border: `1px solid ${colors.border}` }}
             onClick={(e) => e.stopPropagation()}>
+
             {/* Modal header */}
             <div className="flex items-center justify-between px-5 py-3 flex-shrink-0" style={{ borderBottom: `1px solid ${colors.border}` }}>
               <div>
@@ -1142,73 +1147,192 @@ export default function IssuesBoard({
                 </h3>
                 <p className="text-[10px] font-mono mt-0.5" style={{ color: colors.textSecondary }}>
                   {changelogData.sessions?.length || 0} sessions · {changelogData.issues?.length || 0} issues
+                  {changelogSelected.size > 0 && ` · ${changelogSelected.size} selected`}
                 </p>
               </div>
               <div className="flex items-center gap-2">
-                <button
-                  onClick={async () => {
-                    setGeneratingChangelog(true);
-                    try {
-                      const result = await onGenerateChangelog(activeSprint);
-                      if (result?.sessionId) {
-                        setChangelogData(null);
-                        onGoToSession?.(result.sessionId);
+                {!changelogProgress && changelogSelected.size > 0 && (
+                  <button
+                    onClick={async () => {
+                      const selected = changelogData.sessions.filter(s => changelogSelected.has(s.id));
+                      const total = selected.length;
+                      const collectedSummaries = {};
+
+                      // Phase 1: Request summaries one by one
+                      for (let i = 0; i < selected.length; i++) {
+                        const s = selected[i];
+                        setChangelogProgress({ current: i + 1, total, sessionId: s.id, phase: 'requesting' });
+
+                        try {
+                          await onRequestSummary(s.id);
+
+                          // Phase 2: Poll until session stops running
+                          setChangelogProgress({ current: i + 1, total, sessionId: s.id, phase: 'waiting' });
+                          let attempts = 0;
+                          while (attempts < 60) { // max 5 min per session
+                            await new Promise(r => setTimeout(r, 5000));
+                            const resp = await onGetLastResponse(s.id);
+                            if (resp.status !== 'running') {
+                              collectedSummaries[s.id] = resp.lastResponse;
+                              break;
+                            }
+                            attempts++;
+                          }
+                          if (!collectedSummaries[s.id]) {
+                            // Timeout — grab whatever is there
+                            const resp = await onGetLastResponse(s.id);
+                            collectedSummaries[s.id] = resp.lastResponse || 'Summary timed out';
+                          }
+                        } catch (e) {
+                          collectedSummaries[s.id] = 'Error getting summary';
+                        }
+                        setChangelogSummaries({ ...collectedSummaries });
                       }
-                    } catch (e) { console.error(e); }
-                    setGeneratingChangelog(false);
-                  }}
-                  disabled={generatingChangelog}
-                  className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md font-medium cursor-pointer text-white disabled:opacity-50"
-                  style={{ backgroundColor: colors.accent }}
-                  title="Generate a detailed changelog summary via Claude"
-                >
-                  {generatingChangelog ? <Loader2 size={12} className="animate-spin" /> : <Zap size={12} />}
-                  Generate Summary
-                </button>
-                <button onClick={() => setChangelogData(null)} className="p-1 cursor-pointer" style={{ color: colors.textSecondary }}>
-                  <X size={14} />
-                </button>
+
+                      // Phase 3: Generate changelog with collected summaries
+                      setChangelogProgress({ current: total, total, sessionId: null, phase: 'generating' });
+                      const summariesPayload = selected.map(s => ({
+                        sessionId: s.id,
+                        task: s.task,
+                        summary: collectedSummaries[s.id] || '',
+                      }));
+
+                      try {
+                        const result = await onGenerateChangelog(activeSprint, summariesPayload);
+                        setChangelogProgress(null);
+                        setChangelogSummaries({});
+                        if (result?.sessionId) {
+                          setChangelogData(null);
+                          setChangelogSelected(new Set());
+                          onGoToSession?.(result.sessionId);
+                        }
+                      } catch (e) {
+                        console.error(e);
+                        setChangelogProgress(null);
+                      }
+                    }}
+                    className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md font-medium cursor-pointer text-white"
+                    style={{ backgroundColor: colors.accent }}
+                  >
+                    <Zap size={12} />
+                    Generate Changelog ({changelogSelected.size})
+                  </button>
+                )}
+                {!changelogProgress && (
+                  <button onClick={() => { setChangelogData(null); setChangelogSelected(new Set()); setChangelogSummaries({}); }}
+                    className="p-1 cursor-pointer" style={{ color: colors.textSecondary }}>
+                    <X size={14} />
+                  </button>
+                )}
               </div>
             </div>
 
-            {/* Modal body */}
+            {/* Progress bar */}
+            {changelogProgress && (
+              <div className="px-5 py-3 flex-shrink-0" style={{ borderBottom: `1px solid ${colors.border}`, backgroundColor: `${colors.accent}08` }}>
+                <div className="flex items-center gap-3 mb-2">
+                  <Loader2 size={14} className="animate-spin" style={{ color: colors.accent }} />
+                  <span className="text-xs font-medium" style={{ color: colors.text }}>
+                    {changelogProgress.phase === 'requesting' && `Requesting summary from session ${changelogProgress.current}/${changelogProgress.total}...`}
+                    {changelogProgress.phase === 'waiting' && `Waiting for response from ${changelogProgress.sessionId}... (${changelogProgress.current}/${changelogProgress.total})`}
+                    {changelogProgress.phase === 'generating' && 'All summaries collected! Creating changelog session...'}
+                  </span>
+                </div>
+                <div className="w-full h-1.5 rounded-full overflow-hidden" style={{ backgroundColor: colors.surface3 }}>
+                  <div className="h-full rounded-full transition-all duration-500" style={{
+                    backgroundColor: colors.accent,
+                    width: changelogProgress.phase === 'generating' ? '100%' : `${(changelogProgress.current / changelogProgress.total) * 100}%`,
+                  }} />
+                </div>
+              </div>
+            )}
+
+            {/* Select all / deselect */}
+            {!changelogProgress && changelogData.sessions?.length > 0 && (
+              <div className="flex items-center gap-2 px-5 py-2 flex-shrink-0" style={{ borderBottom: `1px solid ${colors.border}` }}>
+                <label className="flex items-center gap-2 cursor-pointer text-xs" style={{ color: colors.textSecondary }}>
+                  <input
+                    type="checkbox"
+                    checked={changelogSelected.size === changelogData.sessions.length}
+                    onChange={() => {
+                      if (changelogSelected.size === changelogData.sessions.length) {
+                        setChangelogSelected(new Set());
+                      } else {
+                        setChangelogSelected(new Set(changelogData.sessions.map(s => s.id)));
+                      }
+                    }}
+                    className="cursor-pointer"
+                  />
+                  Select all sessions for changelog
+                </label>
+              </div>
+            )}
+
+            {/* Modal body — sessions list with checkboxes */}
             <div className="flex-1 overflow-y-auto p-5 space-y-4">
-              {/* Sessions list */}
               {changelogData.sessions?.length > 0 ? (
                 <>
                   <h4 className="text-xs font-semibold uppercase tracking-wider" style={{ color: colors.textSecondary }}>Sessions</h4>
                   <div className="space-y-2">
-                    {changelogData.sessions.map(s => (
-                      <div key={s.id} className="rounded-lg p-3" style={{ backgroundColor: colors.surface2, border: `1px solid ${colors.border}` }}>
-                        <div className="flex items-center gap-2 mb-1.5">
-                          <span className="font-mono text-[10px] px-1.5 py-0.5 rounded"
-                            style={{ backgroundColor: s.status === 'completed' ? 'rgba(34,197,94,0.1)' : s.status === 'running' ? 'rgba(59,130,246,0.1)' : colors.surface3,
-                                     color: s.status === 'completed' ? '#22c55e' : s.status === 'running' ? '#3b82f6' : colors.textSecondary }}>
-                            {s.status}
-                          </span>
-                          <span className="font-mono text-[10px]" style={{ color: colors.textSecondary }}>{s.id}</span>
-                          {s.owner_name && <span className="text-[10px]" style={{ color: colors.textSecondary }}>by {s.owner_name}</span>}
-                          <div className="flex-1" />
-                          <button
-                            onClick={() => { setChangelogData(null); onGoToSession?.(s.id); }}
-                            className="flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded cursor-pointer hover:opacity-80"
-                            style={{ backgroundColor: 'rgba(34,197,94,0.1)', color: '#22c55e' }}>
-                            <ExternalLink size={9} /> View
-                          </button>
+                    {changelogData.sessions.map(s => {
+                      const isSelected = changelogSelected.has(s.id);
+                      const hasSummary = changelogSummaries[s.id];
+                      const isActive = changelogProgress?.sessionId === s.id;
+                      return (
+                        <div key={s.id} className="rounded-lg p-3 transition-colors"
+                          style={{
+                            backgroundColor: isActive ? `${colors.accent}10` : colors.surface2,
+                            border: `1px solid ${isActive ? colors.accent : isSelected ? `${colors.accent}60` : colors.border}`,
+                          }}>
+                          <div className="flex items-center gap-2 mb-1.5">
+                            {!changelogProgress && (
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={() => {
+                                  setChangelogSelected(prev => {
+                                    const next = new Set(prev);
+                                    if (next.has(s.id)) next.delete(s.id); else next.add(s.id);
+                                    return next;
+                                  });
+                                }}
+                                className="cursor-pointer flex-shrink-0"
+                              />
+                            )}
+                            {isActive && <Loader2 size={12} className="animate-spin flex-shrink-0" style={{ color: colors.accent }} />}
+                            {hasSummary && !isActive && <CheckCircle2 size={12} className="flex-shrink-0" style={{ color: '#22c55e' }} />}
+                            <span className="font-mono text-[10px] px-1.5 py-0.5 rounded"
+                              style={{ backgroundColor: s.status === 'completed' ? 'rgba(34,197,94,0.1)' : s.status === 'running' ? 'rgba(59,130,246,0.1)' : colors.surface3,
+                                       color: s.status === 'completed' ? '#22c55e' : s.status === 'running' ? '#3b82f6' : colors.textSecondary }}>
+                              {s.status}
+                            </span>
+                            <span className="font-mono text-[10px]" style={{ color: colors.textSecondary }}>{s.id}</span>
+                            {s.owner_name && <span className="text-[10px]" style={{ color: colors.textSecondary }}>by {s.owner_name}</span>}
+                            <div className="flex-1" />
+                            <button
+                              onClick={() => { setChangelogData(null); setChangelogSelected(new Set()); onGoToSession?.(s.id); }}
+                              className="flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded cursor-pointer hover:opacity-80"
+                              style={{ backgroundColor: 'rgba(34,197,94,0.1)', color: '#22c55e' }}>
+                              <ExternalLink size={9} /> View
+                            </button>
+                          </div>
+                          <p className="text-xs font-medium mb-1" style={{ color: colors.text }}>{s.task || 'Untitled'}</p>
+                          {hasSummary ? (
+                            <p className="text-[11px] leading-relaxed" style={{ color: '#22c55e' }}>
+                              {hasSummary.slice(0, 300)}{hasSummary.length > 300 ? '...' : ''}
+                            </p>
+                          ) : s.summary ? (
+                            <p className="text-[11px] leading-relaxed" style={{ color: colors.textSecondary }}>
+                              {s.summary.slice(0, 200)}{s.summary.length > 200 ? '...' : ''}
+                            </p>
+                          ) : s.first_message ? (
+                            <p className="text-[11px] leading-relaxed" style={{ color: colors.textSecondary }}>
+                              {s.first_message.slice(0, 150)}{s.first_message.length > 150 ? '...' : ''}
+                            </p>
+                          ) : null}
                         </div>
-                        <p className="text-xs font-medium mb-1" style={{ color: colors.text }}>{s.task || 'Untitled'}</p>
-                        {s.summary && (
-                          <p className="text-[11px] leading-relaxed" style={{ color: colors.textSecondary }}>
-                            {s.summary.slice(0, 200)}{s.summary.length > 200 ? '...' : ''}
-                          </p>
-                        )}
-                        {!s.summary && s.first_message && (
-                          <p className="text-[11px] leading-relaxed" style={{ color: colors.textSecondary }}>
-                            {s.first_message.slice(0, 150)}{s.first_message.length > 150 ? '...' : ''}
-                          </p>
-                        )}
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </>
               ) : (
