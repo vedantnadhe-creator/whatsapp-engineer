@@ -245,12 +245,12 @@ export async function getSprintChangelog(sprintId) {
   return apiFetch(`/api/sprints/${sprintId}/changelog`);
 }
 
-export async function requestSessionSummary(sessionId) {
-  return apiFetch(`/api/sessions/${sessionId}/request-summary`, { method: 'POST' });
+export async function requestIssueSummary(issueId) {
+  return apiFetch(`/api/issues/${issueId}/request-summary`, { method: 'POST' });
 }
 
-export async function getSessionLastResponse(sessionId) {
-  return apiFetch(`/api/sessions/${sessionId}/last-response`);
+export async function getIssueLastResponse(issueId) {
+  return apiFetch(`/api/issues/${issueId}/last-response`);
 }
 
 export async function generateSprintChangelog(sprintId, summaries) {

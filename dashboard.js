@@ -653,41 +653,59 @@ Do NOT ask for confirmation — proceed through each step automatically. If any 
         } catch (err) { res.status(500).json({ error: err.message }); }
     });
 
-    // Sprint changelog — get sessions + issues for a sprint
+    // Sprint changelog — get issues (with linked session info) for a sprint
     app.get('/api/sprints/:id/changelog', requireAuth, (req, res) => {
         try {
             const sprint = store.getSprint(req.params.id);
             if (!sprint) return res.status(404).json({ error: 'Sprint not found' });
-            const sessions = store.getSessionsBySprint(req.params.id);
             const issues = store.getIssuesBySprint(req.params.id);
 
-            const sessionSummaries = sessions.map(s => {
-                const msgs = store.getSessionSummaryMessages(s.id, 30);
-                const lastAssistant = [...msgs].reverse().find(m => m.role === 'assistant');
-                const firstUser = msgs.find(m => m.role === 'user');
+            // Enrich each issue with its linked session summary if it has one
+            const enrichedIssues = issues.map(i => {
+                let sessionInfo = null;
+                if (i.session_id) {
+                    const session = store.getSession(i.session_id);
+                    if (session) {
+                        const msgs = store.getSessionSummaryMessages(i.session_id, 30);
+                        const lastAssistant = [...msgs].reverse().find(m => m.role === 'assistant');
+                        sessionInfo = {
+                            id: session.id,
+                            task: session.task,
+                            status: session.status,
+                            summary: lastAssistant?.content?.slice(0, 500) || '',
+                        };
+                    }
+                }
                 return {
-                    id: s.id,
-                    task: s.task,
-                    status: s.status,
-                    owner_name: s.owner_name,
-                    created_at: s.created_at,
-                    summary: lastAssistant?.content?.slice(0, 500) || '',
-                    first_message: firstUser?.content?.slice(0, 300) || '',
+                    id: i.id,
+                    title: i.title,
+                    description: i.description,
+                    status: i.status,
+                    priority: i.priority,
+                    type: i.type || 'task',
+                    assignee_name: i.assignee_name,
+                    creator_name: i.creator_name,
+                    session_id: i.session_id,
+                    session: sessionInfo,
+                    created_at: i.created_at,
                 };
             });
 
-            res.json({ sprint, sessions: sessionSummaries, issues });
+            res.json({ sprint, issues: enrichedIssues });
         } catch (err) { res.status(500).json({ error: err.message }); }
     });
 
-    // Request summary from a session — sends a "summarize" message, returns immediately
-    app.post('/api/sessions/:id/request-summary', requireAuth, async (req, res) => {
+    // Request summary from an issue's linked session
+    app.post('/api/issues/:id/request-summary', requireAuth, async (req, res) => {
         try {
-            const sessionId = req.params.id;
-            const session = store.getSession(sessionId);
-            if (!session) return res.status(404).json({ error: 'Session not found' });
+            const issue = store.getIssue(req.params.id);
+            if (!issue) return res.status(404).json({ error: 'Issue not found' });
+            if (!issue.session_id) return res.status(400).json({ error: 'Issue has no linked session' });
 
-            const summaryPrompt = `Provide a concise summary of everything that was done in this session. Include:
+            const session = store.getSession(issue.session_id);
+            if (!session) return res.status(404).json({ error: 'Linked session not found' });
+
+            const summaryPrompt = `Provide a concise summary of everything that was done in this session for issue "${issue.title}". Include:
 - What was implemented or changed
 - Key files modified
 - Any bugs fixed
@@ -696,74 +714,71 @@ Do NOT ask for confirmation — proceed through each step automatically. If any 
 Keep it to 3-5 bullet points, be specific about what changed. Do NOT start any new work.`;
 
             const phone = req.user.phone || req.user.email || req.user.id;
-            await messageHandler({ isWeb: true, phone: String(phone), text: `[resume ${sessionId}] ${summaryPrompt}`, pushName: req.user.displayName || 'Dashboard' });
+            await messageHandler({ isWeb: true, phone: String(phone), text: `[resume ${issue.session_id}] ${summaryPrompt}`, pushName: req.user.displayName || 'Dashboard' });
 
-            res.json({ success: true, sessionId });
+            res.json({ success: true, sessionId: issue.session_id });
         } catch (err) { res.status(500).json({ error: err.message }); }
     });
 
-    // Get session status + last assistant response
-    app.get('/api/sessions/:id/last-response', requireAuth, (req, res) => {
+    // Get issue's linked session status + last response
+    app.get('/api/issues/:id/last-response', requireAuth, (req, res) => {
         try {
-            const session = store.getSession(req.params.id);
-            if (!session) return res.status(404).json({ error: 'Session not found' });
+            const issue = store.getIssue(req.params.id);
+            if (!issue) return res.status(404).json({ error: 'Issue not found' });
+            if (!issue.session_id) return res.json({ issueId: req.params.id, status: 'no_session', lastResponse: '' });
 
-            const msgs = store.getSessionSummaryMessages(req.params.id, 10);
+            const session = store.getSession(issue.session_id);
+            if (!session) return res.json({ issueId: req.params.id, status: 'no_session', lastResponse: '' });
+
+            const msgs = store.getSessionSummaryMessages(issue.session_id, 10);
             const lastAssistant = [...msgs].reverse().find(m => m.role === 'assistant');
 
             res.json({
-                sessionId: req.params.id,
+                issueId: req.params.id,
+                sessionId: issue.session_id,
                 status: session.status,
-                task: session.task,
                 lastResponse: lastAssistant?.content || '',
                 lastTimestamp: lastAssistant?.timestamp || null,
             });
         } catch (err) { res.status(500).json({ error: err.message }); }
     });
 
-    // Generate changelog — accepts pre-collected summaries, starts new Claude session
+    // Generate changelog from issue summaries — starts new interactive Claude session
     app.post('/api/sprints/:id/generate-changelog', requireAuth, async (req, res) => {
         try {
             const sprint = store.getSprint(req.params.id);
             if (!sprint) return res.status(404).json({ error: 'Sprint not found' });
-            const { summaries = [] } = req.body;
-            const issues = store.getIssuesBySprint(req.params.id);
+            const { summaries = [] } = req.body; // [{ issueId, title, type, summary, sessionId }]
 
-            let sessionDetails = summaries.map(s => {
-                return `### Session: ${s.sessionId} — "${s.task || 'Untitled'}"
+            let issueEntries = summaries.map(s => {
+                return `### ${s.type === 'bug' ? 'Bug Fix' : s.type === 'feature' ? 'Feature' : s.type === 'improvement' ? 'Improvement' : 'Task'}: ${s.title}
+- Issue: ${s.issueId}${s.sessionId ? ` | Session: ${s.sessionId}` : ''}
 - Summary:\n${s.summary || 'No summary available'}`;
             }).join('\n\n');
 
-            let issueDetails = issues.map(i => {
-                return `- [${i.status}] ${i.title} (${i.type || 'task'}, ${i.priority}) — assigned to ${i.assignee_name || 'unassigned'}${i.session_id ? ` — Session: ${i.session_id}` : ''}`;
-            }).join('\n');
-
-            const changelogPrompt = `You are generating a professional changelog for Sprint "${sprint.name}". I've collected summaries from each session in this sprint. Create a structured, detailed changelog.
+            const changelogPrompt = `You are generating a professional changelog for Sprint "${sprint.name}". I've collected summaries from each issue's linked session. Create a structured, detailed changelog.
 
 ## Sprint Details
 - Name: ${sprint.name}
 - Status: ${sprint.status}
 - Start: ${sprint.start_date || 'N/A'} | End: ${sprint.end_date || 'N/A'}
-- Total Sessions: ${summaries.length}
+- Total Issues: ${summaries.length}
 
-## Session Summaries
-${sessionDetails || 'No sessions'}
-
-## Issues in this Sprint
-${issueDetails || 'No issues'}
+## Issue Summaries
+${issueEntries || 'No issues'}
 
 ## Your Task
 Create a clean, professional changelog with:
-1. **Sprint Overview** — A brief 2-3 sentence summary of what was accomplished
-2. **Changes by Session** — For EACH session, create an entry:
-   - **[Session: <ID>] <title>** — so users can identify and visit each session
+1. **Sprint Overview** — 2-3 sentence summary of what was accomplished
+2. **Changes** — Group by type (Features, Bug Fixes, Improvements, Tasks). For each:
+   - **[Issue: <ID>] <title>** — with linked session ID if available
    - Bullet points of what was implemented/changed
    - Status indicator
-3. **Issues Summary** — Table or list of all issues with final status
-4. **Notable Fixes & Improvements** — Highlight important bug fixes or improvements
+3. **Summary Table** — All issues with final status in a markdown table
+4. **Notable Highlights** — Key achievements or important fixes
 
-Format as clean Markdown. This changelog will be used for team review and stakeholder updates.
-The user may ask follow-up questions about the changelog — answer based on the session data provided above.`;
+Format as clean Markdown. Use issue IDs like [Issue: ISS-xxxxx] and session IDs like [Session: WA-xxxxx] so they are identifiable.
+The user may ask follow-up questions about the changelog — answer based on the data provided above.`;
 
             const phone = req.user.phone || req.user.email || req.user.id;
             const result = await messageHandler({ isWeb: true, phone: String(phone), text: `[start fresh] ${changelogPrompt}`, pushName: req.user.displayName || 'Dashboard', ownerId: req.user.id, model: 'sonnet' });
