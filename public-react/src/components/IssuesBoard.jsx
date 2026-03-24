@@ -23,6 +23,9 @@ import {
   Lightbulb,
   Wrench,
   ListTodo,
+  FileText,
+  Loader2,
+  ExternalLink,
 } from 'lucide-react';
 
 // SQLite CURRENT_TIMESTAMP returns 'YYYY-MM-DD HH:MM:SS' without timezone.
@@ -802,6 +805,8 @@ export default function IssuesBoard({
   onCreateSprint,
   onUpdateSprint,
   onDeleteSprint,
+  onGetChangelog,
+  onGenerateChangelog,
 }) {
   const [showCreate, setShowCreate] = useState(false);
   const [selectedIssue, setSelectedIssue] = useState(null);
@@ -811,6 +816,9 @@ export default function IssuesBoard({
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [activeSprint, setActiveSprint] = useState(null); // null = all, 'backlog' = no sprint, sprintId = specific
   const [showMyAssigned, setShowMyAssigned] = useState(false);
+  const [changelogData, setChangelogData] = useState(null); // { sprint, sessions, issues }
+  const [changelogLoading, setChangelogLoading] = useState(false);
+  const [generatingChangelog, setGeneratingChangelog] = useState(false);
 
   const isAutoRunning = autonomousStatus?.running;
   const isTester = userRole === 'tester';
@@ -932,6 +940,26 @@ export default function IssuesBoard({
             <Zap size={12} /><span className="hidden sm:inline">Run All</span><span className="sm:hidden">Run</span>
           </button>
         ))}
+
+        {activeSprint && activeSprint !== 'backlog' && (
+          <button
+            onClick={async () => {
+              setChangelogLoading(true);
+              try {
+                const data = await onGetChangelog(activeSprint);
+                setChangelogData(data);
+              } catch (e) { console.error(e); }
+              setChangelogLoading(false);
+            }}
+            disabled={changelogLoading}
+            className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md font-medium cursor-pointer flex-shrink-0 disabled:opacity-50"
+            style={{ backgroundColor: colors.surface2, color: colors.text, border: `1px solid ${colors.border}` }}
+            title="View sprint changelog"
+          >
+            {changelogLoading ? <Loader2 size={12} className="animate-spin" /> : <FileText size={12} />}
+            <span className="hidden sm:inline">Changelog</span>
+          </button>
+        )}
 
         <button onClick={() => setShowCreate(!showCreate)}
           className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md font-medium cursor-pointer text-white flex-shrink-0" style={{ backgroundColor: colors.accent }}>
@@ -1098,6 +1126,125 @@ export default function IssuesBoard({
           </div>
         )}
       </div>
+
+      {/* Changelog Modal */}
+      {changelogData && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}
+          onClick={() => setChangelogData(null)}>
+          <div className="w-full max-w-2xl mx-4 max-h-[80vh] flex flex-col rounded-xl overflow-hidden"
+            style={{ backgroundColor: colors.surface, border: `1px solid ${colors.border}` }}
+            onClick={(e) => e.stopPropagation()}>
+            {/* Modal header */}
+            <div className="flex items-center justify-between px-5 py-3 flex-shrink-0" style={{ borderBottom: `1px solid ${colors.border}` }}>
+              <div>
+                <h3 className="text-sm font-semibold" style={{ color: colors.text }}>
+                  Sprint Changelog — {changelogData.sprint?.name}
+                </h3>
+                <p className="text-[10px] font-mono mt-0.5" style={{ color: colors.textSecondary }}>
+                  {changelogData.sessions?.length || 0} sessions · {changelogData.issues?.length || 0} issues
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={async () => {
+                    setGeneratingChangelog(true);
+                    try {
+                      const result = await onGenerateChangelog(activeSprint);
+                      if (result?.sessionId) {
+                        setChangelogData(null);
+                        onGoToSession?.(result.sessionId);
+                      }
+                    } catch (e) { console.error(e); }
+                    setGeneratingChangelog(false);
+                  }}
+                  disabled={generatingChangelog}
+                  className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md font-medium cursor-pointer text-white disabled:opacity-50"
+                  style={{ backgroundColor: colors.accent }}
+                  title="Generate a detailed changelog summary via Claude"
+                >
+                  {generatingChangelog ? <Loader2 size={12} className="animate-spin" /> : <Zap size={12} />}
+                  Generate Summary
+                </button>
+                <button onClick={() => setChangelogData(null)} className="p-1 cursor-pointer" style={{ color: colors.textSecondary }}>
+                  <X size={14} />
+                </button>
+              </div>
+            </div>
+
+            {/* Modal body */}
+            <div className="flex-1 overflow-y-auto p-5 space-y-4">
+              {/* Sessions list */}
+              {changelogData.sessions?.length > 0 ? (
+                <>
+                  <h4 className="text-xs font-semibold uppercase tracking-wider" style={{ color: colors.textSecondary }}>Sessions</h4>
+                  <div className="space-y-2">
+                    {changelogData.sessions.map(s => (
+                      <div key={s.id} className="rounded-lg p-3" style={{ backgroundColor: colors.surface2, border: `1px solid ${colors.border}` }}>
+                        <div className="flex items-center gap-2 mb-1.5">
+                          <span className="font-mono text-[10px] px-1.5 py-0.5 rounded"
+                            style={{ backgroundColor: s.status === 'completed' ? 'rgba(34,197,94,0.1)' : s.status === 'running' ? 'rgba(59,130,246,0.1)' : colors.surface3,
+                                     color: s.status === 'completed' ? '#22c55e' : s.status === 'running' ? '#3b82f6' : colors.textSecondary }}>
+                            {s.status}
+                          </span>
+                          <span className="font-mono text-[10px]" style={{ color: colors.textSecondary }}>{s.id}</span>
+                          {s.owner_name && <span className="text-[10px]" style={{ color: colors.textSecondary }}>by {s.owner_name}</span>}
+                          <div className="flex-1" />
+                          <button
+                            onClick={() => { setChangelogData(null); onGoToSession?.(s.id); }}
+                            className="flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded cursor-pointer hover:opacity-80"
+                            style={{ backgroundColor: 'rgba(34,197,94,0.1)', color: '#22c55e' }}>
+                            <ExternalLink size={9} /> View
+                          </button>
+                        </div>
+                        <p className="text-xs font-medium mb-1" style={{ color: colors.text }}>{s.task || 'Untitled'}</p>
+                        {s.summary && (
+                          <p className="text-[11px] leading-relaxed" style={{ color: colors.textSecondary }}>
+                            {s.summary.slice(0, 200)}{s.summary.length > 200 ? '...' : ''}
+                          </p>
+                        )}
+                        {!s.summary && s.first_message && (
+                          <p className="text-[11px] leading-relaxed" style={{ color: colors.textSecondary }}>
+                            {s.first_message.slice(0, 150)}{s.first_message.length > 150 ? '...' : ''}
+                          </p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <div className="text-center py-8">
+                  <p className="text-xs" style={{ color: colors.textSecondary }}>No sessions mapped to this sprint yet.</p>
+                </div>
+              )}
+
+              {/* Issues list */}
+              {changelogData.issues?.length > 0 && (
+                <>
+                  <h4 className="text-xs font-semibold uppercase tracking-wider mt-4" style={{ color: colors.textSecondary }}>Issues</h4>
+                  <div className="space-y-1">
+                    {changelogData.issues.map(i => (
+                      <div key={i.id} className="flex items-center gap-2 px-3 py-2 rounded-lg" style={{ backgroundColor: colors.surface2 }}>
+                        <span className="w-2 h-2 rounded-full flex-shrink-0"
+                          style={{ backgroundColor: i.status === 'completed' ? '#22c55e' : i.status === 'in_progress' ? '#3b82f6' : colors.textSecondary }} />
+                        <TypeBadge type={i.type || 'task'} />
+                        <span className="text-xs flex-1 truncate" style={{ color: colors.text }}>{i.title}</span>
+                        <span className="text-[10px] font-mono" style={{ color: colors.textSecondary }}>{i.status}</span>
+                        {i.session_id && (
+                          <button onClick={() => { setChangelogData(null); onGoToSession?.(i.session_id); }}
+                            className="text-[9px] font-mono px-1 py-0.5 rounded cursor-pointer hover:opacity-80"
+                            style={{ backgroundColor: 'rgba(34,197,94,0.1)', color: '#22c55e' }}>
+                            {i.session_id}
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

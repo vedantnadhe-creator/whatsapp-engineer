@@ -653,6 +653,92 @@ Do NOT ask for confirmation — proceed through each step automatically. If any 
         } catch (err) { res.status(500).json({ error: err.message }); }
     });
 
+    // Sprint changelog — get sessions + issues for a sprint
+    app.get('/api/sprints/:id/changelog', requireAuth, (req, res) => {
+        try {
+            const sprint = store.getSprint(req.params.id);
+            if (!sprint) return res.status(404).json({ error: 'Sprint not found' });
+            const sessions = store.getSessionsBySprint(req.params.id);
+            const issues = store.getIssuesBySprint(req.params.id);
+
+            // Build summary from each session's last assistant message
+            const sessionSummaries = sessions.map(s => {
+                const msgs = store.getSessionSummaryMessages(s.id, 30);
+                const lastAssistant = [...msgs].reverse().find(m => m.role === 'assistant');
+                const firstUser = msgs.find(m => m.role === 'user');
+                return {
+                    id: s.id,
+                    task: s.task,
+                    status: s.status,
+                    owner_name: s.owner_name,
+                    created_at: s.created_at,
+                    summary: lastAssistant?.content?.slice(0, 500) || '',
+                    first_message: firstUser?.content?.slice(0, 300) || '',
+                };
+            });
+
+            res.json({ sprint, sessions: sessionSummaries, issues });
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    // Generate changelog via new Claude session
+    app.post('/api/sprints/:id/generate-changelog', requireAuth, async (req, res) => {
+        try {
+            const sprint = store.getSprint(req.params.id);
+            if (!sprint) return res.status(404).json({ error: 'Sprint not found' });
+            const sessions = store.getSessionsBySprint(req.params.id);
+            const issues = store.getIssuesBySprint(req.params.id);
+
+            // Build a prompt with all session data
+            let sessionDetails = sessions.map(s => {
+                const msgs = store.getSessionSummaryMessages(s.id, 20);
+                const lastAssistant = [...msgs].reverse().find(m => m.role === 'assistant');
+                const firstUser = msgs.find(m => m.role === 'user');
+                return `### Session: ${s.id} — "${s.task || 'Untitled'}"
+- Status: ${s.status}
+- Owner: ${s.owner_name || 'Unknown'}
+- Created: ${s.created_at}
+- Task: ${firstUser?.content?.slice(0, 300) || s.task || 'N/A'}
+- Last Output: ${lastAssistant?.content?.slice(0, 600) || 'No output yet'}`;
+            }).join('\n\n');
+
+            let issueDetails = issues.map(i => {
+                return `- [${i.status}] ${i.title} (${i.type || 'task'}, ${i.priority}) — assigned to ${i.assignee_name || 'unassigned'}${i.session_id ? ` — Session: ${i.session_id}` : ''}`;
+            }).join('\n');
+
+            const changelogPrompt = `Generate a clean, professional changelog for Sprint "${sprint.name}".
+
+## Sprint Details
+- Name: ${sprint.name}
+- Status: ${sprint.status}
+- Start: ${sprint.start_date || 'N/A'} | End: ${sprint.end_date || 'N/A'}
+
+## Sessions in this Sprint
+${sessionDetails || 'No sessions'}
+
+## Issues in this Sprint
+${issueDetails || 'No issues'}
+
+## Instructions
+Create a structured changelog with:
+1. A brief sprint summary (2-3 sentences)
+2. For EACH session, create an entry with:
+   - Session ID and name (so users can click to visit)
+   - What was implemented/changed (summarize from the session output)
+   - Key files modified (if mentioned)
+   - Status (completed/in-progress)
+3. A section listing all issues and their final status
+4. Any notable bugs fixed or improvements made
+
+Format as clean Markdown. Use session IDs like [Session: WA-xxxxx] so they are identifiable.`;
+
+            const phone = req.user.phone || req.user.email || req.user.id;
+            const result = await messageHandler({ isWeb: true, phone: String(phone), text: `[start fresh] ${changelogPrompt}`, pushName: req.user.displayName || 'Dashboard', ownerId: req.user.id, model: 'sonnet' });
+
+            res.json({ success: true, sessionId: result?.sessionId });
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
     // ── Issues (Linear-like task board) ──────────────────────────
 
     app.get('/api/issues', requireAuth, (req, res) => {

@@ -241,6 +241,14 @@ export async function markSessionDone(sessionId) {
   return apiFetch(`/api/sessions/${sessionId}/mark-done`, { method: 'POST' });
 }
 
+export async function getSprintChangelog(sprintId) {
+  return apiFetch(`/api/sprints/${sprintId}/changelog`);
+}
+
+export async function generateSprintChangelog(sprintId) {
+  return apiFetch(`/api/sprints/${sprintId}/generate-changelog`, { method: 'POST' });
+}
+
 export async function updateSessionSprint(sessionId, sprintId) {
   return apiFetch(`/api/sessions/${sessionId}/sprint`, {
     method: 'PUT',

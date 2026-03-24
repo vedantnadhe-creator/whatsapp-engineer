@@ -531,6 +531,23 @@ class SessionStore {
         this.db.prepare('DELETE FROM sprints WHERE id = ?').run(id);
     }
 
+    getSessionsBySprint(sprintId) {
+        return this.db.prepare(
+            `SELECT s.id, s.task, s.status, s.model, s.created_at, s.updated_at, s.cost_usd, s.input_tokens, s.output_tokens,
+                    u.display_name as owner_name
+             FROM sessions s
+             LEFT JOIN users u ON s.owner_id = u.id
+             WHERE s.sprint_id = ?
+             ORDER BY s.created_at DESC`
+        ).all(sprintId);
+    }
+
+    getSessionSummaryMessages(sessionId, limit = 50) {
+        return this.db.prepare(
+            `SELECT role, content, timestamp FROM messages WHERE session_id = ? ORDER BY timestamp DESC LIMIT ?`
+        ).all(sessionId, limit).reverse();
+    }
+
     getIssuesBySprint(sprintId) {
         return this.db.prepare(
             `SELECT i.*, u.display_name as creator_name, a.display_name as assignee_name
