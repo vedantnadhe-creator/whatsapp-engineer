@@ -394,6 +394,7 @@ export default function Workspace({
   onUploadFile,
   onTranscribe,
   models = [],
+  sprints = [],
   hasAccess = true,
   busy = false,
   typing = false,
@@ -403,6 +404,7 @@ export default function Workspace({
   const [selectedModel, setSelectedModel] = useState(
     () => models.find((m) => m.default)?.id || models[0]?.id || ''
   );
+  const [selectedSprint, setSelectedSprint] = useState('');
   const [accessNote, setAccessNote] = useState('');
   const [showFork, setShowFork] = useState(false);
   const [forkText, setForkText] = useState('');
@@ -496,7 +498,7 @@ export default function Workspace({
     if (!text && imageTokens.length === 0) return;
     const finalText = text || (imageTokens.length > 0 ? '[image attached]' : '');
     if (isNewSession && onStartSession) {
-      onStartSession(finalText, selectedModel, imageTokens);
+      onStartSession(finalText, selectedModel, imageTokens, selectedSprint || null);
     } else if (onSendMessage) {
       onSendMessage(finalText, selectedModel, imageTokens);
     }
@@ -672,12 +674,39 @@ export default function Workspace({
         >
           Start a new session to begin working with OliBot.
         </p>
-        <ModelSelector
-          models={models}
-          selectedModel={selectedModel}
-          onChange={setSelectedModel}
-          className="mb-4"
-        />
+        <div className="flex items-center justify-center gap-3 mb-4">
+          <ModelSelector
+            models={models}
+            selectedModel={selectedModel}
+            onChange={setSelectedModel}
+          />
+          {sprints.length > 0 && (
+            <div className="relative inline-flex items-center">
+              <select
+                value={selectedSprint}
+                onChange={(e) => setSelectedSprint(e.target.value)}
+                className="appearance-none cursor-pointer outline-none font-mono text-xs px-3 py-2 pr-7 rounded-lg"
+                style={{
+                  backgroundColor: colors.surface2,
+                  border: `1px solid ${colors.border}`,
+                  color: selectedSprint ? colors.text : colors.textSecondary,
+                }}
+              >
+                <option value="">No Sprint</option>
+                {sprints.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}{s.status === 'active' ? ' (active)' : ''}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown
+                size={14}
+                className="absolute right-1 pointer-events-none"
+                style={{ color: colors.textSecondary }}
+              />
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
