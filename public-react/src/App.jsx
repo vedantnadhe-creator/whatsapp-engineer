@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { AuthProvider, useAuth } from './context/AuthContext'
-import { useSessions, useStats, useSessionMessages, useModels, usePhones, useUsers, useCron, useAccessRequests, useIssues, useAutonomous, useSprints, useTeamMembers, useAction, startSession, sendMessage, stopSession, forkSession, toggleBookmark, uploadFile, transcribeAudio, requestAccess, getClaudePrompt, saveClaudePrompt, getAdminSettings, saveAdminSetting } from './hooks/useApi'
+import { useSessions, useStats, useSessionMessages, useModels, usePhones, useUsers, useCron, useAccessRequests, useIssues, useAutonomous, useSprints, useTeamMembers, useAction, startSession, sendMessage, stopSession, forkSession, toggleBookmark, markSessionDone, updateSessionSprint, uploadFile, transcribeAudio, requestAccess, getClaudePrompt, saveClaudePrompt, getAdminSettings, saveAdminSetting } from './hooks/useApi'
 import useWebSocket from './hooks/useWebSocket'
 import Sidebar from './components/Sidebar'
 import Workspace from './components/Workspace'
@@ -22,6 +22,7 @@ function Dashboard() {
   const [adminSettings, setAdminSettings] = useState({})
   const [view, setView] = useState('chat') // 'chat' or 'issues'
   const [notification, setNotification] = useState(null)
+  const [sprintPickerData, setSprintPickerData] = useState(null) // { text, model, imageTokens } when awaiting sprint selection
 
   const { stats, refresh: refreshStats } = useStats()
   const { sessions, total, totalPages, showAllSessions, refresh: refreshSessions } = useSessions(page)
@@ -117,8 +118,13 @@ function Dashboard() {
     setSelectedModel('opus')
   }, [])
 
-  const _startSession = useCallback(async (text, model, imageTokens = []) => {
-    const result = await startSession(text, model, imageTokens)
+  // Show sprint picker dialog before starting session
+  const handlePreStart = useCallback((text, model, imageTokens = []) => {
+    setSprintPickerData({ text, model, imageTokens })
+  }, [])
+
+  const _startSession = useCallback(async (text, model, imageTokens = [], sprintId = null) => {
+    const result = await startSession(text, model, imageTokens, sprintId)
     if (result.sessionId) {
       const newSession = {
         id: result.sessionId,
@@ -126,6 +132,7 @@ function Dashboard() {
         model: model || 'opus',
         status: 'running',
         is_mine: true,
+        sprint_id: sprintId,
       }
       setActiveSession(newSession)
       setIsNewSession(false)
@@ -138,6 +145,19 @@ function Dashboard() {
     }
   }, [])
   const [handleStartSession, startingSession] = useAction(_startSession)
+
+  const handleSprintPickerConfirm = useCallback(async (sprintId) => {
+    if (!sprintPickerData) return
+    const { text, model, imageTokens } = sprintPickerData
+    setSprintPickerData(null)
+    await handleStartSession(text, model, imageTokens, sprintId)
+  }, [sprintPickerData, handleStartSession])
+
+  const handleMarkDone = useCallback(async () => {
+    if (!activeSession?.id) return
+    await markSessionDone(activeSession.id)
+    setTimeout(() => { refreshMessages(); refreshSessions() }, 1500)
+  }, [activeSession?.id])
 
   const _sendMessage = useCallback(async (text, model, imageTokens = []) => {
     if (!activeSession?.id) return
@@ -274,13 +294,14 @@ function Dashboard() {
               await requestAccess(activeSession.id, note)
             }}
             isNewSession={isNewSession}
-            onStartSession={handleStartSession}
+            onStartSession={handlePreStart}
             onUploadFile={uploadFile}
             onTranscribe={transcribeAudio}
             models={models}
             hasAccess={hasAccess}
             busy={startingSession || sendingMessage || stoppingSession || forkingSession}
             onForkSession={handleForkSession}
+            onMarkDone={handleMarkDone}
             typing={wsTyping?.sessionId === activeSession?.id}
             wsConnected={wsConnected}
           />
@@ -320,6 +341,58 @@ function Dashboard() {
             if (key === 'show_all_sessions') refreshSessions()
           }} />
         </AdminModal>
+      )}
+
+      {/* Sprint picker dialog — shown before starting a new session */}
+      {sprintPickerData && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center"
+          style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}
+          onClick={() => { setSprintPickerData(null) }}
+        >
+          <div
+            className="w-full max-w-sm mx-4 rounded-xl p-5"
+            style={{ backgroundColor: 'var(--c-surface)', border: '1px solid var(--c-border)' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-sm font-semibold mb-1" style={{ color: 'var(--c-text)' }}>
+              Map to Sprint
+            </h3>
+            <p className="text-xs mb-3" style={{ color: 'var(--c-text-secondary)' }}>
+              Optionally link this session to a sprint for tracking on the board.
+            </p>
+            <select
+              id="sprint-picker-select"
+              className="w-full text-sm px-3 py-2 rounded-lg outline-none mb-4 cursor-pointer"
+              style={{ backgroundColor: 'var(--c-surface-2)', border: '1px solid var(--c-border)', color: 'var(--c-text)' }}
+              defaultValue=""
+            >
+              <option value="">No sprint (skip)</option>
+              {sprints.map((s) => (
+                <option key={s.id} value={s.id}>{s.name}{s.status === 'active' ? ' (active)' : ''}</option>
+              ))}
+            </select>
+            <div className="flex items-center gap-2 justify-end">
+              <button
+                onClick={() => handleSprintPickerConfirm(null)}
+                className="text-xs px-3 py-1.5 rounded-md cursor-pointer"
+                style={{ color: 'var(--c-text-secondary)' }}
+              >
+                Skip
+              </button>
+              <button
+                onClick={() => {
+                  const sel = document.getElementById('sprint-picker-select')
+                  handleSprintPickerConfirm(sel?.value || null)
+                }}
+                className="text-xs px-3 py-1.5 rounded-md font-medium text-white cursor-pointer"
+                style={{ backgroundColor: 'var(--c-accent)' }}
+              >
+                Start Session
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Assignment notification toast */}

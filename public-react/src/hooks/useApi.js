@@ -213,11 +213,11 @@ export function useAccessRequests() {
 // Standalone API helpers (not hooks)
 // ---------------------------------------------------------------------------
 
-export async function startSession(text, model, imageTokens = []) {
+export async function startSession(text, model, imageTokens = [], sprintId = null) {
   return apiFetch('/api/sessions/start', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text, model, imageTokens }),
+    body: JSON.stringify({ text, model, imageTokens, sprintId }),
   });
 }
 
@@ -235,6 +235,18 @@ export async function stopSession(sessionId) {
 
 export async function toggleBookmark(sessionId) {
   return apiFetch(`/api/sessions/${sessionId}/bookmark`, { method: 'POST' });
+}
+
+export async function markSessionDone(sessionId) {
+  return apiFetch(`/api/sessions/${sessionId}/mark-done`, { method: 'POST' });
+}
+
+export async function updateSessionSprint(sessionId, sprintId) {
+  return apiFetch(`/api/sessions/${sessionId}/sprint`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sprintId }),
+  });
 }
 
 export async function forkSession(sessionId, text, model) {

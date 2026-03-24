@@ -138,6 +138,7 @@ class SessionStore {
             "ALTER TABLE issues ADD COLUMN type TEXT DEFAULT 'task'",
             "ALTER TABLE sessions ADD COLUMN input_tokens INTEGER DEFAULT 0",
             "ALTER TABLE sessions ADD COLUMN output_tokens INTEGER DEFAULT 0",
+            "ALTER TABLE sessions ADD COLUMN sprint_id TEXT",
         ];
         for (const sql of safeMigrations) {
             try { this.db.exec(sql); } catch (_) { /* column already exists */ }

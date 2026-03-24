@@ -279,14 +279,57 @@ export function startDashboard(store, messageHandler, port = 18790, wa = null, e
 
     app.post('/api/sessions/start', requireAuth, async (req, res) => {
         try {
-            const { text, model } = req.body;
+            const { text, model, sprintId } = req.body;
             if (!text) return res.status(400).json({ error: 'text is required' });
             const phone = req.body.phone || req.user.phone || req.user.email || req.user.id;
             const startInstruction = /^(start fresh|new task|ignore previous)/i.test(text) ? text : `[start fresh] ${text}`;
             const tokens = Array.isArray(req.body.imageTokens) ? req.body.imageTokens : (req.body.imageToken ? [req.body.imageToken] : []);
             const imagePath = tokens.map(t => { const p = pendingImages.get(t); pendingImages.delete(t); return p; }).filter(Boolean)[0] || null;
             const result = await messageHandler({ isWeb: true, phone: String(phone), text: startInstruction, pushName: req.user.displayName || 'Dashboard', imagePath, ownerId: req.user.id, model: model || 'opus' });
+            // Attach sprint if provided
+            if (result?.sessionId && sprintId) {
+                store.updateSession(result.sessionId, { sprint_id: sprintId });
+            }
             res.json({ success: true, sessionId: result?.sessionId });
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    // Update session sprint mapping
+    app.put('/api/sessions/:id/sprint', requireAuth, (req, res) => {
+        try {
+            const { sprintId } = req.body;
+            store.updateSession(req.params.id, { sprint_id: sprintId || null });
+            res.json({ success: true });
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    // Mark session as done — sends completion workflow message to Claude
+    app.post('/api/sessions/:id/mark-done', requireAuth, async (req, res) => {
+        try {
+            const sessionId = req.params.id;
+            const session = store.getSession(sessionId);
+            if (!session) return res.status(404).json({ error: 'Session not found' });
+
+            const completionMessage = `The task is complete. Please finalize this work by doing the following steps in order:
+1. Run the code-reviewer skill (/requesting-code-review) to review all changes made in this session
+2. If the review passes, commit all changes with a descriptive commit message
+3. Push the code to GitHub
+4. Deploy to UAT using the /uat-deployment skill
+5. Mark any related issues as done
+
+Do NOT ask for confirmation — proceed through each step automatically. If any step fails, report the error and continue with the remaining steps.`;
+
+            const phone = req.body.phone || req.user.phone || req.user.email || req.user.id;
+
+            if (session.status === 'running') {
+                // Session is running — send as a follow-up message
+                await messageHandler({ isWeb: true, phone: String(phone), text: `[resume ${sessionId}] ${completionMessage}`, pushName: req.user.displayName || 'Dashboard' });
+            } else {
+                // Session is stopped — resume it with the completion message
+                await messageHandler({ isWeb: true, phone: String(phone), text: `[resume ${sessionId}] ${completionMessage}`, pushName: req.user.displayName || 'Dashboard' });
+            }
+
+            res.json({ success: true });
         } catch (err) { res.status(500).json({ error: err.message }); }
     });
 
