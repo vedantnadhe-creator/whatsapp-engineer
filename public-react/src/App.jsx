@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { AuthProvider, useAuth } from './context/AuthContext'
-import { useSessions, useStats, useSessionMessages, useModels, usePhones, useUsers, useCron, useAccessRequests, useIssues, useAutonomous, useSprints, useTeamMembers, useAction, startSession, sendMessage, stopSession, forkSession, toggleBookmark, markSessionDone, updateSessionSprint, uploadFile, transcribeAudio, requestAccess, getClaudePrompt, saveClaudePrompt, getAdminSettings, saveAdminSetting } from './hooks/useApi'
+import { useSessions, useStats, useSessionMessages, useModels, usePhones, useUsers, useCron, useAccessRequests, useIssues, useAutonomous, useSprints, useTeamMembers, useAction, startSession, sendMessage, stopSession, forkSession, toggleBookmark, updateSessionSprint, uploadFile, transcribeAudio, requestAccess, getClaudePrompt, saveClaudePrompt, getAdminSettings, saveAdminSetting } from './hooks/useApi'
 import useWebSocket from './hooks/useWebSocket'
 import Sidebar from './components/Sidebar'
 import Workspace from './components/Workspace'
@@ -140,11 +140,21 @@ function Dashboard() {
   }, [])
   const [handleStartSession, startingSession] = useAction(_startSession)
 
-  const handleMarkDone = useCallback(async () => {
+  const CHECKPOINT_PROMPT = `🚩 CHECKPOINT — Run the following steps in order. Do NOT ask for confirmation, proceed automatically through each step:
+
+1. **Code Review** — Use the /requesting-code-review skill to review all changes made in this session. Fix any critical issues found.
+2. **API Testing** — Use the /api-test-feature skill to test all new or modified API endpoints. Create test data, hit each endpoint, and report pass/fail results.
+3. **Commit & Push** — Stage all changes, write a clear commit message, and push to GitHub.
+4. **Deploy to UAT** — Use the /uat-deployment skill to deploy to the UAT server.
+5. **Report** — Summarize what was reviewed, tested, pushed, and deployed. List any issues found and whether they were fixed.
+
+Proceed now.`
+
+  const handleCheckpoint = useCallback(() => {
     if (!activeSession?.id) return
-    await markSessionDone(activeSession.id)
-    setTimeout(() => { refreshMessages(); refreshSessions() }, 1500)
-  }, [activeSession?.id])
+    // Send the checkpoint prompt as a visible user message
+    handleSendMessage(CHECKPOINT_PROMPT, selectedModel)
+  }, [activeSession?.id, selectedModel, handleSendMessage])
 
   const _sendMessage = useCallback(async (text, model, imageTokens = []) => {
     if (!activeSession?.id) return
@@ -288,7 +298,7 @@ function Dashboard() {
             hasAccess={hasAccess}
             busy={startingSession || sendingMessage || stoppingSession || forkingSession}
             onForkSession={handleForkSession}
-            onMarkDone={handleMarkDone}
+            onCheckpoint={handleCheckpoint}
             sprints={sprints}
             typing={wsTyping?.sessionId === activeSession?.id}
             wsConnected={wsConnected}

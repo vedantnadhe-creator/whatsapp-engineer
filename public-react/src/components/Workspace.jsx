@@ -13,7 +13,7 @@ import {
   X,
   FileText,
   GitBranch,
-  CheckCircle2,
+  Flag,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -390,7 +390,7 @@ export default function Workspace({
   isNewSession = false,
   onStartSession,
   onForkSession,
-  onMarkDone,
+  onCheckpoint,
   onUploadFile,
   onTranscribe,
   models = [],
@@ -637,16 +637,16 @@ export default function Workspace({
             <GitBranch size={14} style={{ color: colors.textSecondary }} />
           </button>
         )}
-        {onMarkDone && (
+        {onCheckpoint && session.status !== 'running' && (
           <button
-            onClick={() => { if (window.confirm('Mark this session as done? This will trigger code review, push, and deploy.')) onMarkDone() }}
+            onClick={onCheckpoint}
             disabled={busy}
             className="flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium cursor-pointer transition-colors hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
-            style={{ backgroundColor: 'var(--c-status-completed)', color: '#fff' }}
-            title="Mark as done — runs code review, push to GitHub, and deploy to UAT"
+            style={{ backgroundColor: 'var(--c-accent)', color: '#fff' }}
+            title="Checkpoint — review code, test APIs, push & deploy"
           >
-            <CheckCircle2 size={12} />
-            Done
+            <Flag size={12} />
+            Checkpoint
           </button>
         )}
         <span
