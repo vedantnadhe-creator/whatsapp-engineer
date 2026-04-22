@@ -149,6 +149,64 @@ class Orchestrator {
     }
 
     clearHistory(userPhone) { this.userHistory.delete(userPhone); }
+
+    /**
+     * Analyze a completed session's conversation to extract learnings.
+     * Returns a string with new learnings, or empty string if nothing noteworthy.
+     */
+    async extractLearnings(task, messages, costUsd, status) {
+        if (!messages || messages.length < 3) return '';
+        try {
+            // Build a condensed conversation log
+            const convo = messages.slice(-30).map(m => {
+                let content = (m.content || '').replace(/<!--thinking-->[\s\S]*?<!--\/thinking-->\n?\n?/g, '').trim();
+                if (content.length > 800) content = content.slice(0, 800) + '...';
+                return `[${m.role}]: ${content}`;
+            }).join('\n\n');
+
+            const prompt = `You are analyzing a completed coding session to extract learnings for future sessions.
+
+Task: ${task || 'Unknown'}
+Status: ${status}
+Cost: $${Number(costUsd || 0).toFixed(4)}
+Message count: ${messages.length}
+
+Conversation (condensed):
+${convo.slice(0, 12000)}
+
+---
+
+Look for these patterns:
+1. **Wasted iterations** — Did the bot try something multiple times before getting it right? What should it know upfront?
+2. **Config/env gotchas** — Were there environment, config, or infra issues that required trial-and-error to discover?
+3. **Wrong approach first** — Did the bot take a wrong approach and have to backtrack? What's the faster path?
+4. **Missing knowledge** — Was there domain knowledge the bot didn't have that would have helped?
+5. **Common patterns** — Are there project-specific patterns/conventions that should be documented?
+
+IMPORTANT:
+- Only return learnings that would help FUTURE sessions avoid the same issues
+- Do NOT include learnings about deployment rules (already handled separately)
+- Do NOT include generic programming advice — only project-specific insights
+- If the session went smoothly with no issues, respond with exactly: NONE
+- Keep each learning to 1-2 sentences max
+- Format as a bullet list starting with "- "
+
+Response:`;
+
+            const response = await this.client.models.generateContent({
+                model: config.GEMINI_MODEL,
+                contents: prompt,
+                config: { temperature: 0.1, thinkingConfig: { thinkingBudget: 1024 } },
+            });
+
+            const text = (response.text || '').trim();
+            if (!text || text === 'NONE' || text.toLowerCase().includes('no notable learnings')) return '';
+            return text;
+        } catch (err) {
+            console.error('[Orchestrator] Learning extraction failed:', err.message);
+            return '';
+        }
+    }
 }
 
 export { DEFAULT_SYSTEM_PROMPT };

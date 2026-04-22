@@ -7,6 +7,8 @@
 // ============================================================
 
 import './polyfill.js';
+import fs from 'fs';
+import path from 'path';
 import WhatsAppBridge from './whatsapp.js';
 import Orchestrator from './orchestrator.js';
 import ClaudeManager from './claude_manager.js';
@@ -202,6 +204,39 @@ claude.on('session_end', async ({ sessionId, code, status, costUsd }) => {
             `❌ Session *${sessionId}* ended unexpectedly${costInfo}.\nSend a new task to start a fresh session.`
         );
     }
+
+    // ── Post-session learning extraction (async, non-blocking) ──
+    try {
+        const messages = store.getMessages(sessionId, 50);
+        if (messages && messages.length >= 4) {
+            const learnings = await orchestrator.extractLearnings(session.task, messages, costUsd, status);
+            if (learnings && learnings.trim() && learnings.trim() !== 'NONE') {
+                const learningsPath = path.join(config.DEFAULT_WORKING_DIR, 'LEARNINGS.md');
+                // Cap file size — if over 20KB, trim older entries before appending
+                try {
+                    const stat = fs.statSync(learningsPath);
+                    if (stat.size > 20000) {
+                        const raw = fs.readFileSync(learningsPath, 'utf-8');
+                        const marker = '<!-- NEW LEARNINGS APPENDED BELOW';
+                        const mIdx = raw.indexOf(marker);
+                        const header = mIdx !== -1 ? raw.slice(0, raw.indexOf('\n', mIdx) + 1) : raw.slice(0, 500);
+                        const appended = mIdx !== -1 ? raw.slice(raw.indexOf('\n', mIdx) + 1) : '';
+                        const sections = appended.split(/\n(?=## \d{4}-)/).filter(s => s.trim());
+                        // Keep last 20 sections
+                        const trimmed = header + '\n' + sections.slice(-20).join('\n');
+                        fs.writeFileSync(learningsPath, trimmed, 'utf-8');
+                        console.log(`[Learnings] Trimmed file from ${sections.length} to ${Math.min(sections.length, 20)} entries`);
+                    }
+                } catch (_) { }
+                const date = new Date().toISOString().split('T')[0];
+                const entry = `\n## ${date} — ${sessionId} (${session.task?.slice(0, 60) || 'task'})\n${learnings.trim()}\n`;
+                fs.appendFileSync(learningsPath, entry, 'utf-8');
+                console.log(`[Learnings] Extracted from ${sessionId}:\n${learnings.trim()}`);
+            }
+        }
+    } catch (err) {
+        console.error(`[Learnings] Failed to extract from ${sessionId}:`, err.message);
+    }
 });
 
 claude.on('session_error', async ({ sessionId, error }) => {
@@ -213,7 +248,7 @@ claude.on('session_error', async ({ sessionId, error }) => {
 
 // ── WhatsApp message handler ──────────────────────────────────
 
-export async function handleIncomingMessage({ isWeb: explicitIsWeb, phone, text, pushName, groupJid, imagePath = null, ownerId = null, model = 'opus' }) {
+export async function handleIncomingMessage({ isWeb: explicitIsWeb, phone, text, pushName, groupJid, imagePath = null, ownerId = null, model = 'claude-opus-4-7' }) {
     try {
         const isWeb = explicitIsWeb || pushName === 'Web Dashboard';
         // Use groupJid as the session owner if in a group, otherwise use personal phone
@@ -237,7 +272,7 @@ export async function handleIncomingMessage({ isWeb: explicitIsWeb, phone, text,
                 intent = { action: 'RESUME_SESSION', session_ref: sessionId, task: cleanText };
             } else if (isStartFresh) {
                 const cleanText = text.replace(/^\[start fresh\]\s*/i, '').trim();
-                intent = { action: 'START_SESSION', task: cleanText };
+                intent = { action: 'START_SESSION', task: cleanText, forceNew: true };
             } else {
                 // Fallback: if no prefix, treat as new session
                 intent = { action: 'START_SESSION', task: text.trim() };
@@ -261,7 +296,8 @@ export async function handleIncomingMessage({ isWeb: explicitIsWeb, phone, text,
 
             case 'START_SESSION': {
                 // Safety: if the user typed a WA- session ID in their message, they meant resume — not new.
-                const idInText = text.match(/WA-[a-z0-9\-]+/i)?.[0];
+                // Skip this when forceNew is set (explicit [start fresh] prefix)
+                const idInText = intent.forceNew ? null : text.match(/WA-[a-z0-9\-]+/i)?.[0];
                 if (idInText) {
                     const targetSession = store.getSession(idInText) || (() => {
                         const all = store.getGlobalRecentSessions(50);

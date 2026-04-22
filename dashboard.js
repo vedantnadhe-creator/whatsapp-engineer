@@ -1,11 +1,13 @@
 import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
+import crypto from 'crypto';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
 import http from 'http';
 import { WebSocketServer } from 'ws';
+import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 import config from './config.js';
 // orchestrator import removed — Claude prompt is now file-based (CLAUDE.md)
 import {
@@ -39,6 +41,47 @@ export function startDashboard(store, messageHandler, port = 18790, wa = null, e
     app.use(express.static(path.join(__dirname, 'public')));
     app.use('/sessions', express.static(path.join(__dirname, 'public')));
 
+    // ── S3 Client (for PRD proxy) ─────────────────────────
+    const s3 = new S3Client({
+        region: process.env.OCI_REGION || 'ap-mumbai-1',
+        endpoint: process.env.S3_ENDPOINT || 'https://bmv2bqg5gpcd.compat.objectstorage.ap-mumbai-1.oraclecloud.com',
+        credentials: {
+            accessKeyId: process.env.S3_ACCESS_KEY_ID || '',
+            secretAccessKey: process.env.S3_SECRET_ACCESS_KEY || '',
+        },
+        forcePathStyle: true,
+    });
+    const S3_BUCKET = process.env.S3_BUCKET_NAME || 'pl-uat-public-docs';
+    const ALLOWED_EMAIL_DOMAIN = process.env.PRD_EMAIL_DOMAIN || 'pluginlive.com';
+
+    // ── PRD Proxy (email-domain restricted) ─────────────
+    app.get('/prd/:filename', optionalAuth, async (req, res) => {
+        const email = req.user?.email || '';
+        if (!email.endsWith(`@${ALLOWED_EMAIL_DOMAIN}`)) {
+            return res.status(403).send(`
+<!DOCTYPE html><html><head><title>Access Denied</title>
+<style>body{font-family:sans-serif;background:#0a0a0a;color:#e5e5e5;display:flex;justify-content:center;align-items:center;height:100vh;margin:0}
+.box{text-align:center;padding:3rem;border:1px solid #333;border-radius:12px;max-width:400px}
+h1{color:#ef4444;font-size:1.5rem;margin-bottom:1rem}p{color:#a3a3a3;font-size:0.9rem;line-height:1.6}
+a{color:#60a5fa;text-decoration:none}</style></head>
+<body><div class="box"><h1>Access Denied</h1>
+<p>This document is restricted to <strong>@${ALLOWED_EMAIL_DOMAIN}</strong> accounts.</p>
+<p style="margin-top:1rem"><a href="/sessions">Login with your org email →</a></p>
+</div></body></html>`);
+        }
+        try {
+            const key = `prds/${req.params.filename}`;
+            const resp = await s3.send(new GetObjectCommand({ Bucket: S3_BUCKET, Key: key }));
+            res.setHeader('Content-Type', resp.ContentType || 'text/html');
+            resp.Body.pipe(res);
+        } catch (err) {
+            if (err.name === 'NoSuchKey' || err.$metadata?.httpStatusCode === 404) {
+                return res.status(404).send('<h1>PRD not found</h1>');
+            }
+            res.status(500).send(`Error: ${err.message}`);
+        }
+    });
+
     // ── Auth ──────────────────────────────────────────────
 
     app.post('/api/auth/login', (req, res) => {
@@ -48,13 +91,13 @@ export function startDashboard(store, messageHandler, port = 18790, wa = null, e
             const user = store.verifyPassword(email, password);
             if (!user) return res.status(401).json({ error: 'Invalid email or password' });
             const token = signJwt({ id: user.id, email: user.email, displayName: user.display_name, isAdmin: !!user.is_admin, role: user.role });
-            res.cookie('wa_token', token, { httpOnly: true, sameSite: 'lax', maxAge: 30 * 24 * 60 * 60 * 1000, secure: process.env.NODE_ENV === 'production' });
+            res.cookie('wa_token', token, { httpOnly: true, sameSite: 'lax', maxAge: 30 * 24 * 60 * 60 * 1000, secure: true, path: '/' });
             res.json({ success: true, user: { id: user.id, email: user.email, displayName: user.display_name, isAdmin: !!user.is_admin, role: user.role } });
         } catch (err) { res.status(500).json({ error: err.message }); }
     });
 
     app.post('/api/auth/logout', (req, res) => {
-        res.clearCookie('wa_token');
+        res.clearCookie('wa_token', { path: '/' });
         res.json({ success: true });
     });
 
@@ -132,7 +175,8 @@ export function startDashboard(store, messageHandler, port = 18790, wa = null, e
     // Available Claude models
     app.get('/api/models', requireAuth, (req, res) => {
         res.json([
-            { id: 'opus', name: 'Opus 4.6', description: 'Most capable for complex work', default: true },
+            { id: 'claude-opus-4-7', name: 'Opus 4.7', description: 'Latest — most capable for complex work', default: true },
+            { id: 'opus', name: 'Opus 4.6', description: 'Previous Opus generation' },
             { id: 'sonnet', name: 'Sonnet 4.6', description: 'Best for everyday tasks' },
             { id: 'haiku', name: 'Haiku 4.5', description: 'Fastest for quick answers' },
         ]);
@@ -195,6 +239,68 @@ export function startDashboard(store, messageHandler, port = 18790, wa = null, e
     app.get('/api/sessions/:id/collaborators', requireAuth, (req, res) => {
         try { res.json(store.getCollaborators(req.params.id)); }
         catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    // ── Session share links ─────────────────────────────────────
+    // Owner/admin creates a shareable link (token). Recipient exchanges it for collaborator access.
+    const SHARE_LINK_TTL_DAYS = 7;
+    const canManageShareLinks = (session, user) => session && (session.owner_id === user.id || user.isAdmin);
+
+    app.post('/api/sessions/:id/share-links', requireAuth, (req, res) => {
+        try {
+            const session = store.getSession(req.params.id);
+            if (!session) return res.status(404).json({ error: 'Session not found' });
+            if (!canManageShareLinks(session, req.user)) return res.status(403).json({ error: 'Only the session owner or an admin can create share links' });
+            const token = crypto.randomBytes(24).toString('base64url');
+            const expiresAt = new Date(Date.now() + SHARE_LINK_TTL_DAYS * 24 * 60 * 60 * 1000).toISOString();
+            const link = store.createShareLink({
+                sessionId: session.id,
+                token,
+                createdBy: req.user.id,
+                permission: 'write',
+                expiresAt,
+            });
+            res.json({ link, token, expiresAt, sessionId: session.id });
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    app.get('/api/sessions/:id/share-links', requireAuth, (req, res) => {
+        try {
+            const session = store.getSession(req.params.id);
+            if (!session) return res.status(404).json({ error: 'Session not found' });
+            if (!canManageShareLinks(session, req.user)) return res.status(403).json({ error: 'Only the session owner or an admin can view share links' });
+            res.json(store.listShareLinks(session.id));
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    app.delete('/api/sessions/:id/share-links/:linkId', requireAuth, (req, res) => {
+        try {
+            const session = store.getSession(req.params.id);
+            if (!session) return res.status(404).json({ error: 'Session not found' });
+            if (!canManageShareLinks(session, req.user)) return res.status(403).json({ error: 'Only the session owner or an admin can revoke share links' });
+            const link = store.getShareLinkById(req.params.linkId);
+            if (!link || link.session_id !== session.id) return res.status(404).json({ error: 'Share link not found' });
+            store.revokeShareLink(link.id);
+            res.json({ success: true });
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    // Redeem a share token — any authenticated user. Adds them as a collaborator and returns session id.
+    app.post('/api/share/:token/redeem', requireAuth, (req, res) => {
+        try {
+            const link = store.getShareLinkByToken(req.params.token);
+            if (!link) return res.status(404).json({ error: 'Invalid share link' });
+            if (link.revoked_at) return res.status(410).json({ error: 'This share link has been revoked' });
+            if (link.expires_at && new Date(link.expires_at).getTime() < Date.now()) return res.status(410).json({ error: 'This share link has expired' });
+            const session = store.getSession(link.session_id);
+            if (!session) return res.status(404).json({ error: 'Session no longer exists' });
+            // Owner doesn't need to redeem — short-circuit
+            if (session.owner_id !== req.user.id) {
+                store.addCollaborator(session.id, req.user.id);
+                store.incrementShareLinkUse(link.id);
+            }
+            res.json({ sessionId: session.id, permission: link.permission || 'write' });
+        } catch (err) { res.status(500).json({ error: err.message }); }
     });
 
     // ── Admin: User Management ──────────────────────────────────
@@ -279,25 +385,37 @@ export function startDashboard(store, messageHandler, port = 18790, wa = null, e
 
     app.post('/api/sessions/start', requireAuth, async (req, res) => {
         try {
-            const { text, model, sprintId } = req.body;
+            const { text, model, sprintId, type, labels } = req.body;
             if (!text) return res.status(400).json({ error: 'text is required' });
+            const allowedTypes = ['task', 'bug', 'feature', 'improvement'];
+            const sessionType = allowedTypes.includes(type) ? type : null;
+            if (!sessionType) return res.status(400).json({ error: 'type is required (task, bug, feature, improvement)' });
+            const tagList = Array.isArray(labels)
+                ? labels.map(l => String(l).trim()).filter(Boolean)
+                : (typeof labels === 'string' ? labels.split(',').map(l => l.trim()).filter(Boolean) : []);
+
             const phone = req.body.phone || req.user.phone || req.user.email || req.user.id;
             const startInstruction = /^(start fresh|new task|ignore previous)/i.test(text) ? text : `[start fresh] ${text}`;
             const tokens = Array.isArray(req.body.imageTokens) ? req.body.imageTokens : (req.body.imageToken ? [req.body.imageToken] : []);
             const imagePath = tokens.map(t => { const p = pendingImages.get(t); pendingImages.delete(t); return p; }).filter(Boolean)[0] || null;
-            const result = await messageHandler({ isWeb: true, phone: String(phone), text: startInstruction, pushName: req.user.displayName || 'Dashboard', imagePath, ownerId: req.user.id, model: model || 'opus' });
-            // Attach sprint and auto-create a session task issue
-            if (result?.sessionId && sprintId) {
-                store.updateSession(result.sessionId, { sprint_id: sprintId });
+            const result = await messageHandler({ isWeb: true, phone: String(phone), text: startInstruction, pushName: req.user.displayName || 'Dashboard', imagePath, ownerId: req.user.id, model: model || 'claude-opus-4-7' });
+            // Attach sprint + type + tags and auto-create a session task issue
+            if (result?.sessionId) {
+                store.updateSession(result.sessionId, {
+                    sprint_id: sprintId || null,
+                    type: sessionType,
+                    labels: tagList,
+                });
                 const cleanTask = text.replace(/^\[start fresh\]\s*/i, '').trim();
                 const issue = store.createIssue({
                     title: cleanTask,
                     description: `Auto-created from session ${result.sessionId}`,
                     priority: 'medium',
-                    labels: ['session'],
+                    labels: ['session', ...tagList],
                     createdBy: req.user.id,
-                    sprintId,
-                    type: 'task',
+                    sprintId: sprintId || null,
+                    type: sessionType,
+                    category: 'chat',
                 });
                 // Link session to the issue
                 if (issue) {
@@ -591,6 +709,25 @@ Do NOT ask for confirmation — proceed through each step automatically. If any 
         } catch (err) { res.status(500).json({ error: err.message }); }
     });
 
+    // ── Learnings (LEARNINGS.md — self-improving knowledge) ─────
+    const learningsPath = path.join(config.DEFAULT_WORKING_DIR, 'LEARNINGS.md');
+
+    app.get('/api/admin/learnings', requireAuth, requireAdmin, (req, res) => {
+        try {
+            const content = fs.existsSync(learningsPath) ? fs.readFileSync(learningsPath, 'utf-8') : '';
+            res.json({ content, path: learningsPath });
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    app.put('/api/admin/learnings', requireAuth, requireAdmin, (req, res) => {
+        try {
+            const { content } = req.body;
+            if (typeof content !== 'string') return res.status(400).json({ error: 'content is required' });
+            fs.writeFileSync(learningsPath, content, 'utf-8');
+            res.json({ success: true, message: 'LEARNINGS.md updated.' });
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
     // ── Admin Settings ─────────────────────────────────────────
     app.get('/api/admin/settings', requireAuth, requireAdmin, (req, res) => {
         try { res.json(store.getAllSettings()); }
@@ -783,6 +920,26 @@ The user may ask follow-up questions about the changelog — answer based on the
             const phone = req.user.phone || req.user.email || req.user.id;
             const result = await messageHandler({ isWeb: true, phone: String(phone), text: `[start fresh] ${changelogPrompt}`, pushName: req.user.displayName || 'Dashboard', ownerId: req.user.id, model: 'sonnet' });
 
+            // Map the new changelog session to the same sprint
+            if (result?.sessionId) {
+                store.updateSession(result.sessionId, { sprint_id: req.params.id });
+                // Create an issue for the changelog session
+                const issue = store.createIssue({
+                    title: `Changelog: ${sprint.name}`,
+                    description: `Auto-generated changelog for sprint "${sprint.name}"`,
+                    priority: 'low',
+                    labels: ['changelog'],
+                    createdBy: req.user.id,
+                    sprintId: req.params.id,
+                    type: 'task',
+                    category: 'chat',
+                });
+                if (issue) {
+                    store.updateIssue(issue.id, { session_id: result.sessionId });
+                    wsBroadcast('issue_created', { issue });
+                }
+            }
+
             res.json({ success: true, sessionId: result?.sessionId });
         } catch (err) { res.status(500).json({ error: err.message }); }
     });
@@ -820,7 +977,7 @@ The user may ask follow-up questions about the changelog — answer based on the
 
     app.put('/api/issues/:id', requireAuth, (req, res) => {
         try {
-            const allowed = ['title', 'description', 'status', 'priority', 'labels', 'assigned_to', 'sort_order', 'sprint_id', 'type'];
+            const allowed = ['title', 'description', 'status', 'priority', 'labels', 'assigned_to', 'sort_order', 'sprint_id', 'type', 'stage', 'prd_url', 'design_session_id', 'qa_session_id'];
             const updates = {};
             for (const key of allowed) {
                 if (req.body[key] !== undefined) updates[key] = req.body[key];
@@ -866,13 +1023,321 @@ The user may ask follow-up questions about the changelog — answer based on the
         catch (err) { res.status(500).json({ error: err.message }); }
     });
 
+    // ── Lifecycle Stages (Idea → Design → Development → QA → Done) ─────
+
+    const STAGE_ORDER = ['idea', 'design', 'development', 'qa', 'done'];
+
+    function nextStage(current) {
+        const idx = STAGE_ORDER.indexOf(current || 'idea');
+        if (idx < 0 || idx >= STAGE_ORDER.length - 1) return null;
+        return STAGE_ORDER[idx + 1];
+    }
+
+    function buildStagePrompt(fromStage, toStage, issue) {
+        const typeLabel = issue.type || 'task';
+        const header = `[Issue ${issue.id} — ${typeLabel.toUpperCase()}]\nTitle: ${issue.title}\nDescription: ${issue.description || '(no description)'}\n`;
+
+        if (toStage === 'design') {
+            return `${header}
+You are in the **DESIGN** stage. Your job: produce a Product Requirements Document (PRD).
+
+Steps:
+1. Use the \`/create-prd\` skill to generate a thorough HTML PRD for this ${typeLabel}.
+2. Include: problem statement, user stories, functional requirements, non-functional requirements, proposed architecture, API contracts (if any), UI notes, edge cases, success metrics.
+3. Upload to S3 via the skill and share the org-restricted URL.
+4. Do NOT write any implementation code yet. Design only.
+5. At the end, output the PRD URL clearly on its own line starting with "PRD_URL:".`;
+        }
+
+        if (toStage === 'development') {
+            const designRef = issue.design_session_id
+                ? `The PRD was produced in session ${issue.design_session_id}${issue.prd_url ? ` (${issue.prd_url})` : ''}. Read it before starting.`
+                : issue.prd_url
+                    ? `PRD: ${issue.prd_url}`
+                    : 'No PRD was generated — use the issue description as spec.';
+            return `${header}
+You are in the **DEVELOPMENT** stage. Your job: implement the feature/fix according to the spec.
+
+${designRef}
+
+Steps:
+1. Read the PRD (if any) and the existing codebase to understand scope.
+2. Write the code. Follow existing patterns in the repo.
+3. Keep scope tight — only what the PRD / issue requires. No gratuitous refactors.
+4. Verify locally: lint/typecheck/unit tests if they exist.
+5. Do NOT deploy, do NOT push to UAT/prod, do NOT restart services. Just write code.
+6. At the end, summarize what files you changed and what's been built.`;
+        }
+
+        if (toStage === 'qa') {
+            const devRef = issue.session_id
+                ? `Implementation was done in session ${issue.session_id}.`
+                : 'No dev session linked — test against current codebase state.';
+            return `${header}
+You are in the **QA** stage. Your job: verify the feature works end-to-end.
+
+${devRef}
+
+Steps:
+1. Use the \`/api-test-feature\` skill for API endpoints (create test data, hit each endpoint, verify responses).
+2. If there is UI, use the \`browser-agent\` MCP to click through the flow in a real browser — check both happy path and edge cases.
+3. Regression: confirm nearby features still work (don't break what's there).
+4. Report PASS/FAIL for each test with supporting output (request/response, screenshot paths, logs).
+5. If anything fails, describe the exact reproduction steps and the expected vs actual behavior. Do not fix the bug here — QA reports only.`;
+        }
+
+        if (toStage === 'done') {
+            return null; // No agent; just state change
+        }
+
+        return null;
+    }
+
+    app.post('/api/issues/:id/advance-stage', requireAuth, async (req, res) => {
+        try {
+            if (req.user.role === 'tester') return res.status(403).json({ error: 'Testers cannot advance stages' });
+            const issue = store.getIssue(req.params.id);
+            if (!issue) return res.status(404).json({ error: 'Issue not found' });
+
+            const from = issue.stage || 'idea';
+            const to = req.body.toStage || nextStage(from);
+            if (!to) return res.status(400).json({ error: 'Already at final stage' });
+            if (!STAGE_ORDER.includes(to)) return res.status(400).json({ error: 'Invalid stage' });
+
+            // Done stage — just flip state, no agent.
+            if (to === 'done') {
+                const updated = store.updateIssue(issue.id, { stage: 'done', status: 'completed', completed_at: new Date().toISOString() });
+                wsBroadcast('issue_updated', { issue: updated });
+                return res.json({ success: true, issue: updated });
+            }
+
+            // Build prompt (use override if supplied)
+            const prompt = (req.body.customPrompt && req.body.customPrompt.trim())
+                ? req.body.customPrompt
+                : buildStagePrompt(from, to, issue);
+            if (!prompt) return res.status(400).json({ error: 'No prompt for this transition' });
+
+            const phone = req.user.phone || req.user.email || req.user.id;
+            const model = req.body.model || 'claude-opus-4-7';
+
+            // Spawn new session for this stage
+            const result = await messageHandler({
+                isWeb: true,
+                phone: String(phone),
+                text: `[start fresh] ${prompt}`,
+                pushName: req.user.displayName || req.user.email || 'Stage Runner',
+                ownerId: req.user.id,
+                model,
+            });
+
+            if (!result?.sessionId) return res.status(500).json({ error: 'Failed to start stage session' });
+
+            // Update issue — set stage + link the stage's session
+            const updates = { stage: to };
+            if (to === 'design') updates.design_session_id = result.sessionId;
+            else if (to === 'development') { updates.session_id = result.sessionId; updates.status = 'in_progress'; }
+            else if (to === 'qa') updates.qa_session_id = result.sessionId;
+
+            const updated = store.updateIssue(issue.id, updates);
+            wsBroadcast('issue_updated', { issue: updated });
+            res.json({ success: true, issue: updated, sessionId: result.sessionId, stage: to });
+        } catch (err) {
+            res.status(500).json({ error: err.message });
+        }
+    });
+
+    // ── Pipeline: sessions + issues grouped by sprint ──────────
+
+    // Pipeline: sprint groups summary only (no items). Items are fetched lazily per group.
+    app.get('/api/pipeline/groups', requireAuth, (req, res) => {
+        try {
+            const sprints = store.getAllSprints();
+            const counts = store.getPipelineCounts();
+
+            const groups = counts.map(c => {
+                const sprint = c.sprintId ? sprints.find(s => s.id === c.sprintId) : null;
+                return {
+                    sprintId: c.sprintId,
+                    sprintName: sprint?.name || (c.sprintId ? '(Deleted sprint)' : 'Unassigned'),
+                    sprintStatus: sprint?.status || null,
+                    issueCount: c.issues || 0,
+                    sessionCount: c.sessions || 0,
+                    total: (c.issues || 0) + (c.sessions || 0),
+                };
+            });
+
+            // Ensure every sprint is represented even if it has no items yet.
+            for (const sp of sprints) {
+                if (!groups.find(g => g.sprintId === sp.id)) {
+                    groups.push({
+                        sprintId: sp.id,
+                        sprintName: sp.name,
+                        sprintStatus: sp.status || null,
+                        issueCount: 0,
+                        sessionCount: 0,
+                        total: 0,
+                    });
+                }
+            }
+
+            const order = { active: 0, planning: 1, null: 2, completed: 3 };
+            groups.sort((a, b) => {
+                const oa = order[a.sprintStatus ?? 'null'] ?? 2;
+                const ob = order[b.sprintStatus ?? 'null'] ?? 2;
+                if (oa !== ob) return oa - ob;
+                return (a.sprintName || '').localeCompare(b.sprintName || '');
+            });
+
+            res.json({ groups });
+        } catch (err) {
+            res.status(500).json({ error: err.message });
+        }
+    });
+
+    // Pipeline: paginated items for one sprint bucket. Use "__nosprint__" for Unassigned.
+    app.get('/api/pipeline/groups/:sprintId/items', requireAuth, (req, res) => {
+        try {
+            const raw = req.params.sprintId;
+            const sprintId = (raw === '__nosprint__' || raw === 'null' || !raw) ? null : raw;
+            const limit = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 30));
+            const offset = Math.max(0, parseInt(req.query.offset, 10) || 0);
+            const { items, total } = store.getPipelineGroupItems(sprintId, limit, offset);
+            res.json({ items, total, limit, offset });
+        } catch (err) {
+            res.status(500).json({ error: err.message });
+        }
+    });
+
+    // Session stage control — similar to issues, but for sessions
+    app.put('/api/sessions/:id/stage', requireAuth, (req, res) => {
+        try {
+            const allowed = ['stage', 'prd_url', 'design_session_id', 'dev_session_id', 'qa_session_id', 'sprint_id'];
+            const updates = {};
+            for (const k of allowed) if (req.body[k] !== undefined) updates[k] = req.body[k];
+            if (Object.keys(updates).length === 0) return res.status(400).json({ error: 'no valid fields' });
+            store.updateSession(req.params.id, updates);
+            const s = store.getSession(req.params.id);
+            wsBroadcast('session_stage_updated', { session: s });
+            res.json({ success: true, session: s });
+        } catch (err) {
+            res.status(500).json({ error: err.message });
+        }
+    });
+
+    app.get('/api/sessions/:id/stage-prompt', requireAuth, (req, res) => {
+        try {
+            const s = store.getSession(req.params.id);
+            if (!s) return res.status(404).json({ error: 'Session not found' });
+            const from = s.stage || 'idea';
+            const to = req.query.toStage || nextStage(from);
+            if (!to) return res.json({ from, to: null, prompt: null });
+            const pseudoIssue = {
+                id: s.id,
+                type: 'task',
+                title: s.task || 'Session',
+                description: s.task || '',
+                session_id: s.dev_session_id || s.id,
+                design_session_id: s.design_session_id,
+                qa_session_id: s.qa_session_id,
+                prd_url: s.prd_url,
+            };
+            res.json({ from, to, prompt: buildStagePrompt(from, to, pseudoIssue) });
+        } catch (err) {
+            res.status(500).json({ error: err.message });
+        }
+    });
+
+    app.post('/api/sessions/:id/advance-stage', requireAuth, async (req, res) => {
+        try {
+            if (req.user.role === 'tester') return res.status(403).json({ error: 'Testers cannot advance stages' });
+            const s = store.getSession(req.params.id);
+            if (!s) return res.status(404).json({ error: 'Session not found' });
+
+            const from = s.stage || 'idea';
+            const to = req.body.toStage || nextStage(from);
+            if (!to) return res.status(400).json({ error: 'Already at final stage' });
+            if (!STAGE_ORDER.includes(to)) return res.status(400).json({ error: 'Invalid stage' });
+
+            if (to === 'done') {
+                store.updateSession(s.id, { stage: 'done' });
+                const updated = store.getSession(s.id);
+                wsBroadcast('session_stage_updated', { session: updated });
+                return res.json({ success: true, session: updated });
+            }
+
+            const pseudoIssue = {
+                id: s.id,
+                type: 'task',
+                title: s.task || 'Session',
+                description: s.task || '',
+                session_id: s.dev_session_id || s.id,
+                design_session_id: s.design_session_id,
+                qa_session_id: s.qa_session_id,
+                prd_url: s.prd_url,
+            };
+            const prompt = (req.body.customPrompt && req.body.customPrompt.trim())
+                ? req.body.customPrompt
+                : buildStagePrompt(from, to, pseudoIssue);
+            if (!prompt) return res.status(400).json({ error: 'No prompt for this transition' });
+
+            const phone = req.user.phone || req.user.email || req.user.id;
+            const model = req.body.model || 'claude-opus-4-7';
+            const result = await messageHandler({
+                isWeb: true,
+                phone: String(phone),
+                text: `[start fresh] ${prompt}`,
+                pushName: req.user.displayName || req.user.email || 'Stage Runner',
+                ownerId: req.user.id,
+                model,
+            });
+            if (!result?.sessionId) return res.status(500).json({ error: 'Failed to start stage session' });
+
+            // Link child session back to parent sprint
+            if (s.sprint_id) store.updateSession(result.sessionId, { sprint_id: s.sprint_id });
+
+            const updates = { stage: to };
+            if (to === 'design') updates.design_session_id = result.sessionId;
+            else if (to === 'development') updates.dev_session_id = result.sessionId;
+            else if (to === 'qa') updates.qa_session_id = result.sessionId;
+            store.updateSession(s.id, updates);
+            const updated = store.getSession(s.id);
+            wsBroadcast('session_stage_updated', { session: updated });
+            res.json({ success: true, session: updated, sessionId: result.sessionId, stage: to });
+        } catch (err) {
+            res.status(500).json({ error: err.message });
+        }
+    });
+
+    app.get('/api/issues/:id/stage-prompt', requireAuth, (req, res) => {
+        try {
+            const issue = store.getIssue(req.params.id);
+            if (!issue) return res.status(404).json({ error: 'Issue not found' });
+            const from = issue.stage || 'idea';
+            const to = req.query.toStage || nextStage(from);
+            if (!to) return res.json({ from, to: null, prompt: null });
+            const prompt = buildStagePrompt(from, to, issue);
+            res.json({ from, to, prompt });
+        } catch (err) {
+            res.status(500).json({ error: err.message });
+        }
+    });
+
     // ── Autonomous Run (picks issues one by one) ─────────────────
 
     // In-memory state for autonomous runner
     const autonomousState = { running: false, currentIssueId: null, sessionId: null };
 
     app.get('/api/autonomous/status', requireAuth, (req, res) => {
-        res.json(autonomousState);
+        const selfDecisions = store.getSetting('self_decisions') === 'true';
+        res.json({ ...autonomousState, selfDecisions });
+    });
+
+    app.put('/api/autonomous/self-decisions', requireAuth, (req, res) => {
+        try {
+            const { enabled } = req.body;
+            store.setSetting('self_decisions', enabled ? 'true' : 'false');
+            res.json({ success: true, selfDecisions: !!enabled });
+        } catch (err) { res.status(500).json({ error: err.message }); }
     });
 
     app.post('/api/autonomous/start', requireAuth, async (req, res) => {
@@ -903,8 +1368,12 @@ The user may ask follow-up questions about the changelog — answer based on the
 
             // Start a session for this issue — fork from session if specified
             const phone = req.user.phone || req.user.email || req.user.id;
-            const model = req.body.model || 'opus';
-            const taskPrompt = `[Issue ${issue.id}] ${issue.title}\n\n${issue.description || 'No additional details.'}`;
+            const model = req.body.model || 'claude-opus-4-7';
+            const selfDecisions = store.getSetting('self_decisions') === 'true';
+            const selfDecisionsHint = selfDecisions
+                ? '\n\nIMPORTANT: Take all decisions yourself. Do NOT ask the user for clarification, confirmation, or choices. Use your best judgment based on the requirements, codebase context, and best practices. Just get it done autonomously.'
+                : '';
+            const taskPrompt = `[Issue ${issue.id}] ${issue.title}\n\n${issue.description || 'No additional details.'}${selfDecisionsHint}`;
             let result;
             if (issue.fork_session_id && executionEngine) {
                 result = await executionEngine.forkSession(issue.fork_session_id, taskPrompt, String(phone), req.user.id, model);
@@ -988,8 +1457,8 @@ The user may ask follow-up questions about the changelog — answer based on the
 
             const taskPrompt = `[Issue ${next.id}] ${next.title}\n\n${next.description || 'No additional details.'}`;
             const startNext = next.fork_session_id && executionEngine
-                ? executionEngine.forkSession(next.fork_session_id, taskPrompt, 'system_autonomous', null, 'opus')
-                : messageHandler({ isWeb: true, phone: 'system_autonomous', text: `[start fresh] ${taskPrompt}`, pushName: 'Autonomous Runner', ownerId: null, model: 'opus' });
+                ? executionEngine.forkSession(next.fork_session_id, taskPrompt, 'system_autonomous', null, 'claude-opus-4-7')
+                : messageHandler({ isWeb: true, phone: 'system_autonomous', text: `[start fresh] ${taskPrompt}`, pushName: 'Autonomous Runner', ownerId: null, model: 'claude-opus-4-7' });
             startNext.then(result => {
                     if (result?.sessionId) {
                         autonomousState.sessionId = result.sessionId;

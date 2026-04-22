@@ -8,7 +8,8 @@ import config from './config.js';
 import fs from 'fs';
 import path from 'path';
 
-const KB_HINT = `[Context: Knowledge Base is at ${config.KB_DIR} - check relevant .md files there if you need domain knowledge.]`;
+const KB_HINT = `[Context: Knowledge Base is in Outline wiki. To search KB, run: curl -s -X POST ${config.OUTLINE_API_URL}/documents.search -H "Authorization: Bearer ${config.OUTLINE_API_KEY}" -H "Content-Type: application/json" -d '{"query":"<search term>","collectionId":"${config.OUTLINE_KB_COLLECTION_ID}"}' | python3 -c "import sys,json; [print(d['document']['title'],'\\n',d['document']['text'][:500]) for d in json.loads(sys.stdin.read()).get('data',[])]". To read a specific doc: curl -s -X POST ${config.OUTLINE_API_URL}/documents.info -H "Authorization: Bearer ${config.OUTLINE_API_KEY}" -H "Content-Type: application/json" -d '{"id":"<doc_id>"}'. To update a doc: curl -s -X POST ${config.OUTLINE_API_URL}/documents.update -H "Authorization: Bearer ${config.OUTLINE_API_KEY}" -H "Content-Type: application/json" -d '{"id":"<doc_id>","text":"<new content>"}'. To create a new KB doc: curl -s -X POST ${config.OUTLINE_API_URL}/documents.create -H "Authorization: Bearer ${config.OUTLINE_API_KEY}" -H "Content-Type: application/json" -d '{"title":"<title>","text":"<content>","collectionId":"${config.OUTLINE_KB_COLLECTION_ID}","publish":true}'. PRDs collection ID: ${config.OUTLINE_PRD_COLLECTION_ID}]`;
+
 
 // --dangerously-skip-permissions cannot be used as root — use settings-based permissions instead
 const IS_ROOT = process.getuid?.() === 0;
@@ -22,7 +23,7 @@ class ClaudeManager extends EventEmitter {
         this._lastNotify = {};
     }
 
-    async startSession(userPhone, task, workingDir, imagePath = null, ownerId = null, model = 'opus') {
+    async startSession(userPhone, task, workingDir, imagePath = null, ownerId = null, model = 'claude-opus-4-7') {
         const sessionId = `WA-${Date.now().toString(36)}`;
         const dir = workingDir || config.DEFAULT_WORKING_DIR;
         this.store.createSession(sessionId, userPhone, task, null, dir, ownerId, model);
@@ -31,7 +32,7 @@ class ClaudeManager extends EventEmitter {
         return { sessionId };
     }
 
-    async startAutonomousSession(userPhone, task, workingDir, imagePath = null, ownerId = null, model = 'opus') {
+    async startAutonomousSession(userPhone, task, workingDir, imagePath = null, ownerId = null, model = 'claude-opus-4-7') {
         return this.startSession(userPhone, task, workingDir, imagePath, ownerId, model);
     }
 
@@ -41,7 +42,7 @@ class ClaudeManager extends EventEmitter {
 
         const sessionId = `WA-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
         const dir = parent.working_dir || config.DEFAULT_WORKING_DIR;
-        const sessionModel = model || parent.model || 'opus';
+        const sessionModel = model || parent.model || 'claude-opus-4-7';
 
         // Build context summary from parent session's messages
         const parentMessages = this.store.getMessages(parentSessionId, 50);
@@ -135,7 +136,7 @@ class ClaudeManager extends EventEmitter {
 
         this.store.addMessage(sessionId, 'user', followUp);
         this.store.updateSession(sessionId, { status: 'running', thread_open: 1 });
-        const model = session.model || 'opus';
+        const model = session.model || 'claude-opus-4-7';
         this._spawnResume(sessionId, session.claude_session_id, followUp, session.working_dir, session.cost_usd || 0, imagePath, model);
         return { sessionId };
     }
@@ -153,7 +154,7 @@ class ClaudeManager extends EventEmitter {
     isRunning(sessionId) { return this.processes.has(sessionId); }
     getLastOutput(sessionId) { return this.processes.get(sessionId)?.lastOutput || null; }
 
-    async planSession(userPhone, task, workingDir, model = 'opus') {
+    async planSession(userPhone, task, workingDir, model = 'claude-opus-4-7') {
         const sessionId = `WA-plan-${Date.now().toString(36)}`;
         const dir = workingDir || config.DEFAULT_WORKING_DIR;
         this.store.createSession(sessionId, userPhone, task, null, dir, null, model);
@@ -162,7 +163,7 @@ class ClaudeManager extends EventEmitter {
         return { sessionId };
     }
 
-    _spawnNew(sessionId, prompt, workingDir, imagePath = null, model = 'opus') {
+    _spawnNew(sessionId, prompt, workingDir, imagePath = null, model = 'claude-opus-4-7') {
         const fileRef = this._prepareFile(imagePath, workingDir);
         const fullPrompt = fileRef ? `${KB_HINT}\n\n${fileRef}\n\n${prompt}` : `${KB_HINT}\n\n${prompt}`;
         const args = ['--print', '--model', model, '--output-format', 'stream-json', '--verbose', ...SKIP_PERMS, fullPrompt];
@@ -170,14 +171,14 @@ class ClaudeManager extends EventEmitter {
         this._runPty(sessionId, config.CLAUDE_BIN, args, workingDir, 0);
     }
 
-    _spawnPlan(sessionId, prompt, workingDir, model = 'opus') {
+    _spawnPlan(sessionId, prompt, workingDir, model = 'claude-opus-4-7') {
         const planPrefix = 'PLANNING MODE: Read the codebase and relevant knowledge base docs, then write a detailed step-by-step plan of the changes you would make. Do NOT modify any files. Output the plan as a numbered list, then stop.';
         const args = ['--print', '--model', model, '--output-format', 'stream-json', '--verbose', ...SKIP_PERMS, `${KB_HINT}\n\n${planPrefix}\n\nTask: ${prompt}`];
         console.log(`[Claude] PLAN session ${sessionId} | model: ${model} | cwd: ${workingDir}`);
         this._runPty(sessionId, config.CLAUDE_BIN, args, workingDir, 0);
     }
 
-    _spawnResume(sessionId, claudeSessionId, followUp, workingDir, baseCost = 0, imagePath = null, model = 'opus') {
+    _spawnResume(sessionId, claudeSessionId, followUp, workingDir, baseCost = 0, imagePath = null, model = 'claude-opus-4-7') {
         const fileRef = this._prepareFile(imagePath, workingDir);
         const fullFollowUp = fileRef ? `${fileRef}\n\n${followUp}` : followUp;
         const args = ['--resume', claudeSessionId, '--print', '--model', model, '--output-format', 'stream-json', '--verbose', ...SKIP_PERMS, fullFollowUp];

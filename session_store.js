@@ -70,6 +70,19 @@ class SessionStore {
                 resolved_at DATETIME,
                 resolved_by TEXT
             );
+            CREATE TABLE IF NOT EXISTS session_share_links (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                token TEXT UNIQUE NOT NULL,
+                permission TEXT DEFAULT 'write',
+                created_by TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                expires_at DATETIME,
+                revoked_at DATETIME,
+                used_count INTEGER DEFAULT 0
+            );
+            CREATE INDEX IF NOT EXISTS idx_share_links_session ON session_share_links(session_id);
+            CREATE INDEX IF NOT EXISTS idx_share_links_token ON session_share_links(token);
             CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_phone);
             CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
             CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
@@ -122,6 +135,19 @@ class SessionStore {
                 value TEXT NOT NULL,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
             );
+            CREATE TABLE IF NOT EXISTS prds (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                description TEXT DEFAULT '',
+                s3_key TEXT,
+                url TEXT,
+                sprint_id TEXT,
+                issue_id TEXT,
+                created_by TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_prds_sprint ON prds(sprint_id);
         `);
 
         const safeMigrations = [
@@ -139,6 +165,18 @@ class SessionStore {
             "ALTER TABLE sessions ADD COLUMN input_tokens INTEGER DEFAULT 0",
             "ALTER TABLE sessions ADD COLUMN output_tokens INTEGER DEFAULT 0",
             "ALTER TABLE sessions ADD COLUMN sprint_id TEXT",
+            "ALTER TABLE issues ADD COLUMN category TEXT DEFAULT 'issue'",
+            "ALTER TABLE issues ADD COLUMN stage TEXT DEFAULT 'idea'",
+            "ALTER TABLE issues ADD COLUMN design_session_id TEXT",
+            "ALTER TABLE issues ADD COLUMN qa_session_id TEXT",
+            "ALTER TABLE issues ADD COLUMN prd_url TEXT",
+            "ALTER TABLE sessions ADD COLUMN stage TEXT DEFAULT 'idea'",
+            "ALTER TABLE sessions ADD COLUMN design_session_id TEXT",
+            "ALTER TABLE sessions ADD COLUMN qa_session_id TEXT",
+            "ALTER TABLE sessions ADD COLUMN prd_url TEXT",
+            "ALTER TABLE sessions ADD COLUMN dev_session_id TEXT",
+            "ALTER TABLE sessions ADD COLUMN type TEXT DEFAULT 'task'",
+            "ALTER TABLE sessions ADD COLUMN labels TEXT DEFAULT '[]'",
         ];
         for (const sql of safeMigrations) {
             try { this.db.exec(sql); } catch (_) { /* column already exists */ }
@@ -147,7 +185,7 @@ class SessionStore {
         try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_issues_sprint ON issues(sprint_id)'); } catch (_) { }
     }
 
-    createSession(id, userPhone, task, claudeSessionId, workingDir, ownerId = null, model = 'opus') {
+    createSession(id, userPhone, task, claudeSessionId, workingDir, ownerId = null, model = 'claude-opus-4-7') {
         this.db.prepare(
             `INSERT OR REPLACE INTO sessions (id, user_phone, owner_id, task, claude_session_id, status, working_dir, thread_open, model)
              VALUES (?, ?, ?, ?, ?, 'running', ?, 1, ?)`
@@ -182,6 +220,9 @@ class SessionStore {
         for (const [key, val] of Object.entries(updates)) {
             if (key === 'subscribers_arr') {
                 fields.push(`subscribers = ?`);
+                values.push(JSON.stringify(val));
+            } else if (key === 'labels' && Array.isArray(val)) {
+                fields.push(`labels = ?`);
                 values.push(JSON.stringify(val));
             } else {
                 fields.push(`${key} = ?`);
@@ -420,12 +461,12 @@ class SessionStore {
 
     // ── Issues ─────────────────────────────────────────────────
 
-    createIssue({ title, description = '', priority = 'medium', labels = [], createdBy = null, forkSessionId = null, sprintId = null, assignedTo = null, type = 'task' }) {
+    createIssue({ title, description = '', priority = 'medium', labels = [], createdBy = null, forkSessionId = null, sprintId = null, assignedTo = null, type = 'task', category = 'issue' }) {
         const id = `ISS-${Date.now().toString(36)}`;
         const maxOrder = this.db.prepare("SELECT COALESCE(MAX(sort_order), 0) as m FROM issues WHERE status = 'todo'").get().m;
         this.db.prepare(
-            `INSERT INTO issues (id, title, description, priority, labels, created_by, sort_order, fork_session_id, sprint_id, assigned_to, type) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-        ).run(id, title, description, priority, JSON.stringify(labels), createdBy, maxOrder + 1, forkSessionId, sprintId, assignedTo, type);
+            `INSERT INTO issues (id, title, description, priority, labels, created_by, sort_order, fork_session_id, sprint_id, assigned_to, type, category) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ).run(id, title, description, priority, JSON.stringify(labels), createdBy, maxOrder + 1, forkSessionId, sprintId, assignedTo, type, category);
         return this.getIssue(id);
     }
 
@@ -588,6 +629,215 @@ class SessionStore {
         const settings = {};
         for (const r of rows) settings[r.key] = r.value;
         return settings;
+    }
+
+    // ── PRDs ─────────────────────────────────────────────────
+    createPrd({ title, description = '', s3Key = null, url = null, sprintId = null, issueId = null, createdBy = null }) {
+        const id = `PRD-${Date.now().toString(36)}`;
+        this.db.prepare(
+            `INSERT INTO prds (id, title, description, s3_key, url, sprint_id, issue_id, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        ).run(id, title, description, s3Key, url, sprintId, issueId, createdBy);
+        return this.getPrd(id);
+    }
+
+    getPrd(id) { return this.db.prepare('SELECT * FROM prds WHERE id = ?').get(id); }
+
+    getAllPrds() {
+        return this.db.prepare(`
+            SELECT p.*, u.display_name as creator_name
+            FROM prds p LEFT JOIN users u ON p.created_by = u.id
+            ORDER BY p.created_at DESC
+        `).all();
+    }
+
+    getPrdsBySprint(sprintId) {
+        return this.db.prepare(`
+            SELECT p.*, u.display_name as creator_name
+            FROM prds p LEFT JOIN users u ON p.created_by = u.id
+            WHERE p.sprint_id = ?
+            ORDER BY p.created_at DESC
+        `).all(sprintId);
+    }
+
+    updatePrd(id, updates) {
+        const allowed = ['title', 'description', 's3_key', 'url', 'sprint_id', 'issue_id'];
+        const sets = [];
+        const vals = [];
+        for (const [k, v] of Object.entries(updates)) {
+            if (allowed.includes(k)) { sets.push(`${k} = ?`); vals.push(v); }
+        }
+        if (sets.length === 0) return this.getPrd(id);
+        sets.push('updated_at = CURRENT_TIMESTAMP');
+        vals.push(id);
+        this.db.prepare(`UPDATE prds SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
+        return this.getPrd(id);
+    }
+
+    deletePrd(id) {
+        this.db.prepare('DELETE FROM prds WHERE id = ?').run(id);
+    }
+
+    // ── Pipeline (sessions + issues grouped by sprint) ───────────
+
+    getAllPipelineSessions() {
+        const rows = this.db.prepare(
+            `SELECT s.id, s.task, s.status, s.model, s.sprint_id, s.stage,
+                    s.design_session_id, s.dev_session_id, s.qa_session_id, s.prd_url,
+                    s.type, s.labels,
+                    s.created_at, s.updated_at, s.cost_usd, s.owner_id,
+                    u.display_name as owner_name, u.email as owner_email
+             FROM sessions s
+             LEFT JOIN users u ON s.owner_id = u.id
+             ORDER BY s.updated_at DESC`
+        ).all();
+        return rows.map(r => ({ ...r, labels: r.labels ? JSON.parse(r.labels) : [] }));
+    }
+
+    // Pipeline counts per sprint (sprintId NULL → Unassigned bucket).
+    getPipelineCounts() {
+        const issueCounts = this.db.prepare(
+            `SELECT sprint_id, COUNT(*) as n FROM issues GROUP BY sprint_id`
+        ).all();
+        const sessionCounts = this.db.prepare(
+            `SELECT sprint_id, COUNT(*) as n FROM sessions GROUP BY sprint_id`
+        ).all();
+        const map = new Map();
+        const key = (sid) => sid || '__nosprint__';
+        for (const r of issueCounts) {
+            const k = key(r.sprint_id);
+            if (!map.has(k)) map.set(k, { sprintId: r.sprint_id || null, issues: 0, sessions: 0 });
+            map.get(k).issues = r.n;
+        }
+        for (const r of sessionCounts) {
+            const k = key(r.sprint_id);
+            if (!map.has(k)) map.set(k, { sprintId: r.sprint_id || null, issues: 0, sessions: 0 });
+            map.get(k).sessions = r.n;
+        }
+        return Array.from(map.values());
+    }
+
+    // Paginated items for a single sprint bucket — newest first, union of issues + sessions.
+    getPipelineGroupItems(sprintId, limit = 30, offset = 0) {
+        const isNull = !sprintId;
+        const issueRows = isNull
+            ? this.db.prepare(
+                `SELECT i.*, u.display_name as creator_name, a.display_name as assignee_name
+                 FROM issues i
+                 LEFT JOIN users u ON i.created_by = u.id
+                 LEFT JOIN users a ON i.assigned_to = a.id
+                 WHERE i.sprint_id IS NULL`
+              ).all()
+            : this.db.prepare(
+                `SELECT i.*, u.display_name as creator_name, a.display_name as assignee_name
+                 FROM issues i
+                 LEFT JOIN users u ON i.created_by = u.id
+                 LEFT JOIN users a ON i.assigned_to = a.id
+                 WHERE i.sprint_id = ?`
+              ).all(sprintId);
+
+        const sessionRows = isNull
+            ? this.db.prepare(
+                `SELECT s.id, s.task, s.status, s.model, s.sprint_id, s.stage,
+                        s.design_session_id, s.dev_session_id, s.qa_session_id, s.prd_url,
+                        s.type, s.labels, s.updated_at, s.created_at,
+                        u.display_name as owner_name, u.email as owner_email
+                 FROM sessions s
+                 LEFT JOIN users u ON s.owner_id = u.id
+                 WHERE s.sprint_id IS NULL`
+              ).all()
+            : this.db.prepare(
+                `SELECT s.id, s.task, s.status, s.model, s.sprint_id, s.stage,
+                        s.design_session_id, s.dev_session_id, s.qa_session_id, s.prd_url,
+                        s.type, s.labels, s.updated_at, s.created_at,
+                        u.display_name as owner_name, u.email as owner_email
+                 FROM sessions s
+                 LEFT JOIN users u ON s.owner_id = u.id
+                 WHERE s.sprint_id = ?`
+              ).all(sprintId);
+
+        const parseLabels = (v) => {
+            if (Array.isArray(v)) return v;
+            if (typeof v === 'string') { try { const p = JSON.parse(v); return Array.isArray(p) ? p : []; } catch (_) { return []; } }
+            return [];
+        };
+        const issues = issueRows.map(iss => ({
+            kind: 'issue',
+            id: iss.id,
+            title: iss.title,
+            description: iss.description,
+            type: iss.type || 'task',
+            labels: parseLabels(iss.labels),
+            category: iss.category || 'issue',
+            stage: iss.stage || 'idea',
+            status: iss.status,
+            priority: iss.priority,
+            session_id: iss.session_id,
+            design_session_id: iss.design_session_id,
+            qa_session_id: iss.qa_session_id,
+            prd_url: iss.prd_url,
+            sprint_id: iss.sprint_id,
+            creator_name: iss.creator_name,
+            assignee_name: iss.assignee_name,
+            updated_at: iss.updated_at,
+        }));
+        const sessions = sessionRows.map(s => ({
+            kind: 'session',
+            id: s.id,
+            title: s.task || 'Untitled session',
+            type: s.type || 'task',
+            labels: parseLabels(s.labels),
+            stage: s.stage || 'idea',
+            status: s.status,
+            session_id: s.id,
+            design_session_id: s.design_session_id,
+            dev_session_id: s.dev_session_id,
+            qa_session_id: s.qa_session_id,
+            prd_url: s.prd_url,
+            sprint_id: s.sprint_id,
+            owner_name: s.owner_name,
+            model: s.model,
+            updated_at: s.updated_at,
+        }));
+
+        const all = [...issues, ...sessions].sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')));
+        const total = all.length;
+        return { items: all.slice(offset, offset + limit), total };
+    }
+
+    // ── Session share links ─────────────────────────────────────
+    createShareLink({ sessionId, token, createdBy, permission = 'write', expiresAt = null }) {
+        const id = 'shl_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+        this.db.prepare(
+            `INSERT INTO session_share_links (id, session_id, token, permission, created_by, expires_at)
+             VALUES (?, ?, ?, ?, ?, ?)`
+        ).run(id, sessionId, token, permission, createdBy, expiresAt);
+        return this.getShareLinkById(id);
+    }
+
+    getShareLinkById(id) {
+        return this.db.prepare(`SELECT * FROM session_share_links WHERE id = ?`).get(id);
+    }
+
+    getShareLinkByToken(token) {
+        return this.db.prepare(`SELECT * FROM session_share_links WHERE token = ?`).get(token);
+    }
+
+    listShareLinks(sessionId) {
+        return this.db.prepare(
+            `SELECT sl.*, u.display_name as creator_name, u.email as creator_email
+             FROM session_share_links sl
+             LEFT JOIN users u ON sl.created_by = u.id
+             WHERE sl.session_id = ?
+             ORDER BY sl.created_at DESC`
+        ).all(sessionId);
+    }
+
+    revokeShareLink(id) {
+        this.db.prepare(`UPDATE session_share_links SET revoked_at = CURRENT_TIMESTAMP WHERE id = ?`).run(id);
+    }
+
+    incrementShareLinkUse(id) {
+        this.db.prepare(`UPDATE session_share_links SET used_count = used_count + 1 WHERE id = ?`).run(id);
     }
 
     getSessionStore() { return this.db; }

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -9,7 +9,7 @@ const API_BASE = window.location.pathname.startsWith('/sessions') ? '/sessions' 
 // Dedup: reject duplicate in-flight POST/PUT/DELETE requests to the same URL
 const inflightMutations = new Map();
 
-async function apiFetch(url, opts = {}) {
+export async function apiFetch(url, opts = {}) {
   const method = (opts.method || 'GET').toUpperCase();
   const fullUrl = API_BASE + url;
 
@@ -93,13 +93,71 @@ export function useStats() {
   return { stats: data, loading, error, refresh };
 }
 
+// Pagination: `page` is the max page currently loaded. Lower pages stay in state
+// so the list accumulates instead of being replaced on "Load more".
 export function useSessions(page = 1) {
-  const { data, loading, error, refresh } = useGet(`/api/sessions?page=${page}`, [page]);
+  const [pagesData, setPagesData] = useState({}); // { [pageNum]: sessions[] }
+  const [meta, setMeta] = useState({ total: 0, totalPages: 1, showAllSessions: false });
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const pagesRef = useRef(pagesData);
+  pagesRef.current = pagesData;
+
+  const fetchPage = useCallback(async (p) => {
+    const data = await apiFetch(`/api/sessions?page=${p}`);
+    setPagesData((prev) => ({ ...prev, [p]: data?.sessions ?? [] }));
+    setMeta({
+      total: data?.total ?? 0,
+      totalPages: data?.totalPages ?? 1,
+      showAllSessions: data?.showAllSessions ?? false,
+    });
+    return data;
+  }, []);
+
+  // When the requested max page grows, fetch only the newly requested page.
+  // Lower pages are already cached and stay on screen.
+  useEffect(() => {
+    if (pagesRef.current[page]) return; // already loaded
+    setLoading(true);
+    fetchPage(page)
+      .catch(setError)
+      .finally(() => setLoading(false));
+  }, [page, fetchPage]);
+
+  // refresh() re-fetches all currently-loaded pages so polling updates status
+  // without losing the user's scroll depth.
+  const refresh = useCallback(async () => {
+    const loaded = Object.keys(pagesRef.current).map(Number);
+    const pages = loaded.length > 0 ? loaded : [1];
+    try {
+      await Promise.all(pages.map((p) => fetchPage(p)));
+      setError(null);
+    } catch (e) {
+      setError(e);
+    }
+  }, [fetchPage]);
+
+  // Accumulated list: concat pages in order, dedupe by id (keep earliest occurrence).
+  const sessions = useMemo(() => {
+    const seen = new Set();
+    const out = [];
+    const pages = Object.keys(pagesData).map(Number).sort((a, b) => a - b);
+    for (const p of pages) {
+      for (const s of pagesData[p] || []) {
+        if (!seen.has(s.id)) {
+          seen.add(s.id);
+          out.push(s);
+        }
+      }
+    }
+    return out;
+  }, [pagesData]);
+
   return {
-    sessions: data?.sessions ?? [],
-    total: data?.total ?? 0,
-    totalPages: data?.totalPages ?? 1,
-    showAllSessions: data?.showAllSessions ?? false,
+    sessions,
+    total: meta.total,
+    totalPages: meta.totalPages,
+    showAllSessions: meta.showAllSessions,
     loading,
     error,
     refresh,
@@ -213,11 +271,11 @@ export function useAccessRequests() {
 // Standalone API helpers (not hooks)
 // ---------------------------------------------------------------------------
 
-export async function startSession(text, model, imageTokens = [], sprintId = null) {
+export async function startSession(text, model, imageTokens = [], sprintId = null, type = null, labels = []) {
   return apiFetch('/api/sessions/start', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text, model, imageTokens, sprintId }),
+    body: JSON.stringify({ text, model, imageTokens, sprintId, type, labels }),
   });
 }
 
@@ -231,6 +289,22 @@ export async function sendMessage(sessionId, text, imageTokens = []) {
 
 export async function stopSession(sessionId) {
   return apiFetch(`/api/sessions/${sessionId}/stop`, { method: 'POST' });
+}
+
+export async function createShareLink(sessionId) {
+  return apiFetch(`/api/sessions/${sessionId}/share-links`, { method: 'POST' });
+}
+
+export async function listShareLinks(sessionId) {
+  return apiFetch(`/api/sessions/${sessionId}/share-links`);
+}
+
+export async function revokeShareLink(sessionId, linkId) {
+  return apiFetch(`/api/sessions/${sessionId}/share-links/${linkId}`, { method: 'DELETE' });
+}
+
+export async function redeemShareLink(token) {
+  return apiFetch(`/api/share/${encodeURIComponent(token)}/redeem`, { method: 'POST' });
 }
 
 export async function toggleBookmark(sessionId) {
@@ -305,6 +379,18 @@ export async function saveClaudePrompt(prompt) {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ prompt }),
+  });
+}
+
+export async function getLearnings() {
+  return apiFetch('/api/admin/learnings');
+}
+
+export async function saveLearnings(content) {
+  return apiFetch('/api/admin/learnings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content }),
   });
 }
 
@@ -403,7 +489,22 @@ export function useIssues() {
     refresh();
   }, [refresh]);
 
-  return { issues: data ?? [], loading, error, refresh, createIssue, updateIssue, deleteIssue };
+  const getStagePrompt = useCallback(async (id, toStage) => {
+    const q = toStage ? `?toStage=${encodeURIComponent(toStage)}` : '';
+    return apiFetch(`/api/issues/${id}/stage-prompt${q}`);
+  }, []);
+
+  const advanceStage = useCallback(async (id, { toStage, customPrompt, model } = {}) => {
+    const result = await apiFetch(`/api/issues/${id}/advance-stage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ toStage, customPrompt, model }),
+    });
+    refresh();
+    return result;
+  }, [refresh]);
+
+  return { issues: data ?? [], loading, error, refresh, createIssue, updateIssue, deleteIssue, getStagePrompt, advanceStage };
 }
 
 export function useAutonomous() {
@@ -427,5 +528,15 @@ export function useAutonomous() {
     return result;
   }, [refresh]);
 
-  return { status: data, loading, error, refresh, start, stop };
+  const toggleSelfDecisions = useCallback(async (enabled) => {
+    await apiFetch('/api/autonomous/self-decisions', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+    });
+    refresh();
+  }, [refresh]);
+
+  return { status: data, loading, error, refresh, start, stop, toggleSelfDecisions };
 }
+

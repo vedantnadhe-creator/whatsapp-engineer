@@ -113,6 +113,27 @@ export function PromptsPanel({ prompt = '', onSave, loading }) {
   )
 }
 
+export function LearningsPanel({ content = '', onSave, loading }) {
+  const [value, setValue] = useState(content)
+  useEffect(() => { setValue(content) }, [content])
+  const lineCount = (value || '').split('\n').length
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <p className="text-xs text-text-muted">{lineCount} lines — auto-updated after each session</p>
+        <span className="text-[10px] text-accent bg-accent/10 px-2 py-0.5 rounded-full">Self-Learning</span>
+      </div>
+      <textarea value={value} onChange={e => setValue(e.target.value)} className="w-full min-h-[400px] bg-surface-2 border border-border rounded-lg px-4 py-3 text-sm font-mono text-text-primary placeholder-text-muted outline-none focus:border-accent resize-y" placeholder="LEARNINGS.md content..." />
+      <div className="flex items-center justify-between">
+        <p className="text-xs text-text-muted">Edit to curate learnings. Remove stale entries. New sessions read this file.</p>
+        <button onClick={() => onSave(value)} disabled={loading} className="bg-accent hover:bg-accent-hover disabled:opacity-50 text-white text-sm font-medium rounded-lg px-4 py-2 flex items-center gap-2 transition-colors cursor-pointer">
+          <Save size={14} /> {loading ? 'Saving...' : 'Save'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
 export function CronPanel({ jobs = [], onSave, onDelete }) {
   const [id, setId] = useState('')
   const [schedule, setSchedule] = useState('')

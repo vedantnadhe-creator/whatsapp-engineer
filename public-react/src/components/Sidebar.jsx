@@ -17,6 +17,13 @@ import {
   Sun,
   Moon,
   CircleDot,
+  BookOpen,
+  GitBranch,
+  MoreHorizontal,
+  Share2,
+  Copy,
+  Check,
+  Cpu,
 } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
 
@@ -51,12 +58,109 @@ function formatTokens(n) {
   return String(n);
 }
 
-function SessionItem({ session, isActive, onSelect, billingMode = 'api', onToggleBookmark }) {
-  const ownerLabel = session.owner_name || session.owner_email || null;
+function SessionMenu({ session, onClose, onShare, onFork, onToggleBookmark }) {
+  const ref = useRef(null);
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    function handleClick(e) {
+      if (ref.current && !ref.current.contains(e.target)) onClose();
+    }
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [onClose]);
+
+  const copyId = (e) => {
+    e.stopPropagation();
+    navigator.clipboard?.writeText(session.id);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1200);
+  };
+
+  const itemStyle = {
+    color: 'var(--c-text)',
+  };
+
   return (
-    <button
+    <div
+      ref={ref}
+      onClick={(e) => e.stopPropagation()}
+      className="absolute right-2 top-8 z-20 w-52 rounded border py-1 shadow-lg"
+      style={{ backgroundColor: 'var(--c-surface)', borderColor: 'var(--c-border)' }}
+    >
+      {/* Model info — read-only */}
+      <div
+        className="flex items-center gap-2 px-3 py-1.5 text-xs"
+        style={{ color: 'var(--c-text-secondary)', borderBottom: '1px solid var(--c-border)' }}
+      >
+        <Cpu size={12} />
+        <span className="font-mono truncate" title={session.model}>
+          {session.model || 'unknown'}
+        </span>
+      </div>
+
+      <button
+        onClick={(e) => { e.stopPropagation(); onShare?.(session); onClose(); }}
+        className="flex w-full items-center gap-2 px-3 py-1.5 text-sm cursor-pointer"
+        style={itemStyle}
+        onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'var(--c-surface-2)')}
+        onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+      >
+        <Share2 size={14} style={{ color: 'var(--c-text-secondary)' }} />
+        Share
+      </button>
+
+      <button
+        onClick={(e) => { e.stopPropagation(); onFork?.(session); onClose(); }}
+        className="flex w-full items-center gap-2 px-3 py-1.5 text-sm cursor-pointer"
+        style={itemStyle}
+        onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'var(--c-surface-2)')}
+        onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+      >
+        <GitBranch size={14} style={{ color: 'var(--c-text-secondary)' }} />
+        Fork session
+      </button>
+
+      <button
+        onClick={(e) => { e.stopPropagation(); onToggleBookmark?.(session.id); onClose(); }}
+        className="flex w-full items-center gap-2 px-3 py-1.5 text-sm cursor-pointer"
+        style={itemStyle}
+        onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'var(--c-surface-2)')}
+        onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+      >
+        <Star
+          size={14}
+          style={{ color: session.bookmarked ? 'var(--c-accent)' : 'var(--c-text-secondary)' }}
+          fill={session.bookmarked ? 'var(--c-accent)' : 'none'}
+        />
+        {session.bookmarked ? 'Remove bookmark' : 'Bookmark'}
+      </button>
+
+      <button
+        onClick={copyId}
+        className="flex w-full items-center gap-2 px-3 py-1.5 text-sm cursor-pointer"
+        style={itemStyle}
+        onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'var(--c-surface-2)')}
+        onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+      >
+        {copied
+          ? <Check size={14} style={{ color: 'var(--c-status-running)' }} />
+          : <Copy size={14} style={{ color: 'var(--c-text-secondary)' }} />
+        }
+        {copied ? 'Copied' : 'Copy session ID'}
+      </button>
+    </div>
+  );
+}
+
+function SessionItem({ session, isActive, onSelect, billingMode = 'api', onToggleBookmark, onShareSession, onForkSession }) {
+  const ownerLabel = session.owner_name || session.owner_email || null;
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  return (
+    <div
       onClick={() => onSelect(session)}
-      className="w-full text-left px-3 py-2.5 transition-colors duration-150 cursor-pointer group"
+      className="relative w-full text-left px-3 py-2.5 transition-colors duration-150 cursor-pointer group"
       style={{
         backgroundColor: isActive ? 'var(--c-surface-2)' : 'transparent',
         borderLeft: isActive ? '2px solid var(--c-accent)' : '2px solid transparent',
@@ -71,7 +175,7 @@ function SessionItem({ session, isActive, onSelect, billingMode = 'api', onToggl
       <div className="flex items-start gap-2">
         <StatusDot status={session.status} />
         <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-medium" style={{ color: 'var(--c-text)' }}>
+          <div className="truncate text-sm font-medium pr-12" style={{ color: 'var(--c-text)' }}>
             {session.task || 'Untitled'}
           </div>
           <div className="mt-0.5 flex items-center gap-2">
@@ -115,16 +219,39 @@ function SessionItem({ session, isActive, onSelect, billingMode = 'api', onToggl
             )}
           </div>
         </div>
-        {/* Bookmark star */}
-        <span
-          onClick={(e) => { e.stopPropagation(); onToggleBookmark?.(session.id); }}
-          className={`flex-shrink-0 mt-0.5 cursor-pointer transition-opacity ${session.bookmarked ? 'opacity-100' : 'opacity-0 group-hover:opacity-50'}`}
-          title={session.bookmarked ? 'Remove bookmark' : 'Bookmark'}
-        >
-          <Star size={13} style={{ color: 'var(--c-accent)' }} fill={session.bookmarked ? 'var(--c-accent)' : 'none'} />
-        </span>
       </div>
-    </button>
+
+      {/* Top-right icons: bookmark star + 3-dots menu */}
+      <div className="absolute right-2 top-2 flex items-center gap-1">
+        {session.bookmarked && (
+          <span
+            onClick={(e) => { e.stopPropagation(); onToggleBookmark?.(session.id); }}
+            className="cursor-pointer"
+            title="Remove bookmark"
+          >
+            <Star size={13} style={{ color: 'var(--c-accent)' }} fill="var(--c-accent)" />
+          </span>
+        )}
+        <button
+          onClick={(e) => { e.stopPropagation(); setMenuOpen((v) => !v); }}
+          className="p-1 rounded cursor-pointer opacity-60 hover:opacity-100 transition-opacity"
+          style={{ color: 'var(--c-text-secondary)' }}
+          title="More options"
+        >
+          <MoreHorizontal size={14} />
+        </button>
+      </div>
+
+      {menuOpen && (
+        <SessionMenu
+          session={session}
+          onClose={() => setMenuOpen(false)}
+          onShare={onShareSession}
+          onFork={onForkSession}
+          onToggleBookmark={onToggleBookmark}
+        />
+      )}
+    </div>
   );
 }
 
@@ -143,6 +270,7 @@ function AdminDropdown({ onShowAdmin, onClose, pendingRequestsCount = 0 }) {
     { key: 'users', label: 'Users', icon: Users },
     { key: 'phones', label: 'Phones', icon: Phone },
     { key: 'prompts', label: 'Prompts', icon: FileText },
+    { key: 'learnings', label: 'Learnings', icon: BookOpen },
     { key: 'cron', label: 'Cron', icon: Clock },
     { key: 'requests', label: 'Requests', icon: MessageSquare, badge: pendingRequestsCount },
     { key: 'settings', label: 'Settings', icon: Settings },
@@ -199,6 +327,8 @@ function SidebarContent({
   issueCount = 0,
   showAllSessions = false,
   onToggleBookmark,
+  onShareSession,
+  onForkSession,
 }) {
   const [adminOpen, setAdminOpen] = useState(false);
   const [sessionFilter, setSessionFilter] = useState('all'); // 'all', 'mine', or 'saved'
@@ -298,6 +428,17 @@ function SidebarContent({
             </span>
           )}
         </button>
+        <button
+          onClick={() => onViewChange?.('pipeline')}
+          className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded text-xs font-medium cursor-pointer transition-colors"
+          style={{
+            backgroundColor: view === 'pipeline' ? 'var(--c-surface-2)' : 'transparent',
+            color: view === 'pipeline' ? 'var(--c-text)' : 'var(--c-text-secondary)',
+          }}
+        >
+          <GitBranch size={12} />
+          Pipeline
+        </button>
       </div>
 
       {/* Session filter: All / Mine — only shown when all sessions are visible */}
@@ -338,6 +479,8 @@ function SidebarContent({
                 onSelect={onSelectSession}
                 billingMode={stats?.billingMode || 'api'}
                 onToggleBookmark={onToggleBookmark}
+                onShareSession={onShareSession}
+                onForkSession={onForkSession}
               />
             ))}
             {hasMore && (

@@ -12,6 +12,7 @@ import {
   MoreHorizontal,
   Trash2,
   ArrowLeft,
+  ArrowRight,
   Zap,
   Tag,
   X,
@@ -26,6 +27,13 @@ import {
   FileText,
   Loader2,
   ExternalLink,
+  ToggleLeft,
+  ToggleRight,
+  Sparkles,
+  Code2,
+  FlaskConical,
+  Rocket,
+  CheckCheck,
 } from 'lucide-react';
 
 // SQLite CURRENT_TIMESTAMP returns 'YYYY-MM-DD HH:MM:SS' without timezone.
@@ -69,6 +77,20 @@ const TYPE_CONFIG = {
 
 const STATUS_ORDER = ['todo', 'in_progress', 'completed', 'question'];
 
+const STAGE_CONFIG = {
+  idea:        { label: 'Idea',        icon: Lightbulb,    color: '#eab308', blurb: 'Captured — waiting for design.' },
+  design:      { label: 'Design',      icon: Sparkles,     color: '#8b5cf6', blurb: 'Agent drafts a PRD.' },
+  development: { label: 'Development', icon: Code2,        color: '#3b82f6', blurb: 'Agent implements per PRD.' },
+  qa:          { label: 'QA',          icon: FlaskConical, color: '#f97316', blurb: 'Agent tests end-to-end.' },
+  done:        { label: 'Done',        icon: CheckCheck,   color: '#22c55e', blurb: 'Shipped / closed.' },
+};
+const STAGE_ORDER = ['idea', 'design', 'development', 'qa', 'done'];
+
+function stageIndex(stage) {
+  const i = STAGE_ORDER.indexOf(stage || 'idea');
+  return i < 0 ? 0 : i;
+}
+
 function StatusIcon({ status, size = 14 }) {
   const config = STATUS_CONFIG[status] || STATUS_CONFIG.todo;
   const Icon = config.icon;
@@ -94,6 +116,21 @@ function TypeBadge({ type }) {
       className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded font-medium flex-shrink-0"
       style={{ backgroundColor: `${config.color}15`, color: config.color }}
       title={config.label}
+    >
+      <Icon size={10} />
+      {config.label}
+    </span>
+  );
+}
+
+function StageBadge({ stage }) {
+  const config = STAGE_CONFIG[stage] || STAGE_CONFIG.idea;
+  const Icon = config.icon;
+  return (
+    <span
+      className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded font-medium flex-shrink-0"
+      style={{ backgroundColor: `${config.color}18`, color: config.color }}
+      title={`Stage: ${config.label}`}
     >
       <Icon size={10} />
       {config.label}
@@ -165,6 +202,7 @@ function IssueRow({ issue, onSelect, onStatusChange, onGoToSession, selected, on
       </span>
 
       <TypeBadge type={issue.type || 'task'} />
+      <StageBadge stage={issue.stage || 'idea'} />
 
       <span
         className="text-sm flex-1 min-w-0 truncate"
@@ -537,16 +575,164 @@ function renderDescription(text) {
   });
 }
 
-function IssueDetail({ issue, onBack, onUpdate, onDelete, onGoToSession, isTester = false, members = [], sprints = [] }) {
+function StagePipeline({ current, onSelect }) {
+  return (
+    <div className="flex items-center gap-1 flex-wrap">
+      {STAGE_ORDER.map((s, i) => {
+        const cfg = STAGE_CONFIG[s];
+        const Icon = cfg.icon;
+        const curIdx = stageIndex(current);
+        const isCurrent = i === curIdx;
+        const isPast = i < curIdx;
+        const isFuture = i > curIdx;
+        return (
+          <div key={s} className="flex items-center gap-1">
+            <button
+              onClick={() => onSelect?.(s)}
+              disabled={!onSelect}
+              className="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-md transition-colors"
+              style={{
+                backgroundColor: isCurrent ? `${cfg.color}22` : isPast ? `${cfg.color}10` : 'transparent',
+                color: isCurrent ? cfg.color : isPast ? cfg.color : colors.textSecondary,
+                border: `1px solid ${isCurrent ? cfg.color : isPast ? `${cfg.color}40` : colors.border}`,
+                cursor: onSelect ? 'pointer' : 'default',
+                opacity: isFuture ? 0.6 : 1,
+              }}
+              title={cfg.blurb}
+            >
+              <Icon size={12} />
+              <span className="font-medium">{cfg.label}</span>
+            </button>
+            {i < STAGE_ORDER.length - 1 && (
+              <ArrowRight size={10} style={{ color: colors.textSecondary, opacity: 0.6 }} />
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function AdvanceStageModal({ issue, toStage, onFetchPrompt, onConfirm, onClose }) {
+  const [prompt, setPrompt] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    onFetchPrompt(issue.id, toStage).then((res) => {
+      if (cancelled) return;
+      setPrompt(res?.prompt || '');
+      setLoading(false);
+    }).catch(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [issue.id, toStage, onFetchPrompt]);
+
+  const cfg = STAGE_CONFIG[toStage];
+  const Icon = cfg?.icon || Sparkles;
+  const isDone = toStage === 'done';
+
+  const handleConfirm = async () => {
+    setSubmitting(true);
+    try {
+      await onConfirm({ toStage, customPrompt: isDone ? null : prompt });
+      onClose();
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ backgroundColor: 'rgba(0,0,0,0.6)' }} onClick={onClose}>
+      <div
+        className="w-full max-w-2xl rounded-xl overflow-hidden flex flex-col"
+        style={{ backgroundColor: colors.surface, border: `1px solid ${colors.border}`, maxHeight: '85vh' }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center gap-3 px-5 py-3 flex-shrink-0" style={{ borderBottom: `1px solid ${colors.border}`, backgroundColor: `${cfg?.color || colors.accent}10` }}>
+          <div className="flex items-center justify-center w-8 h-8 rounded-lg" style={{ backgroundColor: `${cfg?.color || colors.accent}20`, color: cfg?.color || colors.accent }}>
+            <Icon size={16} />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="text-sm font-semibold" style={{ color: colors.text }}>
+              Advance to {cfg?.label || toStage}
+            </div>
+            <div className="text-xs truncate" style={{ color: colors.textSecondary }}>
+              {issue.id} · {issue.title}
+            </div>
+          </div>
+          <button onClick={onClose} className="p-1 rounded cursor-pointer hover:opacity-80">
+            <X size={16} style={{ color: colors.textSecondary }} />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-5">
+          {isDone ? (
+            <div className="text-sm" style={{ color: colors.text }}>
+              <p className="mb-3">Mark this issue as <strong>Done</strong>?</p>
+              <p className="text-xs" style={{ color: colors.textSecondary }}>
+                QA stage complete — no further agent will run. The issue moves to completed status.
+              </p>
+            </div>
+          ) : loading ? (
+            <div className="flex items-center gap-2 text-xs" style={{ color: colors.textSecondary }}>
+              <Loader2 size={14} className="animate-spin" />
+              Loading prompt…
+            </div>
+          ) : (
+            <>
+              <div className="text-xs mb-2" style={{ color: colors.textSecondary }}>
+                A new Claude session will run with this prompt. Edit it below if you want to customise the instructions.
+              </div>
+              <textarea
+                value={prompt}
+                onChange={(e) => setPrompt(e.target.value)}
+                rows={16}
+                className="w-full text-xs font-mono bg-transparent outline-none resize-none rounded-lg p-3"
+                style={{ color: colors.text, border: `1px solid ${colors.border}`, backgroundColor: colors.surface2 }}
+                placeholder="Prompt for this stage…"
+              />
+            </>
+          )}
+        </div>
+
+        <div className="flex items-center justify-end gap-2 px-5 py-3 flex-shrink-0" style={{ borderTop: `1px solid ${colors.border}` }}>
+          <button onClick={onClose} className="text-xs px-3 py-1.5 rounded-md cursor-pointer" style={{ color: colors.textSecondary }}>
+            Cancel
+          </button>
+          <button
+            onClick={handleConfirm}
+            disabled={submitting || (!isDone && (loading || !prompt.trim()))}
+            className="text-xs px-3 py-1.5 rounded-md font-medium text-white cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5"
+            style={{ backgroundColor: cfg?.color || colors.accent }}
+          >
+            {submitting ? <Loader2 size={12} className="animate-spin" /> : isDone ? <CheckCheck size={12} /> : <Rocket size={12} />}
+            {submitting ? 'Starting…' : isDone ? 'Mark Done' : `Start ${cfg?.label || toStage} session`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function IssueDetail({ issue, onBack, onUpdate, onDelete, onGoToSession, isTester = false, members = [], sprints = [], onGetStagePrompt, onAdvanceStage }) {
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(issue.title);
   const [description, setDescription] = useState(issue.description || '');
   const [priority, setPriority] = useState(issue.priority);
+  const [advanceTarget, setAdvanceTarget] = useState(null);
 
   const handleSave = () => {
     onUpdate(issue.id, { title, description, priority });
     setEditing(false);
   };
+
+  const currentStage = issue.stage || 'idea';
+  const curIdx = stageIndex(currentStage);
+  const nextStage = curIdx < STAGE_ORDER.length - 1 ? STAGE_ORDER[curIdx + 1] : null;
+  const nextCfg = nextStage ? STAGE_CONFIG[nextStage] : null;
+  const NextIcon = nextCfg?.icon || Rocket;
 
   return (
     <div className="flex flex-col h-full">
@@ -583,7 +769,85 @@ function IssueDetail({ issue, onBack, onUpdate, onDelete, onGoToSession, isTeste
           </div>
         )}
 
-        <div className="mt-8 space-y-3">
+        {/* Lifecycle pipeline */}
+        {!isTester && (
+          <div className="mt-8 p-4 rounded-xl" style={{ backgroundColor: colors.surface2, border: `1px solid ${colors.border}` }}>
+            <div className="flex items-center justify-between mb-3 gap-3 flex-wrap">
+              <div>
+                <div className="text-xs font-semibold mb-0.5" style={{ color: colors.text }}>Lifecycle</div>
+                <div className="text-[11px]" style={{ color: colors.textSecondary }}>
+                  {STAGE_CONFIG[currentStage]?.blurb}
+                </div>
+              </div>
+              {nextStage && onAdvanceStage && (
+                <button
+                  onClick={() => setAdvanceTarget(nextStage)}
+                  className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md font-medium text-white cursor-pointer"
+                  style={{ backgroundColor: nextCfg.color }}
+                >
+                  <NextIcon size={12} />
+                  Advance to {nextCfg.label}
+                </button>
+              )}
+              {!nextStage && (
+                <span className="text-xs px-3 py-1.5 rounded-md" style={{ backgroundColor: `${STAGE_CONFIG.done.color}20`, color: STAGE_CONFIG.done.color }}>
+                  Complete
+                </span>
+              )}
+            </div>
+            <StagePipeline
+              current={currentStage}
+              onSelect={onAdvanceStage ? (s) => {
+                // Only allow going forward via this picker; going back is manual via select below
+                if (stageIndex(s) > stageIndex(currentStage)) setAdvanceTarget(s);
+              } : null}
+            />
+
+            {/* Stage session links */}
+            {(issue.design_session_id || issue.session_id || issue.qa_session_id || issue.prd_url) && (
+              <div className="mt-3 flex flex-wrap items-center gap-2 pt-3" style={{ borderTop: `1px solid ${colors.border}` }}>
+                {issue.design_session_id && (
+                  <button onClick={() => onGoToSession?.(issue.design_session_id)} className="text-[10px] font-mono px-2 py-1 rounded cursor-pointer hover:opacity-80 flex items-center gap-1" style={{ backgroundColor: `${STAGE_CONFIG.design.color}15`, color: STAGE_CONFIG.design.color }}>
+                    <Sparkles size={10} /> design: {issue.design_session_id}
+                  </button>
+                )}
+                {issue.prd_url && (
+                  <a href={issue.prd_url} target="_blank" rel="noopener noreferrer" className="text-[10px] font-mono px-2 py-1 rounded hover:opacity-80 flex items-center gap-1" style={{ backgroundColor: `${STAGE_CONFIG.design.color}15`, color: STAGE_CONFIG.design.color }}>
+                    <FileText size={10} /> PRD
+                  </a>
+                )}
+                {issue.session_id && (
+                  <button onClick={() => onGoToSession?.(issue.session_id)} className="text-[10px] font-mono px-2 py-1 rounded cursor-pointer hover:opacity-80 flex items-center gap-1" style={{ backgroundColor: `${STAGE_CONFIG.development.color}15`, color: STAGE_CONFIG.development.color }}>
+                    <Code2 size={10} /> dev: {issue.session_id}
+                  </button>
+                )}
+                {issue.qa_session_id && (
+                  <button onClick={() => onGoToSession?.(issue.qa_session_id)} className="text-[10px] font-mono px-2 py-1 rounded cursor-pointer hover:opacity-80 flex items-center gap-1" style={{ backgroundColor: `${STAGE_CONFIG.qa.color}15`, color: STAGE_CONFIG.qa.color }}>
+                    <FlaskConical size={10} /> qa: {issue.qa_session_id}
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className="mt-6 space-y-3">
+          {/* Stage manual override */}
+          {!isTester && (
+            <div className="flex items-center gap-4">
+              <span className="text-xs font-mono w-20" style={{ color: colors.textSecondary }}>Stage</span>
+              <select
+                value={currentStage}
+                onChange={(e) => onUpdate(issue.id, { stage: e.target.value })}
+                className="text-xs px-2 py-1 rounded outline-none cursor-pointer font-mono"
+                style={{ backgroundColor: `${STAGE_CONFIG[currentStage]?.color}15`, color: STAGE_CONFIG[currentStage]?.color, border: `1px solid ${STAGE_CONFIG[currentStage]?.color}40` }}
+                title="Manually move stage without running an agent"
+              >
+                {STAGE_ORDER.map(s => <option key={s} value={s}>{STAGE_CONFIG[s].label}</option>)}
+              </select>
+            </div>
+          )}
+
           {/* Status */}
           <div className="flex items-center gap-4">
             <span className="text-xs font-mono w-20" style={{ color: colors.textSecondary }}>Status</span>
@@ -668,6 +932,16 @@ function IssueDetail({ issue, onBack, onUpdate, onDelete, onGoToSession, isTeste
           )}
         </div>
       </div>
+
+      {advanceTarget && onGetStagePrompt && onAdvanceStage && (
+        <AdvanceStageModal
+          issue={issue}
+          toStage={advanceTarget}
+          onFetchPrompt={onGetStagePrompt}
+          onConfirm={(payload) => onAdvanceStage(issue.id, payload)}
+          onClose={() => setAdvanceTarget(null)}
+        />
+      )}
     </div>
   );
 }
@@ -795,6 +1069,7 @@ export default function IssuesBoard({
   autonomousStatus,
   onStartAutonomous,
   onStopAutonomous,
+  onToggleSelfDecisions,
   onGoToSession,
   onBack,
   sessions = [],
@@ -809,6 +1084,8 @@ export default function IssuesBoard({
   onRequestIssueSummary,
   onGetIssueLastResponse,
   onGenerateChangelog,
+  onGetStagePrompt,
+  onAdvanceStage,
 }) {
   const [showCreate, setShowCreate] = useState(false);
   const [selectedIssue, setSelectedIssue] = useState(null);
@@ -818,6 +1095,7 @@ export default function IssuesBoard({
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [activeSprint, setActiveSprint] = useState(null);
   const [showMyAssigned, setShowMyAssigned] = useState(false);
+  const [activeCategory, setActiveCategory] = useState('issue'); // 'issue' or 'chat'
   const [changelogData, setChangelogData] = useState(null); // { sprint, issues }
   const [changelogLoading, setChangelogLoading] = useState(false);
   const [changelogSelected, setChangelogSelected] = useState(new Set()); // issue IDs
@@ -852,16 +1130,22 @@ export default function IssuesBoard({
     if (selectedIssue?.id === id) setSelectedIssue({ ...selectedIssue, status });
   };
 
-  // Filter by sprint, then "assigned to me", then by status
+  // Filter by sprint, then category, then "assigned to me", then by status
   let sprintFiltered = activeSprint === null
     ? issues
     : activeSprint === 'backlog'
       ? issues.filter(i => !i.sprint_id)
       : issues.filter(i => i.sprint_id === activeSprint);
 
+  // Category filter — default category for old items without category field is 'issue'
+  sprintFiltered = sprintFiltered.filter(i => (i.category || 'issue') === activeCategory);
+
   if (showMyAssigned && userId) {
     sprintFiltered = sprintFiltered.filter(i => i.assigned_to === userId);
   }
+
+  const issueCount = (activeSprint === null ? issues : activeSprint === 'backlog' ? issues.filter(i => !i.sprint_id) : issues.filter(i => i.sprint_id === activeSprint)).filter(i => (i.category || 'issue') === 'issue').length;
+  const chatCount = (activeSprint === null ? issues : activeSprint === 'backlog' ? issues.filter(i => !i.sprint_id) : issues.filter(i => i.sprint_id === activeSprint)).filter(i => i.category === 'chat').length;
 
   const filteredIssues = filterStatus === 'all'
     ? sprintFiltered
@@ -886,6 +1170,8 @@ export default function IssuesBoard({
           isTester={isTester}
           members={members}
           sprints={sprints}
+          onGetStagePrompt={onGetStagePrompt}
+          onAdvanceStage={onAdvanceStage}
         />
       </div>
     );
@@ -900,7 +1186,7 @@ export default function IssuesBoard({
             <ArrowLeft size={16} style={{ color: colors.textSecondary }} />
           </button>
         )}
-        <h2 className="text-sm font-semibold" style={{ color: colors.text }}>Issues</h2>
+        <h2 className="text-sm font-semibold" style={{ color: colors.text }}>{activeCategory === 'chat' ? 'Chats' : 'Issues'}</h2>
         <span className="text-xs font-mono px-1.5 py-0.5 rounded" style={{ backgroundColor: colors.surface2, color: colors.textSecondary }}>
           {sprintFiltered.length}
         </span>
@@ -944,6 +1230,26 @@ export default function IssuesBoard({
             <Zap size={12} /><span className="hidden sm:inline">Run All</span><span className="sm:hidden">Run</span>
           </button>
         ))}
+
+        {/* Self Decisions toggle */}
+        {!isTester && (
+          <button
+            onClick={() => onToggleSelfDecisions?.(!autonomousStatus?.selfDecisions)}
+            className="flex items-center gap-1.5 text-[11px] px-2 py-1.5 rounded-md cursor-pointer flex-shrink-0 transition-colors"
+            style={{
+              backgroundColor: autonomousStatus?.selfDecisions ? 'rgba(34,197,94,0.12)' : colors.surface2,
+              color: autonomousStatus?.selfDecisions ? '#22c55e' : colors.textSecondary,
+              border: `1px solid ${autonomousStatus?.selfDecisions ? 'rgba(34,197,94,0.3)' : colors.border}`,
+            }}
+            title={autonomousStatus?.selfDecisions ? 'Auto-decisions ON — bot decides everything without asking' : 'Auto-decisions OFF — bot will ask user for clarification'}
+          >
+            {autonomousStatus?.selfDecisions
+              ? <ToggleRight size={14} />
+              : <ToggleLeft size={14} />
+            }
+            <span className="hidden sm:inline">Self Decisions</span>
+          </button>
+        )}
 
         {activeSprint && activeSprint !== 'backlog' && (
           <button
@@ -996,6 +1302,25 @@ export default function IssuesBoard({
           onDeleteSprint={onDeleteSprint}
         />
       )}
+
+      {/* Category tabs — Issues vs Chats */}
+      <div className="flex items-center gap-0 px-4 py-0 flex-shrink-0" style={{ borderBottom: `1px solid ${colors.border}` }}>
+        {[{ key: 'issue', label: 'Issues', count: issueCount }, { key: 'chat', label: 'Chats', count: chatCount }].map(tab => (
+          <button key={tab.key} onClick={() => setActiveCategory(tab.key)}
+            className="text-xs font-medium px-3 py-2 cursor-pointer transition-colors relative"
+            style={{
+              color: activeCategory === tab.key ? colors.accent : colors.textSecondary,
+              borderBottom: activeCategory === tab.key ? `2px solid ${colors.accent}` : '2px solid transparent',
+              marginBottom: '-1px',
+            }}>
+            {tab.label}
+            <span className="ml-1.5 font-mono text-[10px] px-1 py-0.5 rounded"
+              style={{ backgroundColor: activeCategory === tab.key ? `${colors.accent}20` : colors.surface2, color: activeCategory === tab.key ? colors.accent : colors.textSecondary }}>
+              {tab.count}
+            </span>
+          </button>
+        ))}
+      </div>
 
       {/* Filter tabs */}
       <div className="flex items-center gap-1 px-4 py-2 flex-shrink-0 overflow-x-auto" style={{ borderBottom: `1px solid ${colors.border}` }}>
@@ -1190,7 +1515,7 @@ export default function IssuesBoard({
                             collectedSummaries[issue.id] = resp.lastResponse || 'Summary timed out';
                           }
                         } catch (e) {
-                          collectedSummaries[issue.id] = i.session?.summary || 'Error getting summary';
+                          collectedSummaries[issue.id] = issue.description || 'Error getting summary';
                         }
                         setChangelogSummaries({ ...collectedSummaries });
                       }

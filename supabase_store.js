@@ -29,7 +29,7 @@ class SupabaseStore {
 
     // ── Sessions ──────────────────────────────────────────────
 
-    createSession(id, userPhone, task, claudeSessionId, workingDir, ownerId = null, model = 'opus') {
+    createSession(id, userPhone, task, claudeSessionId, workingDir, ownerId = null, model = 'claude-opus-4-7') {
         return this.supabase.from('sessions').upsert({
             id, user_phone: String(userPhone), owner_id: ownerId, task,
             claude_session_id: claudeSessionId, status: 'running',

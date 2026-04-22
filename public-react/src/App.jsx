@@ -1,27 +1,38 @@
 import { useState, useEffect, useCallback } from 'react'
+import { BrowserRouter, Routes, Route, useParams, useNavigate, useLocation } from 'react-router-dom'
 import { AuthProvider, useAuth } from './context/AuthContext'
-import { useSessions, useStats, useSessionMessages, useModels, usePhones, useUsers, useCron, useAccessRequests, useIssues, useAutonomous, useSprints, useTeamMembers, useAction, startSession, sendMessage, stopSession, forkSession, toggleBookmark, updateSessionSprint, getSprintChangelog, requestIssueSummary, getIssueLastResponse, generateSprintChangelog, uploadFile, transcribeAudio, requestAccess, getClaudePrompt, saveClaudePrompt, getAdminSettings, saveAdminSetting } from './hooks/useApi'
+import SharePage from './pages/SharePage'
+import { useSessions, useStats, useSessionMessages, useModels, usePhones, useUsers, useCron, useAccessRequests, useIssues, useAutonomous, useSprints, useTeamMembers, useAction, startSession, sendMessage, stopSession, forkSession, toggleBookmark, updateSessionSprint, getSprintChangelog, requestIssueSummary, getIssueLastResponse, generateSprintChangelog, uploadFile, transcribeAudio, requestAccess, getClaudePrompt, saveClaudePrompt, getLearnings, saveLearnings, getAdminSettings, saveAdminSetting, apiFetch } from './hooks/useApi'
 import useWebSocket from './hooks/useWebSocket'
 import Sidebar from './components/Sidebar'
 import Workspace from './components/Workspace'
 import IssuesBoard from './components/IssuesBoard'
+import Pipeline from './components/Pipeline'
 import Login from './pages/Login'
-import { AdminModal, UsersPanel, PhonesPanel, PromptsPanel, CronPanel, AccessRequestsPanel, SettingsPanel } from './components/AdminPanels'
+import ShareSessionModal from './components/ShareSessionModal'
+import { AdminModal, UsersPanel, PhonesPanel, PromptsPanel, LearningsPanel, CronPanel, AccessRequestsPanel, SettingsPanel } from './components/AdminPanels'
 import { ThemeProvider } from './context/ThemeContext'
 
 function Dashboard() {
   const { user, loading, logout } = useAuth()
+  const { id: urlSessionId } = useParams()
+  const navigate = useNavigate()
+  const location = useLocation()
 
   const [page, setPage] = useState(1)
-  const [activeSession, setActiveSession] = useState(null)
-  const [isNewSession, setIsNewSession] = useState(true)
+  const [activeSession, setActiveSession] = useState(urlSessionId ? { id: urlSessionId } : null)
+  const [isNewSession, setIsNewSession] = useState(!urlSessionId)
   const [adminPanel, setAdminPanel] = useState(null)
-  const [selectedModel, setSelectedModel] = useState('opus')
+  const [selectedModel, setSelectedModel] = useState('claude-opus-4-7')
   const [claudePrompt, setClaudePrompt] = useState('')
   const [promptLoading, setPromptLoading] = useState(false)
+  const [learningsContent, setLearningsContent] = useState('')
+  const [learningsLoading, setLearningsLoading] = useState(false)
   const [adminSettings, setAdminSettings] = useState({})
   const [view, setView] = useState('chat') // 'chat' or 'issues'
   const [notification, setNotification] = useState(null)
+  const [shareSessionId, setShareSessionId] = useState(null)
+  const [forkTriggerId, setForkTriggerId] = useState(null)
 
   const { stats, refresh: refreshStats } = useStats()
   const { sessions, total, totalPages, showAllSessions, refresh: refreshSessions } = useSessions(page)
@@ -31,8 +42,8 @@ function Dashboard() {
   const { users, refresh: refreshUsers, addUser, deleteUser, resetPassword } = useUsers()
   const { jobs, refresh: refreshCron, saveJob, deleteJob } = useCron()
   const { requests, refresh: refreshRequests, resolve } = useAccessRequests()
-  const { issues, refresh: refreshIssues, createIssue, updateIssue, deleteIssue } = useIssues()
-  const { status: autonomousStatus, refresh: refreshAutonomous, start: startAutonomous, stop: stopAutonomous } = useAutonomous()
+  const { issues, refresh: refreshIssues, createIssue, updateIssue, deleteIssue, getStagePrompt, advanceStage } = useIssues()
+  const { status: autonomousStatus, refresh: refreshAutonomous, start: startAutonomous, stop: stopAutonomous, toggleSelfDecisions } = useAutonomous()
   const { sprints, refresh: refreshSprints, createSprint, updateSprint, deleteSprint } = useSprints()
   const { members } = useTeamMembers()
   const { connected: wsConnected, typing: wsTyping, on: wsOn } = useWebSocket()
@@ -41,11 +52,24 @@ function Dashboard() {
   useEffect(() => {
     if (activeSession?.id && sessions.length > 0) {
       const updated = sessions.find(s => s.id === activeSession.id)
-      if (updated && updated.status !== activeSession.status) {
+      if (updated && (updated.status !== activeSession.status || !activeSession.task)) {
         setActiveSession(updated)
       }
     }
   }, [sessions])
+
+  // Sync URL → activeSession when URL changes (e.g. browser back/forward, share redirect)
+  useEffect(() => {
+    if (urlSessionId && urlSessionId !== activeSession?.id) {
+      const found = sessions.find(s => s.id === urlSessionId)
+      setActiveSession(found || { id: urlSessionId })
+      setIsNewSession(false)
+      setView('chat')
+    } else if (!urlSessionId && activeSession && location.pathname === '/') {
+      setActiveSession(null)
+      setIsNewSession(true)
+    }
+  }, [urlSessionId])
 
   // WebSocket event handlers — instant updates
   useEffect(() => {
@@ -108,36 +132,41 @@ function Dashboard() {
   const handleSelectSession = useCallback((session) => {
     setActiveSession(session)
     setIsNewSession(false)
-    setSelectedModel(session.model || 'opus')
-  }, [])
+    setSelectedModel(session.model || 'claude-opus-4-7')
+    if (session?.id) navigate(`/s/${session.id}`)
+  }, [navigate])
 
   const handleNewSession = useCallback(() => {
     setActiveSession(null)
     setIsNewSession(true)
-    setSelectedModel('opus')
-  }, [])
+    setSelectedModel('claude-opus-4-7')
+    navigate('/')
+  }, [navigate])
 
-  const _startSession = useCallback(async (text, model, imageTokens = [], sprintId = null) => {
-    const result = await startSession(text, model, imageTokens, sprintId)
+  const _startSession = useCallback(async (text, model, imageTokens = [], sprintId = null, type = null, labels = []) => {
+    const result = await startSession(text, model, imageTokens, sprintId, type, labels)
     if (result.sessionId) {
       const newSession = {
         id: result.sessionId,
         task: text,
-        model: model || 'opus',
+        model: model || 'claude-opus-4-7',
         status: 'running',
         is_mine: true,
         sprint_id: sprintId,
+        type,
+        labels,
       }
       setActiveSession(newSession)
       setIsNewSession(false)
-      setSelectedModel(model || 'opus')
+      setSelectedModel(model || 'claude-opus-4-7')
+      navigate(`/s/${result.sessionId}`)
       setTimeout(() => {
         refreshSessions()
         refreshStats()
         refreshMessages()
       }, 1500)
     }
-  }, [])
+  }, [navigate])
   const [handleStartSession, startingSession] = useAction(_startSession)
 
   const _sendMessage = useCallback(async (text, model, imageTokens = []) => {
@@ -147,20 +176,31 @@ function Dashboard() {
   }, [activeSession?.id])
   const [handleSendMessage, sendingMessage] = useAction(_sendMessage)
 
-  const CHECKPOINT_PROMPT = `🚩 CHECKPOINT — Run the following steps in order. Do NOT ask for confirmation, proceed automatically through each step:
-
-1. **Code Review** — Use the /requesting-code-review skill to review all changes made in this session. Fix any critical issues found.
-2. **API Testing** — Use the /api-test-feature skill to test all new or modified API endpoints. Create test data, hit each endpoint, and report pass/fail results.
-3. **Commit & Push** — Stage all changes, write a clear commit message, and push to GitHub.
-4. **Deploy to UAT** — Use the /uat-deployment skill to deploy to the UAT server.
-5. **Report** — Summarize what was reviewed, tested, pushed, and deployed. List any issues found and whether they were fixed.
-
-Proceed now.`
-
-  const handleCheckpoint = useCallback(() => {
+  const handleAdvanceStage = useCallback(async (toStage) => {
     if (!activeSession?.id) return
-    handleSendMessage(CHECKPOINT_PROMPT, selectedModel)
-  }, [activeSession?.id, selectedModel, handleSendMessage])
+    const result = await apiFetch(`/api/sessions/${activeSession.id}/advance-stage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ toStage, model: selectedModel }),
+    })
+    refreshSessions()
+    if (result?.sessionId && result.sessionId !== activeSession.id) {
+      const spawned = {
+        id: result.sessionId,
+        task: `[${toStage}] ${activeSession.task || ''}`.trim(),
+        model: selectedModel || activeSession.model || 'claude-opus-4-7',
+        status: 'running',
+        stage: toStage,
+        is_mine: true,
+      }
+      setActiveSession(spawned)
+      setIsNewSession(false)
+      navigate(`/s/${result.sessionId}`)
+      setTimeout(() => { refreshSessions(); refreshMessages() }, 1500)
+    } else {
+      setActiveSession(prev => prev ? { ...prev, stage: toStage } : prev)
+    }
+  }, [activeSession?.id, activeSession?.task, activeSession?.model, selectedModel, refreshSessions, refreshMessages, navigate])
 
   const _forkSession = useCallback(async (text, model) => {
     if (!activeSession?.id) return
@@ -169,19 +209,20 @@ Proceed now.`
       const newSession = {
         id: result.sessionId,
         task: text,
-        model: model || activeSession.model || 'opus',
+        model: model || activeSession.model || 'claude-opus-4-7',
         status: 'running',
         is_mine: true,
       }
       setActiveSession(newSession)
       setIsNewSession(false)
+      navigate(`/s/${result.sessionId}`)
       setTimeout(() => {
         refreshSessions()
         refreshStats()
         refreshMessages()
       }, 1500)
     }
-  }, [activeSession?.id, activeSession?.model])
+  }, [activeSession?.id, activeSession?.model, navigate])
   const [handleForkSession, forkingSession] = useAction(_forkSession)
 
   const _stopSession = useCallback(async () => {
@@ -206,6 +247,14 @@ Proceed now.`
       } catch (e) { }
       setPromptLoading(false)
     }
+    if (panel === 'learnings') {
+      setLearningsLoading(true)
+      try {
+        const data = await getLearnings()
+        setLearningsContent(data.content || '')
+      } catch (e) { }
+      setLearningsLoading(false)
+    }
     if (panel === 'settings') {
       try {
         const data = await getAdminSettings()
@@ -223,6 +272,15 @@ Proceed now.`
     setPromptLoading(false)
   }, [])
 
+  const handleSaveLearnings = useCallback(async (content) => {
+    setLearningsLoading(true)
+    try {
+      await saveLearnings(content)
+      setLearningsContent(content)
+    } catch (e) { }
+    setLearningsLoading(false)
+  }, [])
+
   // Early returns AFTER all hooks
   if (loading) return <div className="h-screen flex items-center justify-center bg-bg text-text-secondary font-mono text-sm">Loading...</div>
   if (!user) return <Login />
@@ -230,7 +288,7 @@ Proceed now.`
   const hasAccess = activeSession ? (activeSession.is_mine || activeSession.has_access || user?.isAdmin) : true
 
   return (
-    <div className="h-screen flex bg-bg font-sans overflow-hidden">
+    <div className="flex bg-bg font-sans overflow-hidden" style={{ height: '100dvh' }}>
       <Sidebar
         sessions={sessions}
         activeSessionId={activeSession?.id}
@@ -251,9 +309,27 @@ Proceed now.`
           await toggleBookmark(sessionId)
           refreshSessions()
         }}
+        onShareSession={(s) => setShareSessionId(s.id)}
+        onForkSession={(s) => {
+          handleSelectSession(s)
+          setView('chat')
+          navigate(`/s/${s.id}`)
+          setForkTriggerId(s.id)
+        }}
       />
-      <div className="flex-1 min-w-0 h-full">
-        {view === 'issues' ? (
+      <div className="flex-1 min-w-0 min-h-0 h-full overflow-hidden">
+        {view === 'pipeline' ? (
+          <Pipeline
+            onGoToSession={(sessionId) => {
+              const found = sessions.find(s => s.id === sessionId)
+              if (found) handleSelectSession(found)
+              else { setActiveSession({ id: sessionId }); setIsNewSession(false); navigate(`/s/${sessionId}`) }
+              setView('chat')
+            }}
+            onOpenIssue={() => setView('issues')}
+            onBack={() => setView('chat')}
+          />
+        ) : view === 'issues' ? (
           <IssuesBoard
             issues={issues}
             onCreateIssue={createIssue}
@@ -261,8 +337,9 @@ Proceed now.`
             onDeleteIssue={deleteIssue}
             onUploadFile={uploadFile}
             autonomousStatus={autonomousStatus}
-            onStartAutonomous={(issueIds) => startAutonomous('opus', issueIds)}
+            onStartAutonomous={(issueIds) => startAutonomous('claude-opus-4-7', issueIds)}
             onStopAutonomous={stopAutonomous}
+            onToggleSelfDecisions={toggleSelfDecisions}
             sessions={sessions}
             userRole={user?.role || 'developer'}
             userId={user?.id}
@@ -272,19 +349,45 @@ Proceed now.`
             onUpdateSprint={updateSprint}
             onDeleteSprint={deleteSprint}
             onGoToSession={(sessionId) => {
-              const session = sessions.find(s => s.id === sessionId)
-              if (session) {
-                handleSelectSession(session)
-                setView('chat')
+              const found = sessions.find(s => s.id === sessionId)
+              if (found) {
+                handleSelectSession(found)
+              } else {
+                setActiveSession({ id: sessionId })
+                setIsNewSession(false)
+                navigate(`/s/${sessionId}`)
               }
+              setView('chat')
             }}
             onGetChangelog={getSprintChangelog}
             onRequestIssueSummary={requestIssueSummary}
             onGetIssueLastResponse={getIssueLastResponse}
+            onGetStagePrompt={getStagePrompt}
+            onAdvanceStage={async (issueId, payload) => {
+              const result = await advanceStage(issueId, payload)
+              if (result?.sessionId) {
+                setActiveSession({ id: result.sessionId })
+                setIsNewSession(false)
+                setView('chat')
+                navigate(`/s/${result.sessionId}`)
+                setTimeout(() => { refreshSessions(); refreshMessages(); refreshIssues(); }, 500)
+              }
+              return result
+            }}
             onGenerateChangelog={async (sprintId, summaries) => {
               const result = await generateSprintChangelog(sprintId, summaries)
               if (result?.sessionId) {
-                setTimeout(() => { refreshSessions(); refreshMessages() }, 2000)
+                // Navigate to the new changelog session
+                setActiveSession({ id: result.sessionId })
+                setIsNewSession(false)
+                setView('chat')
+                navigate(`/s/${result.sessionId}`)
+                // Refresh to hydrate full session data
+                setTimeout(() => {
+                  refreshSessions()
+                  refreshMessages()
+                  refreshIssues()
+                }, 1000)
               }
               return result
             }}
@@ -307,13 +410,22 @@ Proceed now.`
             hasAccess={hasAccess}
             busy={startingSession || sendingMessage || stoppingSession || forkingSession}
             onForkSession={handleForkSession}
-            onCheckpoint={handleCheckpoint}
+            onAdvanceStage={handleAdvanceStage}
             sprints={sprints}
             typing={wsTyping?.sessionId === activeSession?.id}
             wsConnected={wsConnected}
+            forkTriggerId={forkTriggerId}
+            onForkTriggerConsumed={() => setForkTriggerId(null)}
           />
         )}
       </div>
+
+      {shareSessionId && (
+        <ShareSessionModal
+          sessionId={shareSessionId}
+          onClose={() => setShareSessionId(null)}
+        />
+      )}
 
       {adminPanel === 'users' && (
         <AdminModal isOpen onClose={() => setAdminPanel(null)} title="Team Members">
@@ -328,6 +440,11 @@ Proceed now.`
       {adminPanel === 'prompts' && (
         <AdminModal isOpen onClose={() => setAdminPanel(null)} title="System Prompt (CLAUDE.md)">
           <PromptsPanel prompt={claudePrompt} onSave={handleSavePrompt} loading={promptLoading} />
+        </AdminModal>
+      )}
+      {adminPanel === 'learnings' && (
+        <AdminModal isOpen onClose={() => setAdminPanel(null)} title="Learnings (Self-Improving Knowledge)">
+          <LearningsPanel content={learningsContent} onSave={handleSaveLearnings} loading={learningsLoading} />
         </AdminModal>
       )}
       {adminPanel === 'cron' && (
@@ -368,11 +485,19 @@ Proceed now.`
   )
 }
 
+const ROUTER_BASENAME = window.location.pathname.startsWith('/sessions') ? '/sessions' : '/'
+
 export default function App() {
   return (
     <ThemeProvider>
       <AuthProvider>
-        <Dashboard />
+        <BrowserRouter basename={ROUTER_BASENAME}>
+          <Routes>
+            <Route path="/share/:token" element={<SharePage />} />
+            <Route path="/s/:id" element={<Dashboard />} />
+            <Route path="*" element={<Dashboard />} />
+          </Routes>
+        </BrowserRouter>
       </AuthProvider>
     </ThemeProvider>
   )

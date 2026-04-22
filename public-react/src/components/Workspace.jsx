@@ -13,12 +13,14 @@ import {
   X,
   FileText,
   GitBranch,
-  Flag,
+  ArrowRight,
+  Share2,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import ShareSessionModal from './ShareSessionModal';
 
 const colors = {
   bg: 'var(--c-bg)',
@@ -390,7 +392,7 @@ export default function Workspace({
   isNewSession = false,
   onStartSession,
   onForkSession,
-  onCheckpoint,
+  onAdvanceStage,
   onUploadFile,
   onTranscribe,
   models = [],
@@ -399,15 +401,20 @@ export default function Workspace({
   busy = false,
   typing = false,
   wsConnected = false,
+  forkTriggerId = null,
+  onForkTriggerConsumed,
 }) {
   const [inputText, setInputText] = useState('');
   const [selectedModel, setSelectedModel] = useState(
     () => models.find((m) => m.default)?.id || models[0]?.id || ''
   );
   const [selectedSprint, setSelectedSprint] = useState('');
+  const [sessionType, setSessionType] = useState('task');
+  const [newSessionError, setNewSessionError] = useState('');
   const [accessNote, setAccessNote] = useState('');
   const [showFork, setShowFork] = useState(false);
   const [forkText, setForkText] = useState('');
+  const [showShare, setShowShare] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [recording, setRecording] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
@@ -448,6 +455,14 @@ export default function Workspace({
       setSelectedModel(models.find((m) => m.default)?.id || models[0]?.id);
     }
   }, [models]);
+
+  // External fork trigger (e.g. from sidebar 3-dots menu)
+  useEffect(() => {
+    if (forkTriggerId && session?.id === forkTriggerId && session.status !== 'running') {
+      setShowFork(true);
+      onForkTriggerConsumed?.();
+    }
+  }, [forkTriggerId, session?.id, session?.status, onForkTriggerConsumed]);
 
   // Auto-grow textarea
   const adjustTextarea = useCallback(() => {
@@ -498,7 +513,11 @@ export default function Workspace({
     if (!text && imageTokens.length === 0) return;
     const finalText = text || (imageTokens.length > 0 ? '[image attached]' : '');
     if (isNewSession && onStartSession) {
-      onStartSession(finalText, selectedModel, imageTokens, selectedSprint || null);
+      if (!selectedSprint) { setNewSessionError('Please choose a sprint or select "No sprint".'); return; }
+      if (!sessionType) { setNewSessionError('Please select a type.'); return; }
+      setNewSessionError('');
+      const sprintToSend = selectedSprint === '__none__' ? null : selectedSprint;
+      onStartSession(finalText, selectedModel, imageTokens, sprintToSend, sessionType, []);
     } else if (onSendMessage) {
       onSendMessage(finalText, selectedModel, imageTokens);
     }
@@ -586,7 +605,7 @@ export default function Workspace({
   // --- Header ---
   const header = session ? (
     <div
-      className="h-14 flex items-center justify-between px-4 sticky top-0 z-10 flex-shrink-0"
+      className="h-14 flex items-center justify-between px-4 pl-14 md:pl-4 sticky top-0 z-10 flex-shrink-0"
       style={{
         backgroundColor: colors.bg,
         borderBottom: `1px solid ${colors.border}`,
@@ -637,18 +656,33 @@ export default function Workspace({
             <GitBranch size={14} style={{ color: colors.textSecondary }} />
           </button>
         )}
-        {onCheckpoint && session.status !== 'running' && (
-          <button
-            onClick={onCheckpoint}
-            disabled={busy}
-            className="flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium cursor-pointer transition-colors hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
-            style={{ backgroundColor: 'var(--c-accent)', color: '#fff' }}
-            title="Checkpoint — review code, test APIs, push & deploy"
-          >
-            <Flag size={12} />
-            Checkpoint
-          </button>
-        )}
+        <button
+          onClick={() => setShowShare(true)}
+          className="p-1 rounded cursor-pointer hover:opacity-80 transition-opacity"
+          title="Share session — create a link collaborators can use"
+        >
+          <Share2 size={14} style={{ color: colors.textSecondary }} />
+        </button>
+        {(() => {
+          const STAGE_ORDER = ['idea', 'design', 'development', 'qa', 'done'];
+          const STAGE_LABELS = { idea: 'Idea', design: 'Design', development: 'Development', qa: 'QA', done: 'Done' };
+          const current = session.stage || 'idea';
+          const idx = STAGE_ORDER.indexOf(current);
+          const next = idx >= 0 && idx < STAGE_ORDER.length - 1 ? STAGE_ORDER[idx + 1] : null;
+          if (!onAdvanceStage || !next || session.status === 'running') return null;
+          return (
+            <button
+              onClick={() => onAdvanceStage(next)}
+              disabled={busy}
+              className="flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium cursor-pointer transition-colors hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
+              style={{ backgroundColor: 'var(--c-accent)', color: '#fff' }}
+              title={`Advance to ${STAGE_LABELS[next]} — spawns a stage-specific agent`}
+            >
+              <ArrowRight size={12} />
+              Next: {STAGE_LABELS[next]}
+            </button>
+          );
+        })()}
         <span
           className="w-1.5 h-1.5 rounded-full flex-shrink-0"
           style={{ backgroundColor: wsConnected ? 'var(--c-status-running)' : 'var(--c-text-secondary)' }}
@@ -659,54 +693,93 @@ export default function Workspace({
   ) : null;
 
   // --- New Session View ---
+  const TYPE_OPTIONS = [
+    { id: 'task', label: 'Task', color: '#3b82f6' },
+    { id: 'bug', label: 'Bug', color: '#ef4444' },
+    { id: 'feature', label: 'Feature', color: '#8b5cf6' },
+    { id: 'improvement', label: 'Improvement', color: '#06b6d4' },
+  ];
   const newSessionView = (
     <div className="flex-1 flex items-center justify-center p-4">
-      <div className="text-center max-w-md w-full">
-        <h1
-          className="text-2xl font-bold mb-2"
-          style={{ color: colors.text }}
-        >
+      <div className="text-center max-w-lg w-full">
+        <h1 className="text-2xl font-bold mb-2" style={{ color: colors.text }}>
           What do you want to build?
         </h1>
-        <p
-          className="text-sm mb-6"
-          style={{ color: colors.textSecondary }}
-        >
+        <p className="text-sm mb-6" style={{ color: colors.textSecondary }}>
           Start a new session to begin working with OliBot.
         </p>
-        <div className="flex items-center justify-center gap-3 mb-4">
+
+        {/* Type */}
+        <div className="mb-4 text-left">
+          <label className="block text-[11px] font-medium mb-1.5 uppercase tracking-wide" style={{ color: colors.textSecondary }}>
+            Type <span style={{ color: '#ef4444' }}>*</span>
+          </label>
+          <div className="flex gap-1.5 flex-wrap">
+            {TYPE_OPTIONS.map((opt) => {
+              const active = sessionType === opt.id;
+              return (
+                <button
+                  key={opt.id}
+                  onClick={() => setSessionType(opt.id)}
+                  className="px-2.5 py-1 rounded-md text-[11px] font-medium cursor-pointer transition-all"
+                  style={{
+                    backgroundColor: active ? `${opt.color}20` : colors.surface2,
+                    color: active ? opt.color : colors.textSecondary,
+                    border: `1px solid ${active ? opt.color : colors.border}`,
+                  }}
+                >
+                  {opt.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Sprint (optional — pick one or mark as no sprint) */}
+        <div className="mb-4 text-left">
+          <label className="block text-[11px] font-medium mb-1.5 uppercase tracking-wide" style={{ color: colors.textSecondary }}>
+            Sprint <span style={{ color: '#ef4444' }}>*</span>
+          </label>
+          <div className="relative">
+            <select
+              value={selectedSprint}
+              onChange={(e) => setSelectedSprint(e.target.value)}
+              className="appearance-none cursor-pointer outline-none font-mono text-xs px-3 py-2 pr-7 rounded-lg w-full"
+              style={{
+                backgroundColor: colors.surface2,
+                border: `1px solid ${selectedSprint ? colors.border : '#ef444466'}`,
+                color: selectedSprint ? colors.text : colors.textSecondary,
+              }}
+            >
+              <option value="">Select a sprint…</option>
+              <option value="__none__">No sprint (unassigned)</option>
+              {sprints.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}{s.status === 'active' ? ' (active)' : ''}
+                </option>
+              ))}
+            </select>
+            <ChevronDown
+              size={14}
+              className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none"
+              style={{ color: colors.textSecondary }}
+            />
+          </div>
+          <p className="text-[10px] mt-1" style={{ color: colors.textSecondary }}>
+            Pick a sprint, or choose <strong>No sprint</strong> to leave it unassigned.
+          </p>
+        </div>
+
+        <div className="flex items-center justify-center gap-3 mb-2">
           <ModelSelector
             models={models}
             selectedModel={selectedModel}
             onChange={setSelectedModel}
           />
-          {sprints.length > 0 && (
-            <div className="relative inline-flex items-center">
-              <select
-                value={selectedSprint}
-                onChange={(e) => setSelectedSprint(e.target.value)}
-                className="appearance-none cursor-pointer outline-none font-mono text-xs px-3 py-2 pr-7 rounded-lg"
-                style={{
-                  backgroundColor: colors.surface2,
-                  border: `1px solid ${colors.border}`,
-                  color: selectedSprint ? colors.text : colors.textSecondary,
-                }}
-              >
-                <option value="">No Sprint</option>
-                {sprints.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name}{s.status === 'active' ? ' (active)' : ''}
-                  </option>
-                ))}
-              </select>
-              <ChevronDown
-                size={14}
-                className="absolute right-1 pointer-events-none"
-                style={{ color: colors.textSecondary }}
-              />
-            </div>
-          )}
         </div>
+        {newSessionError && (
+          <p className="text-[11px] mt-1" style={{ color: '#ef4444' }}>{newSessionError}</p>
+        )}
       </div>
     </div>
   );
@@ -971,13 +1044,16 @@ export default function Workspace({
 
   return (
     <div
-      className="flex flex-col h-full"
+      className="flex flex-col h-full min-h-0 overflow-hidden"
       style={{ backgroundColor: colors.bg, color: colors.text }}
     >
       {header}
       {isNewSession ? newSessionView : messagesView}
       {hasAccess ? inputArea : noAccessFooter}
       {forkDialog}
+      {showShare && session?.id && (
+        <ShareSessionModal sessionId={session.id} onClose={() => setShowShare(false)} />
+      )}
     </div>
   );
 }
