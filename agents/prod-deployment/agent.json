@@ -1,0 +1,11 @@
+{
+  "id": "prod-deployment",
+  "name": "Prod Deployment",
+  "description": "Merge UAT → main, run DB scripts, verify PROD access, deploy services via auto_deploy.sh, and write a changelog.",
+  "icon": "Rocket",
+  "model": "claude-opus-4-8",
+  "type": "task",
+  "workflow_file": "workflow.md",
+  "state_file": "state.json",
+  "version": 1
+}

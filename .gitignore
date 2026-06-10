@@ -20,7 +20,13 @@ node_modules/
 *.sqlite3
 sessions.db
 sessions.db-journal
+sessions.local.db-shm
+sessions.local.db-wal
+agents/*/state.json
 auth_info/
+
+# Runtime user uploads (not source)
+uploads/
 
 # Downloaded Knowledge Base
 kb/

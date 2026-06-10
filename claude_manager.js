@@ -8,12 +8,34 @@ import config from './config.js';
 import fs from 'fs';
 import path from 'path';
 
-const KB_HINT = `[Context: Knowledge Base is in Outline wiki. To search KB, run: curl -s -X POST ${config.OUTLINE_API_URL}/documents.search -H "Authorization: Bearer ${config.OUTLINE_API_KEY}" -H "Content-Type: application/json" -d '{"query":"<search term>","collectionId":"${config.OUTLINE_KB_COLLECTION_ID}"}' | python3 -c "import sys,json; [print(d['document']['title'],'\\n',d['document']['text'][:500]) for d in json.loads(sys.stdin.read()).get('data',[])]". To read a specific doc: curl -s -X POST ${config.OUTLINE_API_URL}/documents.info -H "Authorization: Bearer ${config.OUTLINE_API_KEY}" -H "Content-Type: application/json" -d '{"id":"<doc_id>"}'. To update a doc: curl -s -X POST ${config.OUTLINE_API_URL}/documents.update -H "Authorization: Bearer ${config.OUTLINE_API_KEY}" -H "Content-Type: application/json" -d '{"id":"<doc_id>","text":"<new content>"}'. To create a new KB doc: curl -s -X POST ${config.OUTLINE_API_URL}/documents.create -H "Authorization: Bearer ${config.OUTLINE_API_KEY}" -H "Content-Type: application/json" -d '{"title":"<title>","text":"<content>","collectionId":"${config.OUTLINE_KB_COLLECTION_ID}","publish":true}'. PRDs collection ID: ${config.OUTLINE_PRD_COLLECTION_ID}]`;
+const KB_DIR = config.KB_DIR;
+const KB_HINT = `[Context: Knowledge Base is a local git repo at ${KB_DIR}. Structure: pluginlive.md (company overview), Assessment/ (aptitude, communication, custom, role-based, scheduling), ATS/ (Admin, Corporate, Institute, Student, ElasticSearch), Infrastructure/ (servers, deployment, MCP, skills). To search: grep -rl "<term>" ${KB_DIR} --include="*.md". To read a doc: cat ${KB_DIR}/<path>. To update/create: write to ${KB_DIR}/<path> then cd ${KB_DIR} && git add -A && git commit -m "<msg>" && git push origin main. Read only what's relevant to the current task — do not read all docs upfront. The KB lives ONLY in this GitHub repo — there is no Outline wiki; never call app.getoutline.com or any Outline API.]`;
 
+
+// Tester role persona — injected for sessions with mode === 'tester' (instead of a
+// separate repo CLAUDE.md like design mode, since testers work on the real code repo).
+const TESTER_PROMPT = `[ROLE: TESTER] You are operating as a QA tester, not a developer. Your job is to verify the change under test — NOT to build features.
+SOURCE OF TRUTH — derive expected behavior in THIS strict priority order, do NOT jump to reading code first:
+  1. PRDs — the product requirements are the primary spec. If the tester's instruction names a PRD or links one, use it. PRDs live as public HTML on S3 (links shared by the developer); the create-prd skill produces them.
+  2. Knowledge Base — the pluginlive-kb GitHub repo cloned at /home/ubuntu/pluginlive-kb. Search it: grep -rl "<term>" /home/ubuntu/pluginlive-kb --include="*.md", then read the relevant doc (structure: pluginlive.md, Assessment/, ATS/, Infrastructure/). This describes current production-truth behavior.
+
+Work AUTONOMOUSLY: do NOT pause to ask the user for a PRD, acceptance criteria, scope, or permission to proceed. Pull the expected behavior from the PRD/KB (and the tester's instruction), then just start testing. Only surface a question at the very end if a finding genuinely cannot be resolved — never block the run waiting on an answer. Focus on:
+- Understanding what changed and the expected behavior (from PRD/KB first; code only if neither covers it).
+- Writing clear, structured test cases (happy path, edge cases, negative cases).
+- Reproducing reported behavior and verifying it against expectations.
+- Running tests / read-only checks and reporting findings: what passed, what failed, exact repro steps, and severity.
+REPORTING — the bug report must contain ONLY these, nothing more:
+  • WHAT the bug is — the observable wrong behavior (symptom, where it happens, repro steps, severity).
+  • WHY it happens — the root cause: the single explanation of what is going wrong (e.g. "the API returns the image URL but the frontend deletes the file before render").
+You MAY read code (read-only) to pin down the root cause, but you must NOT output any fix: no code suggestions, no diffs, no patches, no "you should change X to Y", no snippets of corrected code. Do NOT recommend how to fix it. Stop at WHAT + WHY. Fixing is the developer's job, not yours.
+Prefer producing test cases, test scripts, and bug reports over changing product code.`;
 
 // --dangerously-skip-permissions cannot be used as root — use settings-based permissions instead
 const IS_ROOT = process.getuid?.() === 0;
 const SKIP_PERMS = IS_ROOT ? [] : ['--dangerously-skip-permissions'];
+
+// Tools that mutate files — disabled (via --disallowedTools) for read-only testers.
+const EDIT_TOOLS = 'Edit,Write,NotebookEdit,MultiEdit';
 
 class ClaudeManager extends EventEmitter {
     constructor(sessionStore) {
@@ -23,26 +45,32 @@ class ClaudeManager extends EventEmitter {
         this._lastNotify = {};
     }
 
-    async startSession(userPhone, task, workingDir, imagePath = null, ownerId = null, model = 'claude-opus-4-7') {
+    async startSession(userPhone, task, workingDir, imagePath = null, ownerId = null, model = 'claude-opus-4-8', opts = {}) {
         const sessionId = `WA-${Date.now().toString(36)}`;
         const dir = workingDir || config.DEFAULT_WORKING_DIR;
         this.store.createSession(sessionId, userPhone, task, null, dir, ownerId, model);
         this.store.addMessage(sessionId, 'user', task);
+        // Apply role-driven mode/edit-access BEFORE spawning so _roleAugment (tester
+        // persona + read-only gating) takes effect on the very first turn.
+        const updates = {};
+        if (opts.mode) updates.mode = opts.mode;
+        if (opts.editAccess !== undefined) updates.edit_access = opts.editAccess ? 1 : 0;
+        if (Object.keys(updates).length) this.store.updateSession(sessionId, updates);
         this._spawnNew(sessionId, task, dir, imagePath, model);
         return { sessionId };
     }
 
-    async startAutonomousSession(userPhone, task, workingDir, imagePath = null, ownerId = null, model = 'claude-opus-4-7') {
+    async startAutonomousSession(userPhone, task, workingDir, imagePath = null, ownerId = null, model = 'claude-opus-4-8') {
         return this.startSession(userPhone, task, workingDir, imagePath, ownerId, model);
     }
 
-    async forkSession(parentSessionId, task, userPhone, ownerId = null, model = null) {
+    async forkSession(parentSessionId, task, userPhone, ownerId = null, model = null, opts = {}) {
         const parent = this.store.getSession(parentSessionId);
         if (!parent) throw new Error(`Session ${parentSessionId} not found`);
 
         const sessionId = `WA-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
         const dir = parent.working_dir || config.DEFAULT_WORKING_DIR;
-        const sessionModel = model || parent.model || 'claude-opus-4-7';
+        const sessionModel = model || parent.model || 'claude-opus-4-8';
 
         // Build context summary from parent session's messages
         const parentMessages = this.store.getMessages(parentSessionId, 50);
@@ -54,12 +82,59 @@ class ClaudeManager extends EventEmitter {
         const visibleSummary = this._buildVisibleSummary(parent, parentMessages);
         this.store.addMessage(sessionId, 'system', visibleSummary);
         this.store.addMessage(sessionId, 'user', task);
-        this.store.updateSession(sessionId, { status: 'running' });
+        // Carry mode/edit-access onto the fork (e.g. tester forks → mode 'tester' with the
+        // tester's code-edit permission) BEFORE spawning, so _roleAugment picks it up.
+        const updates = { status: 'running' };
+        if (opts.mode) updates.mode = opts.mode;
+        if (opts.editAccess !== undefined) updates.edit_access = opts.editAccess ? 1 : 0;
+        this.store.updateSession(sessionId, updates);
 
-        // Start a fresh session with parent context + new task
+        // Start a fresh session with parent context + new task (carry any attached file)
         const forkPrompt = `${contextSummary}\n\n---\n\nNew task (forked from session ${parentSessionId}):\n${task}`;
-        this._spawnNew(sessionId, forkPrompt, dir, null, sessionModel);
+        this._spawnNew(sessionId, forkPrompt, dir, opts.imagePath || null, sessionModel);
         return { sessionId, forkedFrom: parentSessionId };
+    }
+
+    // Merge two or more sessions into one new session. Each parent is compacted
+    // (same context-summary used by fork), then all summaries are combined and a
+    // fresh session is spawned that carries the full merged context + a new task.
+    async mergeSessions(parentSessionIds = [], task, userPhone, ownerId = null, model = null, opts = {}) {
+        const parents = [...new Set(parentSessionIds)]
+            .map(id => this.store.getSession(id))
+            .filter(Boolean);
+        if (parents.length < 2) throw new Error('Merge requires at least 2 valid sessions');
+
+        const sessionId = `WA-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+        const dir = parents[0].working_dir || config.DEFAULT_WORKING_DIR;
+        const sessionModel = model || parents[0].model || 'claude-opus-4-8';
+
+        this.store.createSession(sessionId, userPhone, task, null, dir, ownerId, sessionModel);
+
+        // Compact each parent and combine into one context + one visible summary.
+        const contextBlocks = [];
+        const visibleBlocks = [
+            `**Merged from ${parents.length} sessions:** ${parents.map(p => `\`${p.id}\``).join(', ')}`,
+            '',
+        ];
+        for (const p of parents) {
+            const msgs = this.store.getMessages(p.id, 50);
+            contextBlocks.push(this._buildForkContext(p, msgs));
+            visibleBlocks.push(this._buildVisibleSummary(p, msgs));
+            visibleBlocks.push('');
+        }
+
+        this.store.addMessage(sessionId, 'system', visibleBlocks.join('\n'));
+        this.store.addMessage(sessionId, 'user', task);
+
+        const updates = { status: 'running' };
+        if (opts.mode) updates.mode = opts.mode;
+        if (opts.editAccess !== undefined) updates.edit_access = opts.editAccess ? 1 : 0;
+        this.store.updateSession(sessionId, updates);
+
+        const mergedContext = contextBlocks.join('\n\n================ NEXT SESSION ================\n\n');
+        const mergePrompt = `${mergedContext}\n\n---\n\nThe above are ${parents.length} prior sessions (${parents.map(p => p.id).join(', ')}) compacted and merged together. Use the combined context from all of them.\n\nNew task:\n${task}`;
+        this._spawnNew(sessionId, mergePrompt, dir, null, sessionModel);
+        return { sessionId, mergedFrom: parents.map(p => p.id) };
     }
 
     _buildVisibleSummary(parentSession, messages) {
@@ -136,7 +211,7 @@ class ClaudeManager extends EventEmitter {
 
         this.store.addMessage(sessionId, 'user', followUp);
         this.store.updateSession(sessionId, { status: 'running', thread_open: 1 });
-        const model = session.model || 'claude-opus-4-7';
+        const model = session.model || 'claude-opus-4-8';
         this._spawnResume(sessionId, session.claude_session_id, followUp, session.working_dir, session.cost_usd || 0, imagePath, model);
         return { sessionId };
     }
@@ -154,7 +229,7 @@ class ClaudeManager extends EventEmitter {
     isRunning(sessionId) { return this.processes.has(sessionId); }
     getLastOutput(sessionId) { return this.processes.get(sessionId)?.lastOutput || null; }
 
-    async planSession(userPhone, task, workingDir, model = 'claude-opus-4-7') {
+    async planSession(userPhone, task, workingDir, model = 'claude-opus-4-8') {
         const sessionId = `WA-plan-${Date.now().toString(36)}`;
         const dir = workingDir || config.DEFAULT_WORKING_DIR;
         this.store.createSession(sessionId, userPhone, task, null, dir, null, model);
@@ -163,27 +238,73 @@ class ClaudeManager extends EventEmitter {
         return { sessionId };
     }
 
-    _spawnNew(sessionId, prompt, workingDir, imagePath = null, model = 'claude-opus-4-7') {
+    // Role-based augmentation for a session: tester persona preamble + (when the
+    // tester has no edit access) CLI flags that hard-disable file-editing tools.
+    _roleAugment(sessionId) {
+        try {
+            const s = this.store.getSession(sessionId);
+            if (!s || s.mode !== 'tester') return { preamble: '', extraArgs: [] };
+            const canEdit = s.edit_access !== 0;
+            const editLine = canEdit
+                ? 'You MAY edit code and test files to add or run tests.'
+                : 'READ-ONLY: you do NOT have code-edit access. Do not modify any files — produce test cases, run read-only checks, and report findings. File-editing tools are disabled.';
+            // Use the `--flag=value` form (single token): --disallowedTools is variadic, so a
+            // space-separated value would greedily swallow the trailing positional prompt.
+            return {
+                preamble: `${TESTER_PROMPT}\n${editLine}`,
+                extraArgs: canEdit ? [] : [`--disallowedTools=${EDIT_TOOLS}`],
+            };
+        } catch { return { preamble: '', extraArgs: [] }; }
+    }
+
+    _spawnNew(sessionId, prompt, workingDir, imagePath = null, model = 'claude-opus-4-8') {
         const fileRef = this._prepareFile(imagePath, workingDir);
-        const fullPrompt = fileRef ? `${KB_HINT}\n\n${fileRef}\n\n${prompt}` : `${KB_HINT}\n\n${prompt}`;
-        const args = ['--print', '--model', model, '--output-format', 'stream-json', '--verbose', ...SKIP_PERMS, fullPrompt];
-        console.log(`[Claude] NEW session ${sessionId} | model: ${model} | cwd: ${workingDir}`);
+        const { preamble, extraArgs } = this._roleAugment(sessionId);
+        const head = [KB_HINT, preamble].filter(Boolean).join('\n\n');
+        const fullPrompt = fileRef ? `${head}\n\n${fileRef}\n\n${prompt}` : `${head}\n\n${prompt}`;
+        const args = ['--print', '--model', model, '--output-format', 'stream-json', '--verbose', ...SKIP_PERMS, ...extraArgs, fullPrompt];
+        console.log(`[Claude] NEW session ${sessionId} | model: ${model} | cwd: ${workingDir}${extraArgs.length ? ' | read-only' : ''}`);
         this._runPty(sessionId, config.CLAUDE_BIN, args, workingDir, 0);
     }
 
-    _spawnPlan(sessionId, prompt, workingDir, model = 'claude-opus-4-7') {
+    _spawnPlan(sessionId, prompt, workingDir, model = 'claude-opus-4-8') {
         const planPrefix = 'PLANNING MODE: Read the codebase and relevant knowledge base docs, then write a detailed step-by-step plan of the changes you would make. Do NOT modify any files. Output the plan as a numbered list, then stop.';
         const args = ['--print', '--model', model, '--output-format', 'stream-json', '--verbose', ...SKIP_PERMS, `${KB_HINT}\n\n${planPrefix}\n\nTask: ${prompt}`];
         console.log(`[Claude] PLAN session ${sessionId} | model: ${model} | cwd: ${workingDir}`);
         this._runPty(sessionId, config.CLAUDE_BIN, args, workingDir, 0);
     }
 
-    _spawnResume(sessionId, claudeSessionId, followUp, workingDir, baseCost = 0, imagePath = null, model = 'claude-opus-4-7') {
+    _spawnResume(sessionId, claudeSessionId, followUp, workingDir, baseCost = 0, imagePath = null, model = 'claude-opus-4-8') {
         const fileRef = this._prepareFile(imagePath, workingDir);
+        // Re-apply tester edit-gating on every turn (the persona was set when the fork
+        // was created; the disallowed-tools flags must be passed on each resume).
+        const { extraArgs } = this._roleAugment(sessionId);
         const fullFollowUp = fileRef ? `${fileRef}\n\n${followUp}` : followUp;
-        const args = ['--resume', claudeSessionId, '--print', '--model', model, '--output-format', 'stream-json', '--verbose', ...SKIP_PERMS, fullFollowUp];
-        console.log(`[Claude] RESUME session ${sessionId} | model: ${model} | claude_id: ${claudeSessionId}`);
-        this._runPty(sessionId, config.CLAUDE_BIN, args, workingDir, baseCost);
+        const args = ['--resume', claudeSessionId, '--print', '--model', model, '--output-format', 'stream-json', '--verbose', ...SKIP_PERMS, ...extraArgs, fullFollowUp];
+        console.log(`[Claude] RESUME session ${sessionId} | model: ${model} | claude_id: ${claudeSessionId}${extraArgs.length ? ' | read-only' : ''}`);
+        // Carry recovery context so we can fall back to a fresh summarised session
+        // if the resume transcript overflows the model context ("Prompt is too long").
+        this._runPty(sessionId, config.CLAUDE_BIN, args, workingDir, baseCost, {
+            isResume: true,
+            followUp,
+            workingDir,
+            model,
+        });
+    }
+
+    // When --resume overflows the context window, start a FRESH Claude session
+    // seeded with a summary of recent messages instead. Same session id, clean transcript.
+    _recoverFromOverflow(sessionId, recovery) {
+        const session = this.store.getSession(sessionId);
+        if (!session) return;
+        console.log(`[Claude] Session ${sessionId} overflowed on resume — recovering with summarised fresh session.`);
+        const messages = this.store.getMessages(sessionId, 30);
+        const summary = this._buildForkContext(session, messages);
+        const prompt = `${summary}\n\n---\n\nThe previous conversation got too long to resume directly, so it has been summarised above. Continue from here.\n\nNew message:\n${recovery.followUp}`;
+        // Clear the old claude_session_id so the new (fresh) one is captured on the result event.
+        this.store.updateSession(sessionId, { claude_session_id: null, status: 'running' });
+        this.emit('assistant_message', { sessionId, content: '_(Conversation was too long to resume — continuing with a summarised context.)_' });
+        this._spawnNew(sessionId, prompt, recovery.workingDir, null, recovery.model);
     }
 
     _prepareFile(filePath, workingDir) {
@@ -194,7 +315,8 @@ class ClaudeManager extends EventEmitter {
             const destName = `context-file-${Date.now()}${ext}`;
             const dest = path.join(workingDir || config.DEFAULT_WORKING_DIR, destName);
             fs.copyFileSync(filePath, dest);
-            try { fs.unlinkSync(filePath); } catch (_) { }
+            // Keep the original upload in place — it's served at /api/uploads/<name>
+            // and referenced in the chat history so the attachment stays visible.
             const isImage = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg'].includes(ext.toLowerCase());
             return isImage
                 ? `[Image attached — saved at: ${dest}. Please view/read this image as part of the task.]`
@@ -205,8 +327,27 @@ class ClaudeManager extends EventEmitter {
         }
     }
 
-    _runPty(sessionId, bin, args, workingDir, baseCost = 0) {
-        const entry = { proc: null, baseCost, costUsd: baseCost, inputTokens: 0, outputTokens: 0, lastOutput: '', lineBuffer: '', resultEmitted: false };
+    _buildEnv(sessionId) {
+        const env = { ...process.env };
+        try {
+            const session = this.store.getSession(sessionId);
+            if (!session?.owner_id) return env;
+            const user = this.store.getUserById?.(session.owner_id);
+            if (!user) return env;
+            const name = user.display_name || user.email?.split('@')[0] || user.phone || 'OliBot User';
+            const email = user.email || `${(user.phone || user.id || 'user').toString().replace(/[^a-zA-Z0-9._-]/g, '')}@olibot.local`;
+            env.GIT_AUTHOR_NAME = name;
+            env.GIT_AUTHOR_EMAIL = email;
+            env.GIT_COMMITTER_NAME = name;
+            env.GIT_COMMITTER_EMAIL = email;
+        } catch (err) {
+            console.error(`[Claude] Failed to resolve git author for ${sessionId}: ${err.message}`);
+        }
+        return env;
+    }
+
+    _runPty(sessionId, bin, args, workingDir, baseCost = 0, recovery = null) {
+        const entry = { proc: null, baseCost, costUsd: baseCost, inputTokens: 0, outputTokens: 0, lastOutput: '', lineBuffer: '', resultEmitted: false, recovery };
         this.processes.set(sessionId, entry);
 
         const proc = pty.spawn(bin, args, {
@@ -214,7 +355,7 @@ class ClaudeManager extends EventEmitter {
             cols: 1000000,
             rows: 50,
             cwd: workingDir || config.DEFAULT_WORKING_DIR,
-            env: process.env,
+            env: this._buildEnv(sessionId),
         });
         entry.proc = proc;
 
@@ -238,6 +379,15 @@ class ClaudeManager extends EventEmitter {
             if (remaining && !entry.resultEmitted) {
                 try { const event = JSON.parse(remaining); this._handleEvent(sessionId, event, entry); } catch (_) { }
             }
+
+            // Context overflow on resume → recover with a summarised fresh session (once).
+            const overflowed = /prompt is too long|input is too long|exceeds?.{0,20}context|too many tokens/i.test(entry.lastOutput || '');
+            if (overflowed && entry.recovery?.isResume) {
+                this.processes.delete(sessionId);
+                this._recoverFromOverflow(sessionId, entry.recovery);
+                return;
+            }
+
             const status = exitCode === 0 ? 'completed' : 'failed';
             this.store.updateSession(sessionId, { status });
             this.processes.delete(sessionId);
@@ -323,6 +473,9 @@ class ClaudeManager extends EventEmitter {
             const errorMsg = event.error || event.message || 'Unknown error';
             console.error(`[Claude] Session ${sessionId} error: ${errorMsg}`);
             this.emit('session_error', { sessionId, error: errorMsg });
+            if (/401|invalid auth|authentication/i.test(errorMsg)) {
+                this.emit('auth_error', { sessionId, error: errorMsg });
+            }
         }
     }
 

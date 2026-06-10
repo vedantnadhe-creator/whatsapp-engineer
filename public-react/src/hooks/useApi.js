@@ -95,16 +95,35 @@ export function useStats() {
 
 // Pagination: `page` is the max page currently loaded. Lower pages stay in state
 // so the list accumulates instead of being replaced on "Load more".
-export function useSessions(page = 1) {
-  const [pagesData, setPagesData] = useState({}); // { [pageNum]: sessions[] }
+// When `q` (search query) changes, paging is reset and the list is re-fetched
+// from page 1 with the query attached. q is debounced internally.
+export function useSessions(page = 1, q = '') {
+  const [pagesData, setPagesData] = useState({});
   const [meta, setMeta] = useState({ total: 0, totalPages: 1, showAllSessions: false });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [debouncedQ, setDebouncedQ] = useState(q.trim());
   const pagesRef = useRef(pagesData);
   pagesRef.current = pagesData;
+  const qRef = useRef(debouncedQ);
+  qRef.current = debouncedQ;
 
-  const fetchPage = useCallback(async (p) => {
-    const data = await apiFetch(`/api/sessions?page=${p}`);
+  // Debounce q changes (250ms) so we don't fire a request on every keystroke
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedQ(q.trim()), 250);
+    return () => clearTimeout(t);
+  }, [q]);
+
+  const buildUrl = (p, query) => {
+    const params = new URLSearchParams({ page: String(p) });
+    if (query) params.set('q', query);
+    return `/api/sessions?${params.toString()}`;
+  };
+
+  const fetchPage = useCallback(async (p, query) => {
+    const data = await apiFetch(buildUrl(p, query));
+    // Ignore stale responses if the query changed mid-flight
+    if (query !== qRef.current) return data;
     setPagesData((prev) => ({ ...prev, [p]: data?.sessions ?? [] }));
     setMeta({
       total: data?.total ?? 0,
@@ -114,15 +133,24 @@ export function useSessions(page = 1) {
     return data;
   }, []);
 
-  // When the requested max page grows, fetch only the newly requested page.
-  // Lower pages are already cached and stay on screen.
+  // When q changes, reset cached pages and reload from page 1
   useEffect(() => {
-    if (pagesRef.current[page]) return; // already loaded
+    setPagesData({});
     setLoading(true);
-    fetchPage(page)
+    fetchPage(1, debouncedQ)
       .catch(setError)
       .finally(() => setLoading(false));
-  }, [page, fetchPage]);
+  }, [debouncedQ, fetchPage]);
+
+  // When the requested max page grows, fetch only the newly requested page.
+  useEffect(() => {
+    if (page === 1) return;
+    if (pagesRef.current[page]) return;
+    setLoading(true);
+    fetchPage(page, debouncedQ)
+      .catch(setError)
+      .finally(() => setLoading(false));
+  }, [page, debouncedQ, fetchPage]);
 
   // refresh() re-fetches all currently-loaded pages so polling updates status
   // without losing the user's scroll depth.
@@ -130,7 +158,7 @@ export function useSessions(page = 1) {
     const loaded = Object.keys(pagesRef.current).map(Number);
     const pages = loaded.length > 0 ? loaded : [1];
     try {
-      await Promise.all(pages.map((p) => fetchPage(p)));
+      await Promise.all(pages.map((p) => fetchPage(p, qRef.current)));
       setError(null);
     } catch (e) {
       setError(e);
@@ -225,7 +253,17 @@ export function useUsers() {
     return result;
   }, []);
 
-  return { users: data ?? [], loading, error, refresh, addUser, deleteUser, resetPassword };
+  const updateUser = useCallback(async (userId, changes) => {
+    const result = await apiFetch(`/api/admin/users/${userId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(changes),
+    });
+    refresh();
+    return result;
+  }, [refresh]);
+
+  return { users: data ?? [], loading, error, refresh, addUser, deleteUser, resetPassword, updateUser };
 }
 
 export function useCron() {
@@ -271,11 +309,36 @@ export function useAccessRequests() {
 // Standalone API helpers (not hooks)
 // ---------------------------------------------------------------------------
 
-export async function startSession(text, model, imageTokens = [], sprintId = null, type = null, labels = []) {
+export async function startSession(text, model, imageTokens = [], sprintId = null, type = null, labels = [], name = null, mode = 'developer') {
   return apiFetch('/api/sessions/start', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text, model, imageTokens, sprintId, type, labels }),
+    body: JSON.stringify({ text, model, imageTokens, sprintId, type, labels, name, mode }),
+  });
+}
+
+export function useAgents() {
+  const { data, loading, error, refresh } = useGet('/api/agents');
+  return { agents: data?.agents ?? [], loading, error, refresh };
+}
+
+export async function runAgent(agentId, note = '') {
+  return apiFetch(`/api/agents/${agentId}/run`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ note }),
+  });
+}
+
+export async function deleteSession(sessionId) {
+  return apiFetch(`/api/sessions/${sessionId}`, { method: 'DELETE' });
+}
+
+export async function renameSession(sessionId, name) {
+  return apiFetch(`/api/sessions/${sessionId}/name`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
   });
 }
 
@@ -335,6 +398,99 @@ export async function generateSprintChangelog(sprintId, summaries) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Sprint board: feature sessions, bugs, test cases, progress
+// ---------------------------------------------------------------------------
+
+export async function startFeatureSession(issueId, model, text = '', imageTokens = []) {
+  return apiFetch(`/api/issues/${issueId}/start-session`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model, text, imageTokens }),
+  });
+}
+
+export async function getSprintProgress(sprintId) {
+  return apiFetch(`/api/sprints/${sprintId}/progress`);
+}
+
+export async function getBugs(issueId) {
+  return apiFetch(`/api/issues/${issueId}/bugs`);
+}
+
+export async function createBug(issueId, data) {
+  return apiFetch(`/api/issues/${issueId}/bugs`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+}
+
+export async function updateBug(bugId, data) {
+  return apiFetch(`/api/bugs/${bugId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deleteBug(bugId) {
+  return apiFetch(`/api/bugs/${bugId}`, { method: 'DELETE' });
+}
+
+// action: 'fork' (new session off the dev session) | 'send' (add to current dev session)
+export async function forkBug(bugId, model, action = 'fork') {
+  return apiFetch(`/api/bugs/${bugId}/fork`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model, action }),
+  });
+}
+
+export async function getSessionFeature(sessionId) {
+  return apiFetch(`/api/sessions/${sessionId}/feature`);
+}
+
+export async function setSessionFeatureStatus(sessionId, status) {
+  return apiFetch(`/api/sessions/${sessionId}/feature-status`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status }),
+  });
+}
+
+export async function getTestCases(issueId) {
+  return apiFetch(`/api/issues/${issueId}/test-cases`);
+}
+
+export async function createTestCase(issueId, data) {
+  return apiFetch(`/api/issues/${issueId}/test-cases`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+}
+
+export async function updateTestCase(tcId, data) {
+  return apiFetch(`/api/test-cases/${tcId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deleteTestCase(tcId) {
+  return apiFetch(`/api/test-cases/${tcId}`, { method: 'DELETE' });
+}
+
+export async function generateTestCases(issueId, model) {
+  return apiFetch(`/api/issues/${issueId}/generate-test-cases`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model }),
+  });
+}
+
 export async function updateSessionSprint(sessionId, sprintId) {
   return apiFetch(`/api/sessions/${sessionId}/sprint`, {
     method: 'PUT',
@@ -343,11 +499,42 @@ export async function updateSessionSprint(sessionId, sprintId) {
   });
 }
 
-export async function forkSession(sessionId, text, model) {
+export async function forkSession(sessionId, text, model, imageTokens = []) {
   return apiFetch(`/api/sessions/${sessionId}/fork`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text, model }),
+    body: JSON.stringify({ text, model, imageTokens }),
+  });
+}
+
+export async function getSubtasks(issueId) {
+  return apiFetch(`/api/issues/${issueId}/subtasks`);
+}
+
+// Add an existing session to the sprint board (standalone feature, or subtask of parentIssueId).
+export async function sessionToIssue(sessionId, { sprintId = null, parentIssueId = null } = {}) {
+  return apiFetch(`/api/sessions/${sessionId}/to-issue`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sprintId, parentIssueId }),
+  });
+}
+
+// Merge 2+ sessions into one new session (each parent is compacted + combined).
+export async function mergeSessions(sessionIds, text, model) {
+  return apiFetch('/api/sessions/merge', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sessionIds, text, model }),
+  });
+}
+
+// Tester "Test it" — forks a shared session into a tester-mode session.
+export async function testForkSession(sessionId, text = null) {
+  return apiFetch(`/api/sessions/${sessionId}/test-fork`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(text ? { text } : {}),
   });
 }
 

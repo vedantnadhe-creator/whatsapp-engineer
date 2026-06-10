@@ -5,6 +5,14 @@ cd "$(dirname "$0")" || exit 1
 
 echo "Starting WhatsApp AI Engineer..."
 
+# Ensure Node.js 20+ (required by @whiskeysockets/baileys)
+if [ -s "$HOME/.nvm/nvm.sh" ]; then
+    # shellcheck disable=SC1090
+    . "$HOME/.nvm/nvm.sh"
+    nvm use 20 >/dev/null 2>&1 || nvm use 20.20.2 >/dev/null 2>&1 || true
+fi
+echo "Using node: $(command -v node) ($(node --version))"
+
 if [ -f .env ]; then
     export $(grep -v '^#' .env | tr -d '\r' | xargs)
     echo "Loaded environment variables from .env"

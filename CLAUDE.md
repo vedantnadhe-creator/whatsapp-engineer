@@ -1,45 +1,24 @@
 # PluginLive Knowledge Base
 
-Knowledge base is stored in **Outline wiki** (not local files).
+Knowledge base is a **local git repo** at `/home/ubuntu/pluginlive-kb`.
 
 ## How to Access
 
 **Search KB:**
 ```bash
-curl -s -X POST https://app.getoutline.com/api/documents.search \
-  -H "Authorization: Bearer $OUTLINE_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"query":"<search term>","collectionId":"a53d4587-1881-4d8d-b254-601638589b71"}'
+grep -rl "<term>" /home/ubuntu/pluginlive-kb --include="*.md"
 ```
 
 **Read a doc:**
 ```bash
-curl -s -X POST https://app.getoutline.com/api/documents.info \
-  -H "Authorization: Bearer $OUTLINE_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"id":"<doc_id>"}'
+cat /home/ubuntu/pluginlive-kb/<path>
 ```
 
-**Update a doc:**
+**Update or create a doc:**
 ```bash
-curl -s -X POST https://app.getoutline.com/api/documents.update \
-  -H "Authorization: Bearer $OUTLINE_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"id":"<doc_id>","text":"<new markdown content>"}'
+# Edit/create the file, then:
+cd /home/ubuntu/pluginlive-kb && git add -A && git commit -m "<msg>" && git push origin main
 ```
-
-**Create a new KB doc:**
-```bash
-curl -s -X POST https://app.getoutline.com/api/documents.create \
-  -H "Authorization: Bearer $OUTLINE_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"title":"<title>","text":"<content>","collectionId":"a53d4587-1881-4d8d-b254-601638589b71","publish":true}'
-```
-
-## Collections
-
-- **Knowledge Base:** `a53d4587-1881-4d8d-b254-601638589b71` — Assessment, ATS, Infrastructure docs
-- **PRDs:** `4600ac73-0c6f-4a3f-ae0d-4fade716d0d7` — Product Requirements Documents
 
 ## Structure
 

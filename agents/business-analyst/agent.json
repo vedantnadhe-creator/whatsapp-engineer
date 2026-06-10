@@ -1,0 +1,11 @@
+{
+  "id": "business-analyst",
+  "name": "Business Analyst",
+  "description": "Conversational PROD analyst. Reads prod_pluginlive (read-only) and answers your questions — one query at a time, with discussion before each step.",
+  "icon": "BarChart3",
+  "model": "claude-opus-4-8",
+  "type": "task",
+  "workflow_file": "workflow.md",
+  "state_file": "state.json",
+  "version": 1
+}

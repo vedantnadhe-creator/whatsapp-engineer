@@ -203,6 +203,15 @@ function IssueRow({ issue, onSelect, onStatusChange, onGoToSession, selected, on
 
       <TypeBadge type={issue.type || 'task'} />
       <StageBadge stage={issue.stage || 'idea'} />
+      {issue.mode === 'design' && (
+        <span
+          className="text-[10px] uppercase px-1.5 py-0.5 rounded shrink-0"
+          style={{ color: 'var(--c-accent)', border: '1px solid var(--c-accent)', backgroundColor: 'color-mix(in srgb, var(--c-accent) 15%, transparent)' }}
+          title="Design issue — runs sessions in design mode"
+        >
+          Design
+        </span>
+      )}
 
       <span
         className="text-sm flex-1 min-w-0 truncate"

@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
+import { useAuth } from '../context/AuthContext';
 import {
   ArrowUp,
   Square,
@@ -15,12 +16,26 @@ import {
   GitBranch,
   ArrowRight,
   Share2,
+  Bell,
+  BellOff,
+  RotateCcw,
+  Pencil,
+  FlaskConical,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import ShareSessionModal from './ShareSessionModal';
+import { getSessionFeature, setSessionFeatureStatus } from '../hooks/useApi';
+
+// Sprint feature lifecycle, surfaced at the top of a feature's session.
+const FEATURE_STATUS = [
+  { v: 'in_progress', label: 'In Progress', color: '#f59e0b' },
+  { v: 'dev_completed', label: 'Dev Completed', color: '#3b82f6' },
+  { v: 'qa_pass', label: 'QA Pass', color: '#22c55e' },
+];
+const featureStatusValue = (f) => f?.qa_status === 'pass' ? 'qa_pass' : (f?.dev_status === 'dev_completed' || f?.dev_status === 'done') ? 'dev_completed' : 'in_progress';
 
 const colors = {
   bg: 'var(--c-bg)',
@@ -289,14 +304,147 @@ function SystemMessage({ message }) {
   );
 }
 
-function MessageBubble({ message }) {
+// Renders a user message: turns embedded ![alt](url) into images and [📎 name](url) into
+// file links, while showing the rest as plain text. (Attachments stay visible after sending.)
+function UserContent({ content }) {
+  if (!content) return null;
+  // The app may be served under /sessions — resolve bare /api/* urls against that base.
+  const base = window.location.pathname.startsWith('/sessions') ? '/sessions' : '';
+  const resolve = (u) => (u && u.startsWith('/api/') ? base + u : u);
+  const parts = [];
+  const re = /!\[([^\]]*)\]\(([^)]+)\)|\[📎\s*([^\]]*)\]\(([^)]+)\)/g;
+  let last = 0, m, key = 0;
+  while ((m = re.exec(content)) !== null) {
+    const before = content.slice(last, m.index).trim();
+    if (before) parts.push(<span key={`t${key++}`} className="whitespace-pre-wrap break-words">{before}</span>);
+    if (m[2]) {
+      const src = resolve(m[2]);
+      parts.push(
+        <a key={`i${key++}`} href={src} target="_blank" rel="noopener noreferrer" className="block">
+          <img src={src} alt={m[1] || 'image'} className="rounded-lg max-w-full max-h-72 my-1" style={{ border: '1px solid rgba(255,255,255,0.25)' }} />
+        </a>
+      );
+    } else if (m[4]) {
+      parts.push(
+        <a key={`f${key++}`} href={resolve(m[4])} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 underline my-1" style={{ color: '#fff' }}>
+          📎 {m[3] || 'file'}
+        </a>
+      );
+    }
+    last = re.lastIndex;
+  }
+  const tail = content.slice(last).trim();
+  if (tail) parts.push(<span key={`t${key++}`} className="whitespace-pre-wrap break-words">{tail}</span>);
+  return <div className="flex flex-col gap-1">{parts.length ? parts : <span className="whitespace-pre-wrap break-words">{content}</span>}</div>;
+}
+
+// Small icon-only action button used in the message hover toolbar.
+function MsgActionButton({ icon: Icon, label, onClick, disabled = false, active = false }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      aria-label={label}
+      title={label}
+      className="flex items-center justify-center w-6 h-6 rounded-md transition-colors duration-200 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+      style={{ color: active ? 'var(--c-status-running)' : 'var(--c-text-secondary)' }}
+      onMouseEnter={(e) => { if (!disabled && !active) e.currentTarget.style.color = 'var(--c-text)'; }}
+      onMouseLeave={(e) => { if (!active) e.currentTarget.style.color = 'var(--c-text-secondary)'; }}
+    >
+      <Icon size={13} />
+    </button>
+  );
+}
+
+// Strip embedded attachment markdown so Copy/Edit work on the user's actual words,
+// not the ![](…) / [📎 …](…) noise that keeps the attachment visible in the bubble.
+function stripAttachmentMarkdown(text) {
+  return (text || '')
+    .replace(/!\[[^\]]*\]\([^)]+\)/g, '')
+    .replace(/\[📎\s*[^\]]*\]\([^)]+\)/g, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function MessageBubble({ message, isRunning = false, onRetry, onEdit, actionsDisabled = false }) {
+  const [copied, setCopied] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [editText, setEditText] = useState('');
+
   if (message.role === 'system') return <SystemMessage message={message} />;
 
   const isUser = message.role === 'user';
   const { thinking, body } = isUser ? { thinking: null, body: message.content } : parseThinking(message.content);
 
+  const copyText = isUser ? stripAttachmentMarkdown(message.content) : (body || message.content || '');
+
+  const handleCopy = () => {
+    navigator.clipboard?.writeText(copyText || '');
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+
+  const startEdit = () => {
+    setEditText(stripAttachmentMarkdown(message.content));
+    setEditing(true);
+  };
+
+  const saveEdit = () => {
+    const t = editText.trim();
+    if (!t) return;
+    setEditing(false);
+    onEdit?.(t);
+  };
+
+  // Inline edit mode — replaces the bubble with an editable textarea.
+  if (editing) {
+    return (
+      <div className="flex justify-end mb-3">
+        <div className="w-full max-w-[80%]">
+          <textarea
+            value={editText}
+            onChange={(e) => setEditText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); saveEdit(); }
+              if (e.key === 'Escape') { e.preventDefault(); setEditing(false); }
+            }}
+            autoFocus
+            rows={Math.min(10, Math.max(2, editText.split('\n').length))}
+            className="w-full px-3.5 py-2.5 text-sm leading-relaxed rounded-xl resize-none outline-none"
+            style={{ backgroundColor: colors.surface2, color: colors.text, border: `1px solid ${colors.accent}` }}
+          />
+          <div className="flex items-center justify-end gap-2 mt-1.5">
+            <button
+              type="button"
+              onClick={() => setEditing(false)}
+              className="px-2.5 py-1 text-xs rounded-md cursor-pointer transition-colors duration-200"
+              style={{ color: colors.textSecondary, backgroundColor: colors.surface3 }}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={saveEdit}
+              disabled={!editText.trim()}
+              className="px-2.5 py-1 text-xs rounded-md cursor-pointer text-white transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+              style={{ backgroundColor: colors.accent }}
+            >
+              {isRunning ? 'Stop & send' : 'Send'}
+            </button>
+          </div>
+          <p className="text-[10px] mt-1 text-right" style={{ color: 'var(--c-text-muted)' }}>
+            {isRunning
+              ? 'Pauses the current run and restarts with your edited message'
+              : 'Sends your edited message'}
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} mb-3`}>
+    <div className={`group flex ${isUser ? 'justify-end' : 'justify-start'} mb-3`}>
       <div className="max-w-[80%]">
         {!isUser && thinking && <ThinkingBlock content={thinking} />}
         {(body || isUser) && (
@@ -311,17 +459,25 @@ function MessageBubble({ message }) {
               color: isUser ? '#ffffff' : colors.text,
             }}
           >
-            {isUser ? message.content : <MarkdownContent content={body} />}
+            {isUser ? <UserContent content={message.content} /> : <MarkdownContent content={body} />}
           </div>
         )}
-        {message.timestamp && (
-          <div
-            className={`text-[10px] font-mono mt-1 ${isUser ? 'text-right' : 'text-left'}`}
-            style={{ color: 'var(--c-text-muted)' }}
-          >
-            {formatTime(message.timestamp)}
+        <div className={`flex items-center gap-1.5 mt-1 ${isUser ? 'justify-end' : 'justify-start'}`}>
+          <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity duration-200">
+            <MsgActionButton icon={copied ? Check : Copy} label={copied ? 'Copied' : 'Copy message'} onClick={handleCopy} active={copied} />
+            {onRetry && (
+              <MsgActionButton icon={RotateCcw} label="Retry — resend this message" onClick={onRetry} disabled={actionsDisabled} />
+            )}
+            {isUser && onEdit && (
+              <MsgActionButton icon={Pencil} label="Edit & resend" onClick={startEdit} disabled={actionsDisabled} />
+            )}
           </div>
-        )}
+          {message.timestamp && (
+            <span className="text-[10px] font-mono" style={{ color: 'var(--c-text-muted)' }}>
+              {formatTime(message.timestamp)}
+            </span>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -403,22 +559,45 @@ export default function Workspace({
   wsConnected = false,
   forkTriggerId = null,
   onForkTriggerConsumed,
+  onTestFork,
+  testForking = false,
 }) {
+  const { user: authUser } = useAuth();
+  const uid = authUser?.id || '';
+  // Tester gate: a tester viewing a non-tester session (a dev/design session shared to them)
+  // can't chat — they must fork it into a tester session via "Test it".
+  const showTestGate = !isNewSession && authUser?.role === 'tester' && session?.id && session?.mode !== 'tester';
   const [inputText, setInputText] = useState('');
   const [selectedModel, setSelectedModel] = useState(
     () => models.find((m) => m.default)?.id || models[0]?.id || ''
   );
   const [selectedSprint, setSelectedSprint] = useState('');
   const [sessionType, setSessionType] = useState('task');
+  const [sessionName, setSessionName] = useState('');
+
+  // Linked sprint feature (if this session was started from the Sprint Board) → drives the status control.
+  const [feature, setFeature] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    if (session?.id && !isNewSession) {
+      getSessionFeature(session.id).then(f => { if (alive) setFeature(f); }).catch(() => {});
+    } else { setFeature(null); }
+    return () => { alive = false; };
+  }, [session?.id, session?.status, isNewSession]);
   const [newSessionError, setNewSessionError] = useState('');
   const [accessNote, setAccessNote] = useState('');
   const [showFork, setShowFork] = useState(false);
   const [forkText, setForkText] = useState('');
+  const [testText, setTestText] = useState('');
   const [showShare, setShowShare] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [recording, setRecording] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
   const [attachments, setAttachments] = useState([]);
+  const [notifySound, setNotifySound] = useState(() => {
+    if (!session?.id) return false;
+    try { return localStorage.getItem(`olibot:notify:${uid}:${session.id}`) === '1'; } catch { return false; }
+  });
   const textareaRef = useRef(null);
   const fileInputRef = useRef(null);
   const mediaRecorderRef = useRef(null);
@@ -427,8 +606,30 @@ export default function Workspace({
   const messagesContainerRef = useRef(null);
   const prevMessageCountRef = useRef(0);
   const userScrolledUpRef = useRef(false);
+  const prevStatusRef = useRef(session?.status);
 
   const isRunning = session?.status === 'running';
+
+  // Retry: resend the user turn at/before this message (handles errors like
+  // "You've hit your session limit" where the user otherwise re-types "retry").
+  const handleRetryMessage = useCallback((index) => {
+    if (!onSendMessage) return;
+    let text = null;
+    for (let j = index; j >= 0; j--) {
+      if (messages[j]?.role === 'user') { text = stripAttachmentMarkdown(messages[j].content); break; }
+    }
+    if (text) onSendMessage(text, selectedModel, []);
+  }, [messages, onSendMessage, selectedModel]);
+
+  // Edit & resend: pause the current run (if any) then send the edited message.
+  const handleEditResend = useCallback(async (newText) => {
+    const text = (newText || '').trim();
+    if (!text || !onSendMessage) return;
+    if (isRunning && onStop) {
+      try { await onStop(); } catch { /* fall through and still send */ }
+    }
+    onSendMessage(text, selectedModel, []);
+  }, [isRunning, onStop, onSendMessage, selectedModel]);
 
   // Track if user has scrolled up
   const handleScroll = useCallback(() => {
@@ -464,6 +665,54 @@ export default function Workspace({
     }
   }, [forkTriggerId, session?.id, session?.status, onForkTriggerConsumed]);
 
+  // Sync notify-sound toggle when switching sessions
+  useEffect(() => {
+    if (!session?.id) { setNotifySound(false); return; }
+    try {
+      setNotifySound(localStorage.getItem(`olibot:notify:${uid}:${session.id}`) === '1');
+    } catch { setNotifySound(false); }
+  }, [session?.id]);
+
+  const toggleNotifySound = useCallback(() => {
+    if (!session?.id) return;
+    setNotifySound((prev) => {
+      const next = !prev;
+      try { localStorage.setItem(`olibot:notify:${uid}:${session.id}`, next ? '1' : '0'); } catch {}
+      return next;
+    });
+  }, [session?.id]);
+
+  // Play a short beep when the bot finishes responding (status: running -> not running)
+  useEffect(() => {
+    const prev = prevStatusRef.current;
+    const curr = session?.status;
+    prevStatusRef.current = curr;
+    if (!notifySound) return;
+    if (prev !== 'running' || curr === 'running' || !curr) return;
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return;
+      const ctx = new Ctx();
+      const t0 = ctx.currentTime;
+      const playTone = (freq, start, dur = 0.22) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(freq, t0 + start);
+        gain.gain.setValueAtTime(0, t0 + start);
+        gain.gain.linearRampToValueAtTime(0.6, t0 + start + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.001, t0 + start + dur);
+        osc.connect(gain).connect(ctx.destination);
+        osc.start(t0 + start);
+        osc.stop(t0 + start + dur + 0.02);
+      };
+      playTone(880, 0);
+      playTone(1320, 0.22);
+      playTone(1760, 0.44, 0.28);
+      setTimeout(() => { try { ctx.close(); } catch {} }, 1200);
+    } catch {}
+  }, [session?.status, notifySound]);
+
   // Auto-grow textarea
   const adjustTextarea = useCallback(() => {
     const ta = textareaRef.current;
@@ -494,9 +743,9 @@ export default function Workspace({
     if (!onUploadFile || attachments.length === 0) return [];
     const results = await Promise.allSettled(
       attachments.map(async (att) => {
-        if (att.token) return att.token;
+        if (att.token) return { token: att.token, url: att.url, name: att.name, isImage: att.isImage };
         const result = await onUploadFile(att.file);
-        return result?.token || null;
+        return result?.token ? { token: result.token, url: result.url, name: att.name, isImage: att.isImage } : null;
       })
     );
     return results.map((r) => r.status === 'fulfilled' ? r.value : null).filter(Boolean);
@@ -505,19 +754,27 @@ export default function Workspace({
   const handleSend = async () => {
     const text = inputText.trim();
     if (!text && attachments.length === 0) return;
-    // Upload any pending attachments — get tokens for backend to resolve file paths
-    let imageTokens = [];
+    // Upload any pending attachments — get tokens (for Claude) + urls (for display)
+    let uploaded = [];
     if (attachments.length > 0) {
-      imageTokens = await uploadAttachments();
+      uploaded = await uploadAttachments();
     }
+    const imageTokens = uploaded.map((u) => u.token).filter(Boolean);
     if (!text && imageTokens.length === 0) return;
-    const finalText = text || (imageTokens.length > 0 ? '[image attached]' : '');
+    // Embed the uploaded files into the message so they stay visible in the chat after sending.
+    const attachMarkdown = uploaded
+      .filter((u) => u.url)
+      .map((u) => (u.isImage ? `![${u.name || 'image'}](${u.url})` : `[📎 ${u.name || 'file'}](${u.url})`))
+      .join('\n');
+    const baseText = text || (imageTokens.length > 0 ? '' : '');
+    const finalText = [baseText, attachMarkdown].filter(Boolean).join('\n\n') || '[attachment]';
     if (isNewSession && onStartSession) {
       if (!selectedSprint) { setNewSessionError('Please choose a sprint or select "No sprint".'); return; }
       if (!sessionType) { setNewSessionError('Please select a type.'); return; }
       setNewSessionError('');
       const sprintToSend = selectedSprint === '__none__' ? null : selectedSprint;
-      onStartSession(finalText, selectedModel, imageTokens, sprintToSend, sessionType, []);
+      onStartSession(finalText, selectedModel, imageTokens, sprintToSend, sessionType, [], sessionName.trim() || null);
+      setSessionName('');
     } else if (onSendMessage) {
       onSendMessage(finalText, selectedModel, imageTokens);
     }
@@ -629,6 +886,15 @@ export default function Workspace({
             {session.owner_name || session.owner_email}
           </span>
         )}
+        {session.name && (
+          <span
+            className="truncate text-sm font-medium max-w-[260px]"
+            style={{ color: colors.text }}
+            title={session.name}
+          >
+            {session.name}
+          </span>
+        )}
         <span
           className="font-mono text-xs"
           style={{ color: colors.textSecondary }}
@@ -663,24 +929,30 @@ export default function Workspace({
         >
           <Share2 size={14} style={{ color: colors.textSecondary }} />
         </button>
-        {(() => {
-          const STAGE_ORDER = ['idea', 'design', 'development', 'qa', 'done'];
-          const STAGE_LABELS = { idea: 'Idea', design: 'Design', development: 'Development', qa: 'QA', done: 'Done' };
-          const current = session.stage || 'idea';
-          const idx = STAGE_ORDER.indexOf(current);
-          const next = idx >= 0 && idx < STAGE_ORDER.length - 1 ? STAGE_ORDER[idx + 1] : null;
-          if (!onAdvanceStage || !next || session.status === 'running') return null;
+        <button
+          onClick={toggleNotifySound}
+          className="p-1 rounded cursor-pointer hover:opacity-80 transition-opacity"
+          title={notifySound ? 'Sound on — beeps when bot finishes (click to mute)' : 'Sound off — click to get a beep when bot finishes'}
+        >
+          {notifySound
+            ? <Bell size={14} style={{ color: 'var(--c-accent)' }} />
+            : <BellOff size={14} style={{ color: colors.textSecondary }} />}
+        </button>
+        {feature && (() => {
+          const val = featureStatusValue(feature);
+          const meta = FEATURE_STATUS.find(s => s.v === val) || FEATURE_STATUS[0];
           return (
-            <button
-              onClick={() => onAdvanceStage(next)}
-              disabled={busy}
-              className="flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium cursor-pointer transition-colors hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
-              style={{ backgroundColor: 'var(--c-accent)', color: '#fff' }}
-              title={`Advance to ${STAGE_LABELS[next]} — spawns a stage-specific agent`}
-            >
-              <ArrowRight size={12} />
-              Next: {STAGE_LABELS[next]}
-            </button>
+            <div className="flex items-center gap-1.5" title="Feature status — In Progress → Dev Completed (set on UAT push / when the agent finishes) → QA Pass (100%)">
+              <span className="text-[10px] uppercase tracking-wide" style={{ color: colors.textSecondary }}>Status</span>
+              <select
+                value={val}
+                onChange={async (e) => { const upd = await setSessionFeatureStatus(session.id, e.target.value); if (upd && upd.id) setFeature(upd); }}
+                className="text-[11px] font-medium rounded-full px-2 py-1 cursor-pointer outline-none border appearance-none"
+                style={{ backgroundColor: meta.color + '22', color: meta.color, borderColor: meta.color + '55' }}
+              >
+                {FEATURE_STATUS.map(s => <option key={s.v} value={s.v} style={{ color: '#fff', backgroundColor: '#1a1a1a' }}>{s.label}</option>)}
+              </select>
+            </div>
           );
         })()}
         <span
@@ -708,6 +980,29 @@ export default function Workspace({
         <p className="text-sm mb-6" style={{ color: colors.textSecondary }}>
           Start a new session to begin working with OliBot.
         </p>
+
+        {/* Name */}
+        <div className="mb-4 text-left">
+          <label className="block text-[11px] font-medium mb-1.5 uppercase tracking-wide" style={{ color: colors.textSecondary }}>
+            Name
+          </label>
+          <input
+            type="text"
+            value={sessionName}
+            onChange={(e) => setSessionName(e.target.value)}
+            placeholder="e.g. Fix archive button on job roles"
+            maxLength={120}
+            className="w-full px-3 py-2 rounded-lg text-sm outline-none"
+            style={{
+              backgroundColor: colors.surface2,
+              border: `1px solid ${colors.border}`,
+              color: colors.text,
+            }}
+          />
+          <p className="text-[10px] mt-1" style={{ color: colors.textSecondary }}>
+            Optional — used as the label in the sidebar. Falls back to the first line of your prompt.
+          </p>
+        </div>
 
         {/* Type */}
         <div className="mb-4 text-left">
@@ -799,7 +1094,16 @@ export default function Workspace({
           </p>
         </div>
       ) : (
-        messages.map((msg, i) => <MessageBubble key={i} message={msg} />)
+        messages.map((msg, i) => (
+          <MessageBubble
+            key={i}
+            message={msg}
+            isRunning={isRunning}
+            actionsDisabled={isRunning || busy}
+            onRetry={msg.role === 'system' ? undefined : () => handleRetryMessage(i)}
+            onEdit={msg.role === 'user' ? handleEditResend : undefined}
+          />
+        ))
       )}
       {typing && <TypingIndicator />}
       <div ref={messagesEndRef} />
@@ -807,6 +1111,52 @@ export default function Workspace({
   );
 
   // --- No Access Footer ---
+  // --- Tester "Test it" gate (shown instead of the composer for testers on a shared dev session) ---
+  const testGate = (
+    <div
+      className="sticky bottom-0 flex-shrink-0 p-4"
+      style={{ backgroundColor: colors.bg, borderTop: `1px solid ${colors.border}` }}
+    >
+      <div
+        className="rounded-xl p-4 flex flex-col gap-3"
+        style={{ backgroundColor: colors.surface2, border: `1px solid ${colors.border}` }}
+      >
+        <div className="flex items-start gap-2">
+          <FlaskConical size={16} style={{ color: colors.accent, marginTop: 2 }} />
+          <div>
+            <p className="text-sm font-medium" style={{ color: colors.text }}>A developer shared this session for testing</p>
+            <p className="text-xs mt-0.5" style={{ color: colors.textSecondary }}>
+              You can't chat on this session directly. Describe what you want to test, then start your tester session — it forks this work into your own QA session with the tester workflow{authUser?.canEdit === false ? ' (read-only — you can run tests but not modify code)' : ''}.
+            </p>
+          </div>
+        </div>
+        <textarea
+          value={testText}
+          onChange={(e) => setTestText(e.target.value)}
+          placeholder="What do you want to test? (e.g. verify the tester role gating, check the can_edit toggle, run the login flow…) — leave blank for a general QA pass"
+          rows={2}
+          className="w-full text-sm px-3 py-2 rounded-lg outline-none resize-none"
+          style={{ backgroundColor: colors.bg, border: `1px solid ${colors.border}`, color: colors.text }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && onTestFork && !testForking) {
+              e.preventDefault();
+              onTestFork(testText.trim() || null);
+            }
+          }}
+        />
+        <button
+          onClick={() => onTestFork && onTestFork(testText.trim() || null)}
+          disabled={testForking || !onTestFork}
+          className="self-start flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-white cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          style={{ backgroundColor: colors.accent }}
+        >
+          <FlaskConical size={14} />
+          {testForking ? 'Starting tester session…' : (testText.trim() ? 'Start testing' : 'Test it')}
+        </button>
+      </div>
+    </div>
+  );
+
   const noAccessFooter = (
     <div
       className="sticky bottom-0 flex-shrink-0 p-4"
@@ -1049,7 +1399,7 @@ export default function Workspace({
     >
       {header}
       {isNewSession ? newSessionView : messagesView}
-      {hasAccess ? inputArea : noAccessFooter}
+      {showTestGate ? testGate : (hasAccess ? inputArea : noAccessFooter)}
       {forkDialog}
       {showShare && session?.id && (
         <ShareSessionModal sessionId={session.id} onClose={() => setShowShare(false)} />

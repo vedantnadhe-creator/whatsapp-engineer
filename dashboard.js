@@ -23,7 +23,9 @@ const pendingImages = new Map();
 function storePendingImage(filePath) {
     const token = `img-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     pendingImages.set(token, filePath);
-    setTimeout(() => { try { fs.unlinkSync(pendingImages.get(token)); } catch (_) { } pendingImages.delete(token); }, 5 * 60 * 1000);
+    // Expire only the token→path mapping after 5 min. Do NOT delete the file —
+    // it's served at /api/uploads/<name> and referenced in the chat history.
+    setTimeout(() => { pendingImages.delete(token); }, 5 * 60 * 1000);
     return token;
 }
 export { pendingImages };
@@ -92,7 +94,7 @@ a{color:#60a5fa;text-decoration:none}</style></head>
             if (!user) return res.status(401).json({ error: 'Invalid email or password' });
             const token = signJwt({ id: user.id, email: user.email, displayName: user.display_name, isAdmin: !!user.is_admin, role: user.role });
             res.cookie('wa_token', token, { httpOnly: true, sameSite: 'lax', maxAge: 30 * 24 * 60 * 60 * 1000, secure: true, path: '/' });
-            res.json({ success: true, user: { id: user.id, email: user.email, displayName: user.display_name, isAdmin: !!user.is_admin, role: user.role } });
+            res.json({ success: true, user: { id: user.id, email: user.email, displayName: user.display_name, isAdmin: !!user.is_admin, role: user.role, canEdit: user.can_edit !== 0, sprintOnly: user.sprint_only === 1 } });
         } catch (err) { res.status(500).json({ error: err.message }); }
     });
 
@@ -104,7 +106,7 @@ a{color:#60a5fa;text-decoration:none}</style></head>
     app.get('/api/me', requireAuth, (req, res) => {
         const user = store.getUserById(req.user.id);
         if (!user) return res.status(404).json({ error: 'User not found' });
-        res.json({ id: user.id, email: user.email, phone: user.phone, displayName: user.display_name, isAdmin: !!user.is_admin, role: user.role });
+        res.json({ id: user.id, email: user.email, phone: user.phone, displayName: user.display_name, isAdmin: !!user.is_admin, role: user.role, canEdit: user.can_edit !== 0, sprintOnly: user.sprint_only === 1 });
     });
 
     // ── Stats ───────────────────────────────────────────────
@@ -138,10 +140,19 @@ a{color:#60a5fa;text-decoration:none}</style></head>
             const page = parseInt(req.query.page) || 1;
             const limit = parseInt(req.query.limit) || 20;
             const offset = (page - 1) * limit;
+            const q = (req.query.q || '').toString().trim();
             const showAll = store.getSetting('show_all_sessions') === 'true';
             const isAdmin = req.user.isAdmin || req.user.is_admin;
             let sessions, total;
-            if (showAll || isAdmin) {
+            if (q) {
+                if (showAll || isAdmin) {
+                    sessions = store.searchSessionsForUser(req.user.id, q, limit, offset);
+                    total = store.countSearchSessionsForUser(q);
+                } else {
+                    sessions = store.searchOwnSessions(req.user.id, q, limit, offset);
+                    total = store.countSearchOwnSessions(req.user.id, q);
+                }
+            } else if (showAll || isAdmin) {
                 sessions = store.getSessionsForUser(req.user.id, limit, offset);
                 total = store.countAllSessions();
             } else {
@@ -175,8 +186,10 @@ a{color:#60a5fa;text-decoration:none}</style></head>
     // Available Claude models
     app.get('/api/models', requireAuth, (req, res) => {
         res.json([
-            { id: 'claude-opus-4-7', name: 'Opus 4.7', description: 'Latest — most capable for complex work', default: true },
-            { id: 'opus', name: 'Opus 4.6', description: 'Previous Opus generation' },
+            { id: 'claude-opus-4-8', name: 'Opus 4.8', description: 'Latest — most capable for complex work', default: true },
+            { id: 'fable', name: 'Fable 5', description: 'Most capable for hardest, long-running tasks · ~2× faster than Opus but uses ~2× the tokens' },
+            { id: 'claude-opus-4-7', name: 'Opus 4.7', description: 'Previous Opus generation' },
+            { id: 'opus', name: 'Opus 4.6', description: 'Older Opus generation' },
             { id: 'sonnet', name: 'Sonnet 4.6', description: 'Best for everyday tasks' },
             { id: 'haiku', name: 'Haiku 4.5', description: 'Fastest for quick answers' },
         ]);
@@ -312,7 +325,7 @@ a{color:#60a5fa;text-decoration:none}</style></head>
 
     app.post('/api/admin/users', requireAuth, requireAdmin, async (req, res) => {
         try {
-            const { email, displayName, role, isAdmin } = req.body;
+            const { email, displayName, role, isAdmin, canEdit, sprintOnly } = req.body;
             if (!email) return res.status(400).json({ error: 'email is required' });
 
             // Check if user already exists
@@ -326,6 +339,10 @@ a{color:#60a5fa;text-decoration:none}</style></head>
                 displayName: displayName || email.split('@')[0],
                 role: role || 'developer',
                 isAdmin: isAdmin ? 1 : 0,
+                // Testers gate code-edit access; everyone else can edit by default.
+                canEdit: canEdit === undefined ? 1 : (canEdit ? 1 : 0),
+                // Sprint-only is a tester scope; ignored (0) for non-testers.
+                sprintOnly: role === 'tester' && sprintOnly ? 1 : 0,
                 passwordHash,
                 createdBy: req.user.id,
             });
@@ -362,12 +379,28 @@ a{color:#60a5fa;text-decoration:none}</style></head>
         } catch (err) { res.status(500).json({ error: err.message }); }
     });
 
+    // Update a user's role / admin / code-edit access (Users settings panel).
+    app.patch('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) => {
+        try {
+            const user = store.getUserById(req.params.id);
+            if (!user) return res.status(404).json({ error: 'User not found' });
+            const { role, isAdmin, canEdit, sprintOnly } = req.body;
+            const updated = store.updateUser(user.id, {
+                ...(role !== undefined ? { role } : {}),
+                ...(isAdmin !== undefined ? { isAdmin: !!isAdmin } : {}),
+                ...(canEdit !== undefined ? { canEdit: !!canEdit } : {}),
+                ...(sprintOnly !== undefined ? { sprintOnly: !!sprintOnly } : {}),
+            });
+            res.json({ success: true, user: { id: updated.id, email: updated.email, role: updated.role, is_admin: updated.is_admin, can_edit: updated.can_edit, sprint_only: updated.sprint_only } });
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
     // ── Users (self) ────────────────────────────────────────────
 
     app.get('/api/users', requireAuth, (req, res) => {
         // Non-admins get a minimal list for sharing purposes
         try {
-            const users = store.getAllUsers().map(u => ({ id: u.id, displayName: u.display_name, email: u.email, role: u.role }));
+            const users = store.getAllUsers().map(u => ({ id: u.id, displayName: u.display_name, email: u.email, role: u.role, isAdmin: u.is_admin, canEdit: u.can_edit, sprintOnly: u.sprint_only }));
             res.json(users);
         } catch (err) { res.status(500).json({ error: err.message }); }
     });
@@ -385,8 +418,16 @@ a{color:#60a5fa;text-decoration:none}</style></head>
 
     app.post('/api/sessions/start', requireAuth, async (req, res) => {
         try {
-            const { text, model, sprintId, type, labels } = req.body;
+            const { text, model, sprintId, type, labels, name, mode } = req.body;
             if (!text) return res.status(400).json({ error: 'text is required' });
+            // Mode is role-driven: design → designs repo, tester → tester persona/gating, else developer.
+            const sessionMode = (mode === 'design' || mode === 'tester') ? mode : 'developer';
+            const isDesign = sessionMode === 'design';
+            const sessionWorkingDir = isDesign ? config.DESIGNS_DIR : null;
+            // Testers' code-edit access comes from their user setting (JWT lacks can_edit → read from store).
+            const testerEditAccess = sessionMode === 'tester'
+                ? (store.getUserById(req.user.id)?.can_edit !== 0)
+                : undefined;
             const allowedTypes = ['task', 'bug', 'feature', 'improvement'];
             const sessionType = allowedTypes.includes(type) ? type : null;
             if (!sessionType) return res.status(400).json({ error: 'type is required (task, bug, feature, improvement)' });
@@ -398,13 +439,19 @@ a{color:#60a5fa;text-decoration:none}</style></head>
             const startInstruction = /^(start fresh|new task|ignore previous)/i.test(text) ? text : `[start fresh] ${text}`;
             const tokens = Array.isArray(req.body.imageTokens) ? req.body.imageTokens : (req.body.imageToken ? [req.body.imageToken] : []);
             const imagePath = tokens.map(t => { const p = pendingImages.get(t); pendingImages.delete(t); return p; }).filter(Boolean)[0] || null;
-            const result = await messageHandler({ isWeb: true, phone: String(phone), text: startInstruction, pushName: req.user.displayName || 'Dashboard', imagePath, ownerId: req.user.id, model: model || 'claude-opus-4-7' });
-            // Attach sprint + type + tags and auto-create a session task issue
+            const result = await messageHandler({ isWeb: true, phone: String(phone), text: startInstruction, pushName: req.user.displayName || 'Dashboard', imagePath, ownerId: req.user.id, model: model || 'claude-opus-4-8', workingDir: sessionWorkingDir, mode: sessionMode, editAccess: testerEditAccess });
+            // Attach sprint + type + tags + name and auto-create a session task issue
             if (result?.sessionId) {
+                const sessionName = (typeof name === 'string' && name.trim())
+                    ? name.trim().slice(0, 120)
+                    : text.replace(/^\[start fresh\]\s*/i, '').trim().slice(0, 60);
                 store.updateSession(result.sessionId, {
                     sprint_id: sprintId || null,
                     type: sessionType,
                     labels: tagList,
+                    name: sessionName,
+                    mode: sessionMode,
+                    ...(sessionMode === 'tester' ? { edit_access: testerEditAccess ? 1 : 0 } : {}),
                 });
                 const cleanTask = text.replace(/^\[start fresh\]\s*/i, '').trim();
                 const issue = store.createIssue({
@@ -424,6 +471,40 @@ a{color:#60a5fa;text-decoration:none}</style></head>
                 }
             }
             res.json({ success: true, sessionId: result?.sessionId });
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    // Rename session
+    app.put('/api/sessions/:id/name', requireAuth, (req, res) => {
+        try {
+            const sessionId = req.params.id;
+            const session = store.getSession(sessionId);
+            if (!session) return res.status(404).json({ error: 'Session not found' });
+            const isOwner = session.owner_id === req.user.id;
+            const isCollab = store.isCollaborator(sessionId, req.user.id);
+            if (!isOwner && !isCollab && !req.user.isAdmin) {
+                return res.status(403).json({ error: 'You do not have access to rename this session' });
+            }
+            const raw = (req.body?.name ?? '').toString().trim();
+            const name = raw ? raw.slice(0, 120) : null;
+            store.updateSession(sessionId, { name });
+            res.json({ success: true, name });
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    // Delete session — admin only. Removes the session and all its messages/links/requests
+    app.delete('/api/sessions/:id', requireAuth, requireAdmin, (req, res) => {
+        try {
+            const sessionId = req.params.id;
+            const session = store.getSession(sessionId);
+            if (!session) return res.status(404).json({ error: 'Session not found' });
+            // Stop it first if it's still running
+            if (executionEngine && executionEngine.isRunning?.(sessionId)) {
+                try { executionEngine.stopSession(sessionId); } catch (_) { }
+            }
+            store.deleteSession(sessionId);
+            wsBroadcast('session_deleted', { sessionId });
+            res.json({ success: true });
         } catch (err) { res.status(500).json({ error: err.message }); }
     });
 
@@ -487,6 +568,11 @@ Do NOT ask for confirmation — proceed through each step automatically. If any 
             const isOwner = session.owner_id === req.user.id;
             const isCollab = store.isCollaborator(sessionId, req.user.id);
             if (!isOwner && !isCollab && !req.user.isAdmin) return res.status(403).json({ error: 'You do not have access to this session. Request access first.' });
+            // Testers cannot chat directly on a dev/design session shared with them — they must
+            // fork it into their own tester session via "Test it" first.
+            if (req.user.role === 'tester' && session.mode !== 'tester') {
+                return res.status(403).json({ error: 'Testers cannot chat on this session directly — use "Test it" to start a tester session.', code: 'TESTER_MUST_FORK' });
+            }
             const tokens = Array.isArray(req.body.imageTokens) ? req.body.imageTokens : (req.body.imageToken ? [req.body.imageToken] : []);
             const imagePath = tokens.map(t => { const p = pendingImages.get(t); pendingImages.delete(t); return p; }).filter(Boolean)[0] || null;
             await messageHandler({ isWeb: true, phone: String(phone), text: `[resume ${sessionId}] ${text}`, pushName: req.user.displayName || 'Dashboard', imagePath });
@@ -501,8 +587,151 @@ Do NOT ask for confirmation — proceed through each step automatically. If any 
             const { text, model } = req.body;
             if (!text) return res.status(400).json({ error: 'text is required — describe what the new session should do' });
             const phone = req.user.phone || req.user.email || req.user.id;
-            const result = await executionEngine.forkSession(parentId, text, String(phone), req.user.id, model);
+            const tokens = Array.isArray(req.body.imageTokens) ? req.body.imageTokens : (req.body.imageToken ? [req.body.imageToken] : []);
+            const imagePath = tokens.map(t => { const p = pendingImages.get(t); pendingImages.delete(t); return p; }).filter(Boolean)[0] || null;
+            const result = await executionEngine.forkSession(parentId, text, String(phone), req.user.id, model, { imagePath });
+            // If the parent session is part of a sprint feature, file the fork as a subtask of that feature.
+            if (result?.sessionId) {
+                const parentFeature = store.getFeatureBySession(parentId);
+                if (parentFeature) {
+                    const sub = store.createIssue({
+                        title: text.toString().slice(0, 120),
+                        createdBy: req.user.id,
+                        sprintId: parentFeature.sprint_id,
+                        parentIssueId: parentFeature.id,
+                        sessionId: result.sessionId,
+                        platform: parentFeature.platform || '',
+                        type: 'task',
+                    });
+                    store.updateIssue(sub.id, { dev_status: 'in_progress', status: 'in_progress' });
+                    store.updateSession(result.sessionId, { sprint_id: parentFeature.sprint_id || null });
+                    wsBroadcast('issue_created', { issue: store.getIssue(sub.id) });
+                }
+            }
             res.json({ success: true, sessionId: result.sessionId, forkedFrom: result.forkedFrom });
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    // Merge 2+ sessions into one new session. Each parent is compacted and combined
+    // (same context machinery as fork), then a fresh merged session is spawned.
+    app.post('/api/sessions/merge', requireAuth, async (req, res) => {
+        try {
+            if (!executionEngine) return res.status(500).json({ error: 'Execution engine not attached' });
+            const { sessionIds, text, model } = req.body;
+            if (!Array.isArray(sessionIds) || sessionIds.filter(Boolean).length < 2) {
+                return res.status(400).json({ error: 'Provide at least 2 sessionIds to merge' });
+            }
+            // Only merge sessions the user can see (own/admin), to avoid leaking context.
+            const selfPhone = req.user.phone || req.user.email || req.user.id;
+            const visible = sessionIds.filter(id => {
+                const s = store.getSession(id);
+                return s && (req.user.isAdmin || s.owner_id === req.user.id || s.user_phone === selfPhone);
+            });
+            if (visible.length < 2) return res.status(403).json({ error: 'You can only merge your own sessions (need at least 2).' });
+            const task = (typeof text === 'string' && text.trim())
+                ? text.trim()
+                : 'Continue from the combined context of the merged sessions.';
+            const phone = req.user.phone || req.user.email || req.user.id;
+            const result = await executionEngine.mergeSessions(visible, task, String(phone), req.user.id, model || null);
+            res.json({ success: true, sessionId: result.sessionId, mergedFrom: result.mergedFrom });
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    // Tester "Test it": fork a shared session into a tester-mode session the tester can chat in.
+    // Edit access on the fork is governed by the tester's user setting (users.can_edit).
+    app.post('/api/sessions/:id/test-fork', requireAuth, async (req, res) => {
+        try {
+            if (!executionEngine) return res.status(500).json({ error: 'Execution engine not attached' });
+            const parentId = req.params.id;
+            const parent = store.getSession(parentId);
+            if (!parent) return res.status(404).json({ error: 'Session not found' });
+            const phone = req.user.phone || req.user.email || req.user.id;
+            const editAccess = store.getUserById(req.user.id)?.can_edit !== 0;
+            const task = (typeof req.body?.text === 'string' && req.body.text.trim())
+                ? req.body.text.trim()
+                : `Run a QA pass on the work in session ${parentId}. Review what changed by reading the code/diff and session history yourself, infer the expected behavior, then propose and run test cases and report findings. Do not pause to ask for a PRD or acceptance criteria — proceed autonomously.`;
+            const result = await executionEngine.forkSession(parentId, task, String(phone), req.user.id, req.body?.model || null, { mode: 'tester', editAccess });
+            res.json({ success: true, sessionId: result.sessionId, forkedFrom: result.forkedFrom, editAccess });
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    // ── Agents ────────────────────────────────────────────────
+
+    const AGENTS_DIR = path.join(__dirname, 'agents');
+
+    function loadAgent(agentId) {
+        const safeId = String(agentId).replace(/[^a-zA-Z0-9_-]/g, '');
+        if (!safeId) return null;
+        const dir = path.join(AGENTS_DIR, safeId);
+        const metaPath = path.join(dir, 'agent.json');
+        if (!fs.existsSync(metaPath)) return null;
+        const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+        const workflowPath = path.join(dir, meta.workflow_file || 'workflow.md');
+        const statePath = path.join(dir, meta.state_file || 'state.json');
+        const workflow = fs.existsSync(workflowPath) ? fs.readFileSync(workflowPath, 'utf8') : '';
+        let state = {};
+        if (fs.existsSync(statePath)) {
+            try { state = JSON.parse(fs.readFileSync(statePath, 'utf8')); } catch (_) { state = {}; }
+        }
+        return { ...meta, dir, workflow, state, workflowPath, statePath };
+    }
+
+    function listAgents() {
+        if (!fs.existsSync(AGENTS_DIR)) return [];
+        return fs.readdirSync(AGENTS_DIR, { withFileTypes: true })
+            .filter(d => d.isDirectory())
+            .map(d => loadAgent(d.name))
+            .filter(Boolean)
+            .map(a => ({ id: a.id, name: a.name, description: a.description, icon: a.icon, model: a.model, version: a.version, lastRunAt: a.state?.last_run_at || null }));
+    }
+
+    app.get('/api/agents', requireAuth, (req, res) => {
+        try { res.json({ agents: listAgents() }); }
+        catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    app.get('/api/agents/:id', requireAuth, (req, res) => {
+        try {
+            const agent = loadAgent(req.params.id);
+            if (!agent) return res.status(404).json({ error: 'Agent not found' });
+            res.json({ agent });
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    app.post('/api/agents/:id/run', requireAuth, async (req, res) => {
+        try {
+            const agent = loadAgent(req.params.id);
+            if (!agent) return res.status(404).json({ error: 'Agent not found' });
+
+            const phone = req.body.phone || req.user.phone || req.user.email || req.user.id;
+            const userOverride = (req.body?.note || '').toString().trim();
+            const stateBlock = `## Current agent state (from ${agent.statePath})\n\n\`\`\`json\n${JSON.stringify(agent.state, null, 2)}\n\`\`\``;
+            const triggeredBy = req.user.displayName || req.user.email || req.user.id;
+            const prompt = [
+                `[start fresh] You are running the **${agent.name}** agent (${agent.id}).`,
+                `Triggered by: ${triggeredBy} on ${new Date().toISOString()}`,
+                userOverride ? `\nUser note for this run: ${userOverride}` : '',
+                `\n${stateBlock}`,
+                `\n---\n\n${agent.workflow}`,
+            ].filter(Boolean).join('\n');
+
+            const result = await messageHandler({
+                isWeb: true,
+                phone: String(phone),
+                text: prompt,
+                pushName: req.user.displayName || 'Agent',
+                ownerId: req.user.id,
+                model: agent.model || 'claude-opus-4-8',
+            });
+
+            if (result?.sessionId) {
+                store.updateSession(result.sessionId, {
+                    type: agent.type || 'task',
+                    name: `${agent.name} — ${new Date().toISOString().slice(0, 16).replace('T', ' ')}`,
+                    labels: ['agent', agent.id],
+                });
+            }
+            res.json({ success: true, sessionId: result?.sessionId, agentId: agent.id });
         } catch (err) { res.status(500).json({ error: err.message }); }
     });
 
@@ -751,6 +980,79 @@ Do NOT ask for confirmation — proceed through each step automatically. If any 
         } catch (err) { res.status(500).json({ error: err.message }); }
     });
 
+    // ── Claude Auth ─────────────────────────────────────────────
+    let pendingAuthProc = null;
+
+    app.get('/api/claude/auth-status', requireAuth, async (req, res) => {
+        try {
+            const { execSync } = await import('child_process');
+            const raw = execSync(`${config.CLAUDE_BIN} auth status 2>&1`, { timeout: 10000, encoding: 'utf8' });
+            try {
+                const status = JSON.parse(raw.trim());
+                res.json({ ...status, raw: null });
+            } catch {
+                const loggedIn = /logged.?in/i.test(raw);
+                res.json({ loggedIn, raw: raw.trim() });
+            }
+        } catch (err) {
+            res.json({ loggedIn: false, raw: err.message });
+        }
+    });
+
+    app.post('/api/claude/auth-start', requireAuth, requireAdmin, async (req, res) => {
+        try {
+            if (pendingAuthProc) { try { pendingAuthProc.kill(); } catch {} pendingAuthProc = null; }
+            const { spawn } = await import('child_process');
+            const proc = spawn(config.CLAUDE_BIN, ['auth', 'login', '--claudeai'], {
+                stdio: ['pipe', 'pipe', 'pipe'],
+                env: { ...process.env, TERM: 'dumb' },
+            });
+            pendingAuthProc = proc;
+            let output = '';
+            const urlPromise = new Promise((resolve, reject) => {
+                const timeout = setTimeout(() => reject(new Error('Timed out waiting for auth URL')), 30000);
+                const onData = (chunk) => {
+                    output += chunk.toString().replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '');
+                    const urlMatch = output.match(/(https:\/\/[^\s]+)/);
+                    if (urlMatch) { clearTimeout(timeout); resolve(urlMatch[1]); }
+                };
+                proc.stdout.on('data', onData);
+                proc.stderr.on('data', onData);
+                proc.on('exit', () => { clearTimeout(timeout); reject(new Error('Process exited before URL was found')); });
+            });
+            const authUrl = await urlPromise;
+            res.json({ success: true, authUrl });
+        } catch (err) {
+            pendingAuthProc = null;
+            res.status(500).json({ error: err.message });
+        }
+    });
+
+    app.post('/api/claude/auth-complete', requireAuth, requireAdmin, async (req, res) => {
+        try {
+            const { token } = req.body;
+            if (!token) return res.status(400).json({ error: 'token is required' });
+            if (!pendingAuthProc) return res.status(400).json({ error: 'No pending auth session. Click Reconnect first.' });
+            const proc = pendingAuthProc;
+            pendingAuthProc = null;
+            const resultPromise = new Promise((resolve) => {
+                let output = '';
+                const onData = (chunk) => { output += chunk.toString().replace(/\x1B\[[0-9;]*[a-zA-Z]/g, ''); };
+                proc.stdout.on('data', onData);
+                proc.stderr.on('data', onData);
+                proc.on('exit', (code) => resolve({ code, output }));
+                setTimeout(() => { try { proc.kill(); } catch {} resolve({ code: -1, output }); }, 15000);
+            });
+            proc.stdin.write(token.trim() + '\n');
+            const { code, output } = await resultPromise;
+            const success = code === 0 || /success|authenticated|logged in/i.test(output);
+            res.json({ success, output: output.trim() });
+        } catch (err) {
+            pendingAuthProc = null;
+            res.status(500).json({ error: err.message });
+        }
+    });
+
     // ── Sprints ────────────────────────────────────────────────
 
     app.get('/api/sprints', requireAuth, (req, res) => {
@@ -953,9 +1255,15 @@ The user may ask follow-up questions about the changelog — answer based on the
 
     app.post('/api/issues', requireAuth, (req, res) => {
         try {
-            const { title, description, priority, labels, forkSessionId, sprintId, assignedTo, type } = req.body;
+            const { title, description, priority, labels, forkSessionId, sprintId, assignedTo, type, mode, platform, qaOwner, parentIssueId, sessionId, deadline } = req.body;
             if (!title) return res.status(400).json({ error: 'title is required' });
-            const issue = store.createIssue({ title, description, priority, labels, createdBy: req.user.id, forkSessionId: forkSessionId || null, sprintId: sprintId || null, assignedTo: assignedTo || null, type: type || 'task' });
+            // Design issues: explicit mode from client, else default by creator's role (designers make design issues).
+            const issueMode = (mode === 'design' || mode === 'developer')
+                ? mode
+                : (req.user.role === 'designer' ? 'design' : 'developer');
+            // A subtask inherits its parent's sprint so it lives under the same feature.
+            const parent = parentIssueId ? store.getIssue(parentIssueId) : null;
+            const issue = store.createIssue({ title, description, priority, labels, createdBy: req.user.id, forkSessionId: forkSessionId || null, sprintId: parent ? parent.sprint_id : (sprintId || null), assignedTo: assignedTo || null, type: type || 'task', mode: issueMode, platform: parent ? parent.platform : (platform || ''), qaOwner: qaOwner || '', parentIssueId: parentIssueId || null, sessionId: sessionId || null, deadline: deadline || null });
             wsBroadcast('issue_created', { issue });
 
             // Notify assignee
@@ -977,12 +1285,24 @@ The user may ask follow-up questions about the changelog — answer based on the
 
     app.put('/api/issues/:id', requireAuth, (req, res) => {
         try {
-            const allowed = ['title', 'description', 'status', 'priority', 'labels', 'assigned_to', 'sort_order', 'sprint_id', 'type', 'stage', 'prd_url', 'design_session_id', 'qa_session_id'];
+            const allowed = ['title', 'description', 'status', 'priority', 'labels', 'assigned_to', 'sort_order', 'sprint_id', 'type', 'stage', 'prd_url', 'design_session_id', 'qa_session_id',
+                // Sprint board fields
+                'platform', 'qa_owner', 'dev_status', 'dev_percent', 'deadline',
+                'test_cases_count', 'test_cases_done_date', 'qa_status', 'open_bugs', 'critical_bugs', 'qa_comments', 'is_backlog'];
             const updates = {};
             for (const key of allowed) {
                 if (req.body[key] !== undefined) updates[key] = req.body[key];
             }
             if (updates.status === 'completed') updates.completed_at = new Date().toISOString();
+            // Keep the kanban status in sync when a manager flips Dev Status on the sprint board.
+            if (updates.dev_status !== undefined) {
+                const map = { todo: 'todo', in_progress: 'in_progress', dev_completed: 'in_progress', done: 'completed' };
+                updates.status = map[updates.dev_status] || updates.status || 'todo';
+                if (updates.dev_status === 'done') {
+                    updates.completed_at = new Date().toISOString();
+                    if (updates.dev_percent === undefined) updates.dev_percent = 100;
+                }
+            }
 
             // Detect assignment change
             const oldIssue = updates.assigned_to !== undefined ? store.getIssue(req.params.id) : null;
@@ -1023,9 +1343,228 @@ The user may ask follow-up questions about the changelog — answer based on the
         catch (err) { res.status(500).json({ error: err.message }); }
     });
 
+    // ── Sprint Board: start a dev session from a feature ──────────────
+    // The linked dev session auto-flips the feature to "Dev Completed" ONLY after a real UAT deploy.
+    // Everything else (general "I think it's done") stays manual — the dev sets the status themselves.
+    const UAT_DEPLOY_MARKER = '[[UAT_DEPLOYED]]';
+
+    function buildFeatureDevPrompt(issue, devTask) {
+        const task = (devTask || '').trim();
+        const lines = [`Title: ${issue.title}`];
+        if (issue.description) lines.push(`Description: ${issue.description}`);
+        lines.push('', task || '(No specific instruction typed — work from the title and description above.)');
+        // Keep the auto "Dev Completed" hook working without bloating the prompt: one line.
+        lines.push('', `Only on a real, successful UAT deploy: update the knowledge base, then print ${UAT_DEPLOY_MARKER} on its own line. Never print it otherwise.`);
+        return lines.join('\n');
+    }
+
+    app.post('/api/issues/:id/start-session', requireAuth, async (req, res) => {
+        try {
+            // Testers can edit the sprint board but may not spawn dev sessions on its issues.
+            if (req.user.role === 'tester') return res.status(403).json({ error: 'Testers cannot start sessions on sprint issues.' });
+            const issue = store.getIssue(req.params.id);
+            if (!issue) return res.status(404).json({ error: 'Feature not found' });
+            // If a dev session already exists for this feature, just return it.
+            if (issue.session_id && store.getSession(issue.session_id)) {
+                return res.json({ success: true, sessionId: issue.session_id, existing: true });
+            }
+            const model = req.body.model || 'claude-opus-4-8';
+            const phone = req.body.phone || req.user.phone || req.user.email || req.user.id;
+            const tokens = Array.isArray(req.body.imageTokens) ? req.body.imageTokens : (req.body.imageToken ? [req.body.imageToken] : []);
+            const imagePath = tokens.map(t => { const p = pendingImages.get(t); pendingImages.delete(t); return p; }).filter(Boolean)[0] || null;
+            const result = await messageHandler({ isWeb: true, phone: String(phone), text: buildFeatureDevPrompt(issue, req.body.text), pushName: req.user.displayName || 'Dashboard', ownerId: req.user.id, model, mode: 'developer', imagePath });
+            if (result?.sessionId) {
+                store.updateSession(result.sessionId, { sprint_id: issue.sprint_id || null, type: issue.type || 'feature', name: issue.title.slice(0, 120), mode: 'developer' });
+                store.updateIssue(issue.id, { session_id: result.sessionId, dev_status: 'in_progress', status: 'in_progress' });
+                const updated = store.getIssue(issue.id);
+                wsBroadcast('issue_updated', { issue: updated });
+            }
+            res.json({ success: true, sessionId: result?.sessionId });
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    // ── Sprint Board: Subtasks (child issues of a feature) ────────────
+    app.get('/api/issues/:id/subtasks', requireAuth, (req, res) => {
+        try { res.json(store.getSubtasks(req.params.id)); }
+        catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    // Add an existing session to the sprint board — as a standalone feature, or as a subtask
+    // of an existing feature (parentIssueId). The issue is linked to that session.
+    app.post('/api/sessions/:id/to-issue', requireAuth, async (req, res) => {
+        try {
+            const session = store.getSession(req.params.id);
+            if (!session) return res.status(404).json({ error: 'Session not found' });
+            const { sprintId, parentIssueId } = req.body;
+            const parent = parentIssueId ? store.getIssue(parentIssueId) : null;
+            const title = (session.name || session.task || 'Session').toString().slice(0, 120);
+            const issue = store.createIssue({
+                title,
+                createdBy: req.user.id,
+                sprintId: parent ? parent.sprint_id : (sprintId || null),
+                parentIssueId: parentIssueId || null,
+                sessionId: session.id,
+                type: session.type || 'task',
+                platform: parent ? parent.platform : '',
+                // Already has a running/finished session → it's at least in progress.
+                category: 'issue',
+            });
+            // Reflect that work is underway and link the sprint to the session.
+            store.updateIssue(issue.id, { dev_status: 'in_progress', status: 'in_progress' });
+            store.updateSession(session.id, { sprint_id: issue.sprint_id || null });
+            const finalIssue = store.getIssue(issue.id);
+            wsBroadcast('issue_created', { issue: finalIssue });
+            res.json(finalIssue);
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    // ── Sprint Board: Bugs (per feature) ──────────────────────────────
+    app.get('/api/issues/:id/bugs', requireAuth, (req, res) => {
+        try { res.json(store.getBugsByIssue(req.params.id)); }
+        catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    app.post('/api/issues/:id/bugs', requireAuth, (req, res) => {
+        try {
+            const { title, description, severity } = req.body;
+            if (!title) return res.status(400).json({ error: 'title is required' });
+            const bug = store.createBug({ issueId: req.params.id, title, description: description || '', severity: severity === 'critical' ? 'critical' : 'normal', createdBy: req.user.id });
+            wsBroadcast('issue_updated', { issue: store.getIssue(req.params.id) });
+            res.json(bug);
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    app.put('/api/bugs/:id', requireAuth, (req, res) => {
+        try {
+            const bug = store.updateBug(req.params.id, req.body || {});
+            if (!bug) return res.status(404).json({ error: 'Bug not found' });
+            wsBroadcast('issue_updated', { issue: store.getIssue(bug.issue_id) });
+            res.json(bug);
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    app.delete('/api/bugs/:id', requireAuth, (req, res) => {
+        try {
+            const bug = store.getBug(req.params.id);
+            store.deleteBug(req.params.id);
+            if (bug) wsBroadcast('issue_updated', { issue: store.getIssue(bug.issue_id) });
+            res.json({ success: true });
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    // Send a bug to the dev for fixing. The dev chooses how (req.body.action):
+    //   'fork' (default) — fork a NEW session off the feature's dev session to fix it in isolation.
+    //   'send'           — add the bug as context to the feature's CURRENT dev session (no new session).
+    app.post('/api/bugs/:id/fork', requireAuth, async (req, res) => {
+        try {
+            if (!executionEngine) return res.status(500).json({ error: 'Execution engine not attached' });
+            const bug = store.getBug(req.params.id);
+            if (!bug) return res.status(404).json({ error: 'Bug not found' });
+            const issue = store.getIssue(bug.issue_id);
+            const phone = req.body.phone || req.user.phone || req.user.email || req.user.id;
+            const model = req.body.model || 'claude-opus-4-8';
+            const action = req.body.action === 'send' ? 'send' : 'fork';
+            const fixPrompt = `Fix this bug found during QA of feature "${issue?.title || bug.issue_id}":\n\nBUG: ${bug.title}\n${bug.description || ''}\n\nReproduce it, find the root cause, fix it, and verify. ${bug.severity === 'critical' ? 'This is CRITICAL.' : ''}`;
+            const hasLiveSession = issue?.session_id && store.getSession(issue.session_id);
+            let result;
+            if (action === 'send' && hasLiveSession) {
+                // Add to the current dev session as a new message — keeps one session, full context.
+                await messageHandler({ isWeb: true, phone: String(phone), text: `[resume ${issue.session_id}] ${fixPrompt}`, pushName: req.user.displayName || 'Dashboard' });
+                result = { sessionId: issue.session_id };
+            } else if (hasLiveSession) {
+                // Fork a fresh session off the dev session.
+                result = await executionEngine.forkSession(issue.session_id, fixPrompt, String(phone), req.user.id, model);
+            } else {
+                // No live dev session — start fresh.
+                result = await messageHandler({ isWeb: true, phone: String(phone), text: `[start fresh] ${fixPrompt}`, pushName: req.user.displayName || 'Dashboard', ownerId: req.user.id, model, mode: 'developer' });
+            }
+            if (result?.sessionId) store.updateBug(bug.id, { fix_session_id: result.sessionId, status: 'fixing' });
+            wsBroadcast('issue_updated', { issue: store.getIssue(bug.issue_id) });
+            res.json({ success: true, sessionId: result?.sessionId, action });
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    // ── Sprint Board: a session's linked feature + lifecycle status (Workspace status control) ──
+    app.get('/api/sessions/:id/feature', requireAuth, (req, res) => {
+        try { res.json(store.getFeatureBySession(req.params.id) || null); }
+        catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    app.put('/api/sessions/:id/feature-status', requireAuth, (req, res) => {
+        try {
+            const status = req.body.status;
+            if (!['in_progress', 'dev_completed', 'qa_pass'].includes(status)) return res.status(400).json({ error: 'invalid status' });
+            const updated = store.setFeatureStatusBySession(req.params.id, status);
+            if (!updated) return res.status(404).json({ error: 'No feature linked to this session' });
+            wsBroadcast('issue_updated', { issue: updated });
+            res.json(updated);
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    // ── Sprint Board: Test cases (per feature) ────────────────────────
+    app.get('/api/issues/:id/test-cases', requireAuth, (req, res) => {
+        try { res.json(store.getTestCasesByIssue(req.params.id)); }
+        catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    app.post('/api/issues/:id/test-cases', requireAuth, (req, res) => {
+        try {
+            const { title, steps, expected, status } = req.body;
+            if (!title) return res.status(400).json({ error: 'title is required' });
+            const tc = store.createTestCase({ issueId: req.params.id, title, steps: steps || '', expected: expected || '', status: status || 'pending', source: 'manual', createdBy: req.user.id });
+            wsBroadcast('issue_updated', { issue: store.getIssue(req.params.id) });
+            res.json(tc);
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    app.put('/api/test-cases/:id', requireAuth, (req, res) => {
+        try {
+            const tc = store.updateTestCase(req.params.id, req.body || {});
+            if (!tc) return res.status(404).json({ error: 'Test case not found' });
+            res.json(tc);
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    app.delete('/api/test-cases/:id', requireAuth, (req, res) => {
+        try {
+            const tc = store.getTestCase(req.params.id);
+            store.deleteTestCase(req.params.id);
+            if (tc) wsBroadcast('issue_updated', { issue: store.getIssue(tc.issue_id) });
+            res.json({ success: true });
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    // Generate test cases by forking the feature's session from the bot (QA can also add manually).
+    app.post('/api/issues/:id/generate-test-cases', requireAuth, async (req, res) => {
+        try {
+            if (!executionEngine) return res.status(500).json({ error: 'Execution engine not attached' });
+            const issue = store.getIssue(req.params.id);
+            if (!issue) return res.status(404).json({ error: 'Feature not found' });
+            const phone = req.body.phone || req.user.phone || req.user.email || req.user.id;
+            const model = req.body.model || 'claude-opus-4-8';
+            const tcPrompt = `Write a thorough set of QA test cases for feature "${issue.title}"${issue.platform ? ` (${issue.platform})` : ''}.\n${issue.description || ''}\n\nCover happy path, edge cases, and negative cases. For EACH test case output a line in EXACTLY this format so it can be imported:\nTESTCASE | <title> | <steps> | <expected result>\nDerive expected behavior from the PRD/knowledge base first, code only if needed.`;
+            let result;
+            if (issue.session_id && store.getSession(issue.session_id)) {
+                result = await executionEngine.forkSession(issue.session_id, tcPrompt, String(phone), req.user.id, model);
+            } else {
+                result = await messageHandler({ isWeb: true, phone: String(phone), text: `[start fresh] ${tcPrompt}`, pushName: req.user.displayName || 'Dashboard', ownerId: req.user.id, model, mode: 'developer' });
+            }
+            res.json({ success: true, sessionId: result?.sessionId });
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    // Sprint progress (completion % + rollups) for the board header.
+    app.get('/api/sprints/:id/progress', requireAuth, (req, res) => {
+        try { res.json(store.getSprintProgress(req.params.id)); }
+        catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
     // ── Lifecycle Stages (Idea → Design → Development → QA → Done) ─────
 
     const STAGE_ORDER = ['idea', 'design', 'development', 'qa', 'done'];
+
+    // Design-mode work runs in the designs repo; developer-mode uses the default app dir.
+    const modeWorkingDir = (mode) => (mode === 'design' ? config.DESIGNS_DIR : null);
 
     function nextStage(current) {
         const idx = STAGE_ORDER.indexOf(current || 'idea');
@@ -1118,7 +1657,10 @@ Steps:
             if (!prompt) return res.status(400).json({ error: 'No prompt for this transition' });
 
             const phone = req.user.phone || req.user.email || req.user.id;
-            const model = req.body.model || 'claude-opus-4-7';
+            const model = req.body.model || 'claude-opus-4-8';
+
+            // Design issues spawn their stage sessions in the designs repo.
+            const spawnMode = issue.mode === 'design' ? 'design' : 'developer';
 
             // Spawn new session for this stage
             const result = await messageHandler({
@@ -1128,9 +1670,11 @@ Steps:
                 pushName: req.user.displayName || req.user.email || 'Stage Runner',
                 ownerId: req.user.id,
                 model,
+                workingDir: modeWorkingDir(spawnMode),
             });
 
             if (!result?.sessionId) return res.status(500).json({ error: 'Failed to start stage session' });
+            store.updateSession(result.sessionId, { mode: spawnMode });
 
             // Update issue — set stage + link the stage's session
             const updates = { stage: to };
@@ -1281,7 +1825,9 @@ Steps:
             if (!prompt) return res.status(400).json({ error: 'No prompt for this transition' });
 
             const phone = req.user.phone || req.user.email || req.user.id;
-            const model = req.body.model || 'claude-opus-4-7';
+            const model = req.body.model || 'claude-opus-4-8';
+            // Inherit the parent session's mode (design sessions advance into design sessions).
+            const spawnMode = s.mode === 'design' ? 'design' : 'developer';
             const result = await messageHandler({
                 isWeb: true,
                 phone: String(phone),
@@ -1289,8 +1835,10 @@ Steps:
                 pushName: req.user.displayName || req.user.email || 'Stage Runner',
                 ownerId: req.user.id,
                 model,
+                workingDir: modeWorkingDir(spawnMode),
             });
             if (!result?.sessionId) return res.status(500).json({ error: 'Failed to start stage session' });
+            store.updateSession(result.sessionId, { mode: spawnMode });
 
             // Link child session back to parent sprint
             if (s.sprint_id) store.updateSession(result.sessionId, { sprint_id: s.sprint_id });
@@ -1368,21 +1916,24 @@ Steps:
 
             // Start a session for this issue — fork from session if specified
             const phone = req.user.phone || req.user.email || req.user.id;
-            const model = req.body.model || 'claude-opus-4-7';
+            const model = req.body.model || 'claude-opus-4-8';
             const selfDecisions = store.getSetting('self_decisions') === 'true';
             const selfDecisionsHint = selfDecisions
                 ? '\n\nIMPORTANT: Take all decisions yourself. Do NOT ask the user for clarification, confirmation, or choices. Use your best judgment based on the requirements, codebase context, and best practices. Just get it done autonomously.'
                 : '';
             const taskPrompt = `[Issue ${issue.id}] ${issue.title}\n\n${issue.description || 'No additional details.'}${selfDecisionsHint}`;
+            const spawnMode = issue.mode === 'design' ? 'design' : 'developer';
             let result;
             if (issue.fork_session_id && executionEngine) {
+                // Fork inherits the parent session's working dir; design issues should still be forked from a design session.
                 result = await executionEngine.forkSession(issue.fork_session_id, taskPrompt, String(phone), req.user.id, model);
             } else {
-                result = await messageHandler({ isWeb: true, phone: String(phone), text: `[start fresh] ${taskPrompt}`, pushName: req.user.displayName || 'Autonomous', ownerId: req.user.id, model });
+                result = await messageHandler({ isWeb: true, phone: String(phone), text: `[start fresh] ${taskPrompt}`, pushName: req.user.displayName || 'Autonomous', ownerId: req.user.id, model, workingDir: modeWorkingDir(spawnMode) });
             }
 
             if (result?.sessionId) {
                 autonomousState.sessionId = result.sessionId;
+                store.updateSession(result.sessionId, { mode: spawnMode });
                 store.updateIssue(issue.id, { session_id: result.sessionId });
             }
             wsBroadcast('autonomous_update', { ...autonomousState });
@@ -1457,8 +2008,8 @@ Steps:
 
             const taskPrompt = `[Issue ${next.id}] ${next.title}\n\n${next.description || 'No additional details.'}`;
             const startNext = next.fork_session_id && executionEngine
-                ? executionEngine.forkSession(next.fork_session_id, taskPrompt, 'system_autonomous', null, 'claude-opus-4-7')
-                : messageHandler({ isWeb: true, phone: 'system_autonomous', text: `[start fresh] ${taskPrompt}`, pushName: 'Autonomous Runner', ownerId: null, model: 'claude-opus-4-7' });
+                ? executionEngine.forkSession(next.fork_session_id, taskPrompt, 'system_autonomous', null, 'claude-opus-4-8')
+                : messageHandler({ isWeb: true, phone: 'system_autonomous', text: `[start fresh] ${taskPrompt}`, pushName: 'Autonomous Runner', ownerId: null, model: 'claude-opus-4-8' });
             startNext.then(result => {
                     if (result?.sessionId) {
                         autonomousState.sessionId = result.sessionId;
@@ -1517,11 +2068,23 @@ Steps:
 
     // Wire up Claude execution engine events → WebSocket
     if (executionEngine) {
+        // Sprint board: a feature's dev session auto-advances to "Dev Completed" ONLY on a real
+        // UAT deploy (the [[UAT_DEPLOYED]] marker). Any other "done" stays manual.
+        const checkFeatureDone = (sessionId, content) => {
+            try {
+                if (!content || !content.includes('[[UAT_DEPLOYED]]')) return;
+                const updated = store.markFeatureDoneBySession(sessionId);
+                if (updated) wsBroadcast('issue_updated', { issue: updated });
+            } catch (_) { /* non-fatal */ }
+        };
+
         executionEngine.on('assistant_message', ({ sessionId, content }) => {
+            checkFeatureDone(sessionId, content);
             wsBroadcast('assistant_message', { sessionId, content });
         });
 
         executionEngine.on('result', ({ sessionId, content, costUsd }) => {
+            checkFeatureDone(sessionId, content);
             wsBroadcast('result', { sessionId, content, costUsd });
         });
 
@@ -1531,6 +2094,10 @@ Steps:
 
         executionEngine.on('session_error', ({ sessionId, error }) => {
             wsBroadcast('session_error', { sessionId, error });
+        });
+
+        executionEngine.on('auth_error', ({ sessionId, error }) => {
+            wsBroadcast('auth_error', { sessionId, error });
         });
     }
 

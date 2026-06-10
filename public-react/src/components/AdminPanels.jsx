@@ -1,5 +1,6 @@
-import { useState, useEffect } from 'react'
-import { X, UserPlus, Trash2, KeyRound, Phone, Save, Clock, Check, XCircle, ToggleLeft, ToggleRight } from 'lucide-react'
+import { useState, useEffect, useCallback } from 'react'
+import { X, UserPlus, Trash2, KeyRound, Phone, Save, Clock, Check, XCircle, ToggleLeft, ToggleRight, AlertTriangle, RefreshCw, ExternalLink, Loader2, ShieldCheck } from 'lucide-react'
+import { apiFetch } from '../hooks/useApi'
 
 export function AdminModal({ isOpen, onClose, title, children }) {
   if (!isOpen) return null
@@ -16,16 +17,22 @@ export function AdminModal({ isOpen, onClose, title, children }) {
   )
 }
 
-export function UsersPanel({ users = [], onAdd, onDelete, onResetPassword }) {
+export function UsersPanel({ users = [], onAdd, onDelete, onResetPassword, onUpdateUser }) {
   const [email, setEmail] = useState('')
   const [name, setName] = useState('')
   const [role, setRole] = useState('developer')
   const [isAdmin, setIsAdmin] = useState(false)
+  // Tester code-edit access. Default OFF (read-only tester) — admin opts in.
+  const [canEdit, setCanEdit] = useState(false)
+  // Tester access scope: 'chat' = can chat with the bot, 'sprint' = sprint board only.
+  const [testerAccess, setTesterAccess] = useState('chat')
 
   const handleAdd = async () => {
     if (!email) return
-    await onAdd({ email, displayName: name, role, isAdmin })
-    setEmail(''); setName(''); setRole('developer'); setIsAdmin(false)
+    const sprintOnly = role === 'tester' && testerAccess === 'sprint'
+    // canEdit only matters for chat-access testers; others always can edit.
+    await onAdd({ email, displayName: name, role, isAdmin, canEdit: role === 'tester' ? (sprintOnly ? false : canEdit) : true, sprintOnly })
+    setEmail(''); setName(''); setRole('developer'); setIsAdmin(false); setCanEdit(false); setTesterAccess('chat')
   }
 
   return (
@@ -35,6 +42,7 @@ export function UsersPanel({ users = [], onAdd, onDelete, onResetPassword }) {
         <input value={name} onChange={e => setName(e.target.value)} placeholder="Display name" className="bg-surface-2 border border-border rounded-lg px-3 py-2 text-sm text-text-primary placeholder-text-muted outline-none focus:border-accent" />
         <select value={role} onChange={e => setRole(e.target.value)} className="bg-surface-2 border border-border rounded-lg px-3 py-2 text-sm text-text-primary outline-none focus:border-accent cursor-pointer">
           <option value="developer">Developer</option>
+          <option value="designer">Designer</option>
           <option value="tester">Tester</option>
           <option value="viewer">Viewer</option>
           <option value="admin">Admin</option>
@@ -42,6 +50,26 @@ export function UsersPanel({ users = [], onAdd, onDelete, onResetPassword }) {
         <label className="flex items-center gap-2 text-xs text-text-secondary cursor-pointer">
           <input type="checkbox" checked={isAdmin} onChange={e => setIsAdmin(e.target.checked)} className="accent-accent" /> Admin privileges
         </label>
+        {role === 'tester' && (
+          <div className="col-span-2 -mt-1 space-y-2">
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-text-secondary">Access:</span>
+              <select value={testerAccess} onChange={e => setTesterAccess(e.target.value)} className="bg-surface-2 border border-border rounded-lg px-2 py-1.5 text-xs text-text-primary outline-none focus:border-accent cursor-pointer">
+                <option value="chat">Chat access (can chat with the bot)</option>
+                <option value="sprint">Sprint board only (no chat / no sessions)</option>
+              </select>
+            </div>
+            {testerAccess === 'chat' && (
+              <label className="flex items-center gap-2 text-xs text-text-secondary cursor-pointer">
+                <input type="checkbox" checked={canEdit} onChange={e => setCanEdit(e.target.checked)} className="accent-accent" />
+                Allow code edits (off = read-only tester: can run tests & write test cases, but can't modify code)
+              </label>
+            )}
+            {testerAccess === 'sprint' && (
+              <p className="text-[11px] text-text-muted">Sprint-only testers see just the Sprint board — they can edit the columns but can't start or open sessions.</p>
+            )}
+          </div>
+        )}
         <button onClick={handleAdd} className="bg-accent hover:bg-accent-hover text-white text-sm font-medium rounded-lg px-4 py-2 flex items-center justify-center gap-2 transition-colors cursor-pointer">
           <UserPlus size={14} /> Add User
         </button>
@@ -51,9 +79,29 @@ export function UsersPanel({ users = [], onAdd, onDelete, onResetPassword }) {
           <div key={u.id} className="flex items-center justify-between py-3">
             <div>
               <p className="text-sm font-medium text-text-primary">{u.display_name || u.email}</p>
-              <p className="text-xs text-text-muted">{u.email} · <span className="capitalize">{u.role}</span>{u.is_admin ? ' · Admin' : ''}</p>
+              <p className="text-xs text-text-muted">{u.email} · <span className="capitalize">{u.role}</span>{u.is_admin ? ' · Admin' : ''}{u.role === 'tester' ? (u.sprint_only ? ' · Sprint only' : (u.can_edit ? ' · Chat · can edit' : ' · Chat · read-only')) : ''}</p>
             </div>
-            <div className="flex gap-2">
+            <div className="flex items-center gap-3">
+              {u.role === 'tester' && onUpdateUser && (
+                <button
+                  onClick={() => onUpdateUser(u.id, { sprintOnly: !u.sprint_only })}
+                  className="text-text-muted hover:text-accent text-xs flex items-center gap-1 transition-colors cursor-pointer"
+                  title={u.sprint_only ? 'Sprint-only — click to give chat access' : 'Has chat access — click to make sprint-board-only'}
+                >
+                  {u.sprint_only ? <ToggleRight size={16} style={{ color: 'var(--c-accent)' }} /> : <ToggleLeft size={16} />}
+                  {u.sprint_only ? 'Sprint only' : 'Chat'}
+                </button>
+              )}
+              {u.role === 'tester' && !u.sprint_only && onUpdateUser && (
+                <button
+                  onClick={() => onUpdateUser(u.id, { canEdit: !u.can_edit })}
+                  className="text-text-muted hover:text-accent text-xs flex items-center gap-1 transition-colors cursor-pointer"
+                  title={u.can_edit ? 'Code edits allowed — click to make read-only' : 'Read-only — click to allow code edits'}
+                >
+                  {u.can_edit ? <ToggleRight size={16} style={{ color: 'var(--c-accent)' }} /> : <ToggleLeft size={16} />}
+                  {u.can_edit ? 'Edits on' : 'Read-only'}
+                </button>
+              )}
               <button onClick={() => onResetPassword(u.id)} className="text-text-muted hover:text-accent text-xs flex items-center gap-1 transition-colors cursor-pointer"><KeyRound size={12} /> Reset</button>
               <button onClick={() => { if (confirm('Delete this user?')) onDelete(u.id) }} className="text-text-muted hover:text-danger text-xs flex items-center gap-1 transition-colors cursor-pointer"><Trash2 size={12} /> Delete</button>
             </div>
@@ -170,6 +218,136 @@ export function CronPanel({ jobs = [], onSave, onDelete }) {
   )
 }
 
+function ClaudeAuthSection() {
+  const [status, setStatus] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [authUrl, setAuthUrl] = useState(null)
+  const [token, setToken] = useState('')
+  const [step, setStep] = useState('idle') // idle | starting | waiting_token | submitting | done | error
+  const [error, setError] = useState(null)
+
+  const checkStatus = useCallback(async () => {
+    setLoading(true)
+    try {
+      const data = await apiFetch('/api/claude/auth-status')
+      setStatus(data)
+    } catch (e) {
+      setStatus({ loggedIn: false, raw: e.message })
+    } finally { setLoading(false) }
+  }, [])
+
+  useEffect(() => { checkStatus() }, [checkStatus])
+
+  const startAuth = async () => {
+    setStep('starting')
+    setError(null)
+    setAuthUrl(null)
+    setToken('')
+    try {
+      const data = await apiFetch('/api/claude/auth-start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+      if (data.authUrl) { setAuthUrl(data.authUrl); setStep('waiting_token') }
+      else { setError('No auth URL returned'); setStep('error') }
+    } catch (e) { setError(e.message); setStep('error') }
+  }
+
+  const submitToken = async () => {
+    if (!token.trim()) return
+    setStep('submitting')
+    setError(null)
+    try {
+      const data = await apiFetch('/api/claude/auth-complete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: token.trim() }),
+      })
+      if (data.success) { setStep('done'); setTimeout(checkStatus, 1000) }
+      else { setError(data.output || 'Auth failed'); setStep('error') }
+    } catch (e) { setError(e.message); setStep('error') }
+  }
+
+  const loggedIn = status?.loggedIn
+
+  return (
+    <div className="py-3 px-1" style={{ borderTop: '1px solid var(--c-border)' }}>
+      <div className="flex items-center gap-2 mb-1">
+        {loading ? <Loader2 size={14} className="animate-spin" style={{ color: 'var(--c-text-muted)' }} />
+          : loggedIn ? <ShieldCheck size={14} style={{ color: 'var(--c-status-running)' }} />
+          : <AlertTriangle size={14} style={{ color: '#ef4444' }} />}
+        <p className="text-sm font-medium" style={{ color: 'var(--c-text)' }}>Claude authentication</p>
+      </div>
+
+      {!loading && loggedIn && (
+        <div className="text-xs mt-1 mb-2 space-y-0.5" style={{ color: 'var(--c-text-secondary)' }}>
+          <p>Logged in as <strong style={{ color: 'var(--c-text)' }}>{status.email || 'unknown'}</strong></p>
+          {status.orgName && <p>Org: {status.orgName} &middot; {status.subscriptionType || 'unknown plan'}</p>}
+        </div>
+      )}
+
+      {!loading && !loggedIn && step === 'idle' && (
+        <p className="text-xs mt-1 mb-2" style={{ color: '#ef4444' }}>
+          Claude is logged out. Sessions will fail with 401 errors until re-authenticated.
+        </p>
+      )}
+
+      {/* Reconnect button */}
+      {(step === 'idle' || step === 'done' || step === 'error') && (
+        <button onClick={startAuth} className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md font-medium cursor-pointer mt-1"
+          style={{ backgroundColor: loggedIn ? 'var(--c-surface-2)' : 'var(--c-accent)', color: loggedIn ? 'var(--c-text-secondary)' : '#fff', border: `1px solid ${loggedIn ? 'var(--c-border)' : 'var(--c-accent)'}` }}>
+          <RefreshCw size={12} /> {loggedIn ? 'Re-authenticate' : 'Reconnect Claude'}
+        </button>
+      )}
+
+      {step === 'starting' && (
+        <div className="flex items-center gap-2 text-xs mt-2" style={{ color: 'var(--c-text-muted)' }}>
+          <Loader2 size={12} className="animate-spin" /> Starting auth flow…
+        </div>
+      )}
+
+      {/* Auth URL + token input */}
+      {step === 'waiting_token' && authUrl && (
+        <div className="mt-3 space-y-3">
+          <div>
+            <p className="text-xs font-medium mb-1" style={{ color: 'var(--c-text)' }}>Step 1 — Open this link and authenticate:</p>
+            <a href={authUrl} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5 text-xs break-all"
+              style={{ color: 'var(--c-accent)' }}>
+              <ExternalLink size={12} className="shrink-0" /> {authUrl}
+            </a>
+          </div>
+          <div>
+            <p className="text-xs font-medium mb-1" style={{ color: 'var(--c-text)' }}>Step 2 — Paste the token you receive:</p>
+            <div className="flex gap-2">
+              <input type="text" value={token} onChange={(e) => setToken(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') submitToken() }}
+                placeholder="Paste token here…"
+                className="flex-1 text-xs px-2.5 py-1.5 rounded outline-none"
+                style={{ backgroundColor: 'var(--c-bg)', border: '1px solid var(--c-border)', color: 'var(--c-text)' }} />
+              <button onClick={submitToken} disabled={!token.trim()}
+                className="text-xs px-3 py-1.5 rounded font-medium cursor-pointer disabled:opacity-40"
+                style={{ backgroundColor: 'var(--c-accent)', color: '#fff' }}>
+                Submit
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {step === 'submitting' && (
+        <div className="flex items-center gap-2 text-xs mt-2" style={{ color: 'var(--c-text-muted)' }}>
+          <Loader2 size={12} className="animate-spin" /> Submitting token…
+        </div>
+      )}
+
+      {step === 'done' && (
+        <p className="text-xs mt-2" style={{ color: 'var(--c-status-running)' }}>Authenticated successfully. Refreshing status…</p>
+      )}
+
+      {error && (
+        <p className="text-xs mt-2" style={{ color: '#ef4444' }}>{error}</p>
+      )}
+    </div>
+  )
+}
+
 export function SettingsPanel({ settings = {}, onSave }) {
   const [showAll, setShowAll] = useState(settings.show_all_sessions === 'true')
   const [billingMode, setBillingMode] = useState(settings.claude_billing_mode || 'api')
@@ -218,6 +396,8 @@ export function SettingsPanel({ settings = {}, onSave }) {
           </button>
         </div>
       </div>
+
+      <ClaudeAuthSection />
     </div>
   )
 }

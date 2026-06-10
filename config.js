@@ -24,9 +24,11 @@ const config = {
     MAX_MESSAGE_LENGTH: 4000,
     CLAUDE_SESSION_TIMEOUT: 30 * 60 * 1000,
 
-    // Knowledge Base
-    GITHUB_KB_URL: process.env.GITHUB_KB_URL || '',
-    KB_DIR: process.env.KB_DIR || './kb',
+    // Knowledge Base — GitHub repo (pluginlive-kb), cloned locally. No Outline.
+    KB_DIR: process.env.KB_DIR || '/home/ubuntu/pluginlive-kb',
+
+    // Design workspace — design-mode sessions run here (separate CLAUDE.md + deploy flow)
+    DESIGNS_DIR: process.env.DESIGNS_DIR || '/home/ubuntu/pluginlive-designs',
 
     // Database backend: 'sqlite' (default) or 'supabase'
     DB_BACKEND: process.env.DB_BACKEND || 'sqlite',

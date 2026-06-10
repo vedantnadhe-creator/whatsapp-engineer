@@ -19,11 +19,21 @@ import {
   CircleDot,
   BookOpen,
   GitBranch,
+  GitMerge,
+  ClipboardList,
   MoreHorizontal,
   Share2,
   Copy,
   Check,
   Cpu,
+  Search,
+  X,
+  Pencil,
+  Bot,
+  Trash2,
+  Code2,
+  Palette,
+  FlaskConical,
 } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
 
@@ -58,9 +68,27 @@ function formatTokens(n) {
   return String(n);
 }
 
-function SessionMenu({ session, onClose, onShare, onFork, onToggleBookmark }) {
+function SessionMenu({ session, onClose, onShare, onFork, onMerge, onAddToSprint, onToggleBookmark, onRename, onDelete }) {
   const ref = useRef(null);
   const [copied, setCopied] = useState(false);
+  const [renaming, setRenaming] = useState(false);
+  const [nameValue, setNameValue] = useState(session.name || '');
+  const [saving, setSaving] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const renameInputRef = useRef(null);
+
+  const doDelete = async (e) => {
+    e?.stopPropagation();
+    if (!onDelete || deleting) return;
+    setDeleting(true);
+    try {
+      await onDelete(session.id);
+      onClose();
+    } finally {
+      setDeleting(false);
+    }
+  };
 
   useEffect(() => {
     function handleClick(e) {
@@ -70,6 +98,13 @@ function SessionMenu({ session, onClose, onShare, onFork, onToggleBookmark }) {
     return () => document.removeEventListener('mousedown', handleClick);
   }, [onClose]);
 
+  useEffect(() => {
+    if (renaming) {
+      const t = setTimeout(() => renameInputRef.current?.focus(), 0);
+      return () => clearTimeout(t);
+    }
+  }, [renaming]);
+
   const copyId = (e) => {
     e.stopPropagation();
     navigator.clipboard?.writeText(session.id);
@@ -77,9 +112,71 @@ function SessionMenu({ session, onClose, onShare, onFork, onToggleBookmark }) {
     setTimeout(() => setCopied(false), 1200);
   };
 
+  const submitRename = async (e) => {
+    e?.stopPropagation();
+    if (!onRename || saving) return;
+    setSaving(true);
+    try {
+      await onRename(session.id, nameValue.trim());
+      onClose();
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const itemStyle = {
     color: 'var(--c-text)',
   };
+
+  if (renaming) {
+    return (
+      <div
+        ref={ref}
+        onClick={(e) => e.stopPropagation()}
+        className="absolute right-2 top-8 z-20 w-64 rounded border p-2 shadow-lg"
+        style={{ backgroundColor: 'var(--c-surface)', borderColor: 'var(--c-border)' }}
+      >
+        <label className="block text-[10px] uppercase tracking-wide mb-1.5" style={{ color: 'var(--c-text-secondary)' }}>
+          Rename session
+        </label>
+        <input
+          ref={renameInputRef}
+          type="text"
+          value={nameValue}
+          onChange={(e) => setNameValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') submitRename(e);
+            else if (e.key === 'Escape') { e.stopPropagation(); onClose(); }
+          }}
+          maxLength={120}
+          placeholder="Session name"
+          className="w-full px-2 py-1.5 text-sm outline-none rounded"
+          style={{
+            backgroundColor: 'var(--c-bg)',
+            border: '1px solid var(--c-border)',
+            color: 'var(--c-text)',
+          }}
+        />
+        <div className="flex justify-end gap-1.5 mt-2">
+          <button
+            onClick={(e) => { e.stopPropagation(); onClose(); }}
+            className="px-2 py-1 text-xs rounded cursor-pointer"
+            style={{ color: 'var(--c-text-secondary)' }}
+          >
+            Cancel
+          </button>
+          <button
+            onClick={submitRename}
+            disabled={saving}
+            className="px-2.5 py-1 text-xs rounded text-white cursor-pointer disabled:opacity-50"
+            style={{ backgroundColor: 'var(--c-accent)' }}
+          >
+            {saving ? 'Saving…' : 'Save'}
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -98,6 +195,17 @@ function SessionMenu({ session, onClose, onShare, onFork, onToggleBookmark }) {
           {session.model || 'unknown'}
         </span>
       </div>
+
+      <button
+        onClick={(e) => { e.stopPropagation(); setRenaming(true); }}
+        className="flex w-full items-center gap-2 px-3 py-1.5 text-sm cursor-pointer"
+        style={itemStyle}
+        onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'var(--c-surface-2)')}
+        onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+      >
+        <Pencil size={14} style={{ color: 'var(--c-text-secondary)' }} />
+        Rename
+      </button>
 
       <button
         onClick={(e) => { e.stopPropagation(); onShare?.(session); onClose(); }}
@@ -120,6 +228,32 @@ function SessionMenu({ session, onClose, onShare, onFork, onToggleBookmark }) {
         <GitBranch size={14} style={{ color: 'var(--c-text-secondary)' }} />
         Fork session
       </button>
+
+      {onMerge && (
+        <button
+          onClick={(e) => { e.stopPropagation(); onMerge?.(session); onClose(); }}
+          className="flex w-full items-center gap-2 px-3 py-1.5 text-sm cursor-pointer"
+          style={itemStyle}
+          onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'var(--c-surface-2)')}
+          onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+        >
+          <GitMerge size={14} style={{ color: 'var(--c-text-secondary)' }} />
+          Merge with…
+        </button>
+      )}
+
+      {onAddToSprint && (
+        <button
+          onClick={(e) => { e.stopPropagation(); onAddToSprint?.(session); onClose(); }}
+          className="flex w-full items-center gap-2 px-3 py-1.5 text-sm cursor-pointer"
+          style={itemStyle}
+          onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'var(--c-surface-2)')}
+          onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+        >
+          <ClipboardList size={14} style={{ color: 'var(--c-text-secondary)' }} />
+          Add to sprint…
+        </button>
+      )}
 
       <button
         onClick={(e) => { e.stopPropagation(); onToggleBookmark?.(session.id); onClose(); }}
@@ -149,11 +283,51 @@ function SessionMenu({ session, onClose, onShare, onFork, onToggleBookmark }) {
         }
         {copied ? 'Copied' : 'Copy session ID'}
       </button>
+
+      {onDelete && (
+        <div style={{ borderTop: '1px solid var(--c-border)' }}>
+          {!confirmDelete ? (
+            <button
+              onClick={(e) => { e.stopPropagation(); setConfirmDelete(true); }}
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-sm cursor-pointer"
+              style={{ color: '#ef4444' }}
+              onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'var(--c-surface-2)')}
+              onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+            >
+              <Trash2 size={14} style={{ color: '#ef4444' }} />
+              Delete session
+            </button>
+          ) : (
+            <div className="px-3 py-2">
+              <p className="text-xs mb-2" style={{ color: 'var(--c-text-secondary)' }}>
+                Delete this session and all its messages? This can't be undone.
+              </p>
+              <div className="flex gap-1.5">
+                <button
+                  onClick={(e) => { e.stopPropagation(); setConfirmDelete(false); }}
+                  className="flex-1 px-2 py-1 text-xs rounded cursor-pointer"
+                  style={{ color: 'var(--c-text-secondary)', border: '1px solid var(--c-border)' }}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={doDelete}
+                  disabled={deleting}
+                  className="flex-1 px-2 py-1 text-xs rounded text-white cursor-pointer disabled:opacity-50"
+                  style={{ backgroundColor: '#ef4444' }}
+                >
+                  {deleting ? 'Deleting…' : 'Delete'}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
 
-function SessionItem({ session, isActive, onSelect, billingMode = 'api', onToggleBookmark, onShareSession, onForkSession }) {
+function SessionItem({ session, isActive, onSelect, billingMode = 'api', onToggleBookmark, onShareSession, onForkSession, onMergeSession, onAddToSprintSession, onRenameSession, onDeleteSession }) {
   const ownerLabel = session.owner_name || session.owner_email || null;
   const [menuOpen, setMenuOpen] = useState(false);
 
@@ -175,8 +349,12 @@ function SessionItem({ session, isActive, onSelect, billingMode = 'api', onToggl
       <div className="flex items-start gap-2">
         <StatusDot status={session.status} />
         <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-medium pr-12" style={{ color: 'var(--c-text)' }}>
-            {session.task || 'Untitled'}
+          <div
+            className="truncate text-sm font-medium pr-12"
+            style={{ color: 'var(--c-text)' }}
+            title={session.task || session.name || ''}
+          >
+            {session.name || session.task || 'Untitled'}
           </div>
           <div className="mt-0.5 flex items-center gap-2">
             <span className="font-mono text-xs" style={{ color: 'var(--c-text-muted)' }}>
@@ -193,6 +371,34 @@ function SessionItem({ session, isActive, onSelect, billingMode = 'api', onToggl
             )}
           </div>
           <div className="mt-1 flex items-center gap-2">
+            {session.mode === 'design' && (
+              <span
+                className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 uppercase"
+                style={{
+                  fontSize: '10px',
+                  backgroundColor: 'color-mix(in srgb, var(--c-accent) 18%, transparent)',
+                  border: '1px solid var(--c-accent)',
+                  color: 'var(--c-accent)',
+                }}
+                title="Design-mode session"
+              >
+                <Palette size={10} /> Design
+              </span>
+            )}
+            {session.mode === 'tester' && (
+              <span
+                className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 uppercase"
+                style={{
+                  fontSize: '10px',
+                  backgroundColor: 'color-mix(in srgb, var(--c-accent) 18%, transparent)',
+                  border: '1px solid var(--c-accent)',
+                  color: 'var(--c-accent)',
+                }}
+                title="Tester-mode session"
+              >
+                <FlaskConical size={10} /> Tester
+              </span>
+            )}
             <span
               className="inline-block rounded px-1.5 py-0.5 font-mono uppercase"
               style={{
@@ -248,7 +454,11 @@ function SessionItem({ session, isActive, onSelect, billingMode = 'api', onToggl
           onClose={() => setMenuOpen(false)}
           onShare={onShareSession}
           onFork={onForkSession}
+          onMerge={onMergeSession}
+          onAddToSprint={onAddToSprintSession}
           onToggleBookmark={onToggleBookmark}
+          onRename={onRenameSession}
+          onDelete={onDeleteSession}
         />
       )}
     </div>
@@ -329,6 +539,14 @@ function SidebarContent({
   onToggleBookmark,
   onShareSession,
   onForkSession,
+  onMergeSession,
+  onAddToSprintSession,
+  onRenameSession,
+  onDeleteSession,
+  workMode = 'developer',
+  onChangeWorkMode,
+  searchQuery = '',
+  onSearchChange,
 }) {
   const [adminOpen, setAdminOpen] = useState(false);
   const [sessionFilter, setSessionFilter] = useState('all'); // 'all', 'mine', or 'saved'
@@ -364,6 +582,8 @@ function SidebarContent({
           New Task
         </button>
       </div>
+
+      {/* Work mode is now driven by the user's role (Settings → Users), not a manual toggle. */}
 
       {/* Stats bar */}
       {stats && (
@@ -410,15 +630,15 @@ function SidebarContent({
           Sessions
         </button>
         <button
-          onClick={() => onViewChange?.('issues')}
+          onClick={() => onViewChange?.('sprint')}
           className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded text-xs font-medium cursor-pointer transition-colors"
           style={{
-            backgroundColor: view === 'issues' ? 'var(--c-surface-2)' : 'transparent',
-            color: view === 'issues' ? 'var(--c-text)' : 'var(--c-text-secondary)',
+            backgroundColor: view === 'sprint' ? 'var(--c-surface-2)' : 'transparent',
+            color: view === 'sprint' ? 'var(--c-text)' : 'var(--c-text-secondary)',
           }}
         >
-          <CircleDot size={12} />
-          Issues
+          <GitBranch size={12} />
+          Sprint
           {issueCount > 0 && (
             <span
               className="text-[10px] font-mono px-1 py-0 rounded"
@@ -429,17 +649,58 @@ function SidebarContent({
           )}
         </button>
         <button
-          onClick={() => onViewChange?.('pipeline')}
+          onClick={() => onViewChange?.('agents')}
           className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded text-xs font-medium cursor-pointer transition-colors"
           style={{
-            backgroundColor: view === 'pipeline' ? 'var(--c-surface-2)' : 'transparent',
-            color: view === 'pipeline' ? 'var(--c-text)' : 'var(--c-text-secondary)',
+            backgroundColor: view === 'agents' ? 'var(--c-surface-2)' : 'transparent',
+            color: view === 'agents' ? 'var(--c-text)' : 'var(--c-text-secondary)',
           }}
         >
-          <GitBranch size={12} />
-          Pipeline
+          <Bot size={12} />
+          Agents
         </button>
       </div>
+
+      {/* Search sessions */}
+      {view === 'chat' && onSearchChange && (
+        <div
+          className="px-3 py-2"
+          style={{ borderBottom: '1px solid var(--c-border)' }}
+        >
+          <div
+            className="relative flex items-center"
+            style={{
+              backgroundColor: 'var(--c-surface)',
+              border: '1px solid var(--c-border)',
+              borderRadius: 6,
+            }}
+          >
+            <Search
+              size={13}
+              className="ml-2 shrink-0"
+              style={{ color: 'var(--c-text-muted)' }}
+            />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => onSearchChange(e.target.value)}
+              placeholder="Search sessions…"
+              className="w-full bg-transparent outline-none px-2 py-1.5 text-sm"
+              style={{ color: 'var(--c-text)' }}
+            />
+            {searchQuery && (
+              <button
+                onClick={() => onSearchChange('')}
+                className="mr-1 p-1 rounded cursor-pointer"
+                style={{ color: 'var(--c-text-muted)' }}
+                title="Clear search"
+              >
+                <X size={12} />
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Session filter: All / Mine — only shown when all sessions are visible */}
       {view === 'chat' && (
@@ -481,6 +742,10 @@ function SidebarContent({
                 onToggleBookmark={onToggleBookmark}
                 onShareSession={onShareSession}
                 onForkSession={onForkSession}
+                onMergeSession={onMergeSession}
+                onAddToSprintSession={onAddToSprintSession}
+                onRenameSession={onRenameSession}
+                onDeleteSession={onDeleteSession}
               />
             ))}
             {hasMore && (

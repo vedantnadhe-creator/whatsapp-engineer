@@ -248,7 +248,7 @@ claude.on('session_error', async ({ sessionId, error }) => {
 
 // ── WhatsApp message handler ──────────────────────────────────
 
-export async function handleIncomingMessage({ isWeb: explicitIsWeb, phone, text, pushName, groupJid, imagePath = null, ownerId = null, model = 'claude-opus-4-7' }) {
+export async function handleIncomingMessage({ isWeb: explicitIsWeb, phone, text, pushName, groupJid, imagePath = null, ownerId = null, model = 'claude-opus-4-8', workingDir = null, mode = null, editAccess = undefined }) {
     try {
         const isWeb = explicitIsWeb || pushName === 'Web Dashboard';
         // Use groupJid as the session owner if in a group, otherwise use personal phone
@@ -323,7 +323,7 @@ export async function handleIncomingMessage({ isWeb: explicitIsWeb, phone, text,
                 // Close any existing thread before starting fresh
                 if (currentThread) store.closeThread(threadKey);
                 const task = intent.task || text;
-                const { sessionId } = await claude.startSession(threadKey, task, null, imagePath, ownerId, model);
+                const { sessionId } = await claude.startSession(threadKey, task, workingDir, imagePath, ownerId, model, { mode, editAccess });
 
                 if (isWeb) {
                     webMutedSessions.add(sessionId);
@@ -540,7 +540,7 @@ console.log(`🧠 Gemini model: ${config.GEMINI_MODEL}`);
 console.log(`🔧 Claude binary: ${config.CLAUDE_BIN}`);
 
 // Start dashboard immediately — works with or without WhatsApp
-startDashboard(store, handleIncomingMessage, 18790, wa, claude, orchestrator, hashPassword);
+startDashboard(store, handleIncomingMessage, parseInt(process.env.PORT || '18790'), wa, claude, orchestrator, hashPassword);
 
 if (config.WHATSAPP_ENABLED === false) {
     console.log('📧 Running in dashboard-only mode (WhatsApp disabled).');

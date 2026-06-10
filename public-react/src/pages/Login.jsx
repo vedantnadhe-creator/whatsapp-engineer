@@ -2,6 +2,18 @@ import { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { Terminal, Lock, Mail, ArrowRight } from 'lucide-react';
 
+function readNextParam() {
+  try {
+    const raw = new URLSearchParams(window.location.search).get('next');
+    if (!raw) return null;
+    // Only accept same-origin relative paths to avoid open-redirect.
+    if (!raw.startsWith('/') || raw.startsWith('//')) return null;
+    return raw;
+  } catch {
+    return null;
+  }
+}
+
 export default function Login() {
   const { login } = useAuth();
   const [email, setEmail] = useState('');
@@ -16,6 +28,10 @@ export default function Login() {
 
     try {
       await login(email, password);
+      const next = readNextParam();
+      if (next) {
+        window.location.replace(next);
+      }
     } catch (err) {
       setError(err.message);
     } finally {

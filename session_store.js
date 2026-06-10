@@ -148,6 +148,31 @@ class SessionStore {
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
             );
             CREATE INDEX IF NOT EXISTS idx_prds_sprint ON prds(sprint_id);
+            CREATE TABLE IF NOT EXISTS bugs (
+                id TEXT PRIMARY KEY,
+                issue_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                description TEXT DEFAULT '',
+                severity TEXT DEFAULT 'normal',
+                status TEXT DEFAULT 'open',
+                created_by TEXT,
+                fix_session_id TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_bugs_issue ON bugs(issue_id);
+            CREATE TABLE IF NOT EXISTS test_cases (
+                id TEXT PRIMARY KEY,
+                issue_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                steps TEXT DEFAULT '',
+                expected TEXT DEFAULT '',
+                status TEXT DEFAULT 'pending',
+                source TEXT DEFAULT 'manual',
+                created_by TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_test_cases_issue ON test_cases(issue_id);
         `);
 
         const safeMigrations = [
@@ -177,6 +202,35 @@ class SessionStore {
             "ALTER TABLE sessions ADD COLUMN dev_session_id TEXT",
             "ALTER TABLE sessions ADD COLUMN type TEXT DEFAULT 'task'",
             "ALTER TABLE sessions ADD COLUMN labels TEXT DEFAULT '[]'",
+            "ALTER TABLE sessions ADD COLUMN name TEXT",
+            "ALTER TABLE sessions ADD COLUMN mode TEXT DEFAULT 'developer'",
+            "ALTER TABLE issues ADD COLUMN mode TEXT DEFAULT 'developer'",
+            // Tester role: per-user code-edit permission, and the per-session edit gate
+            // copied from the tester's setting when a session is forked for testing.
+            "ALTER TABLE users ADD COLUMN can_edit INTEGER DEFAULT 1",
+            "ALTER TABLE sessions ADD COLUMN edit_access INTEGER DEFAULT 1",
+            // Tester access scope: 0 = chat access (can chat with the bot, current tester),
+            // 1 = sprint-only (can only view & edit the sprint board, no chat / no sessions).
+            "ALTER TABLE users ADD COLUMN sprint_only INTEGER DEFAULT 0",
+            // Sprint board (spreadsheet-style feature tracking) — each issue is a feature/story row.
+            "ALTER TABLE issues ADD COLUMN platform TEXT DEFAULT ''",
+            "ALTER TABLE issues ADD COLUMN qa_owner TEXT DEFAULT ''",
+            "ALTER TABLE issues ADD COLUMN dev_status TEXT DEFAULT 'todo'",
+            "ALTER TABLE issues ADD COLUMN dev_percent INTEGER DEFAULT 0",
+            "ALTER TABLE issues ADD COLUMN dev_handover_date TEXT",
+            "ALTER TABLE issues ADD COLUMN qa_handover_date TEXT",
+            "ALTER TABLE issues ADD COLUMN test_cases_count INTEGER DEFAULT 0",
+            "ALTER TABLE issues ADD COLUMN test_cases_done_date TEXT",
+            "ALTER TABLE issues ADD COLUMN qa_status TEXT DEFAULT ''",
+            "ALTER TABLE issues ADD COLUMN open_bugs INTEGER DEFAULT 0",
+            "ALTER TABLE issues ADD COLUMN critical_bugs INTEGER DEFAULT 0",
+            "ALTER TABLE issues ADD COLUMN qa_comments TEXT DEFAULT ''",
+            // Backlog: features parked out of the active sprint board.
+            "ALTER TABLE issues ADD COLUMN is_backlog INTEGER DEFAULT 0",
+            // Subtasks: a child issue points at its parent feature.
+            "ALTER TABLE issues ADD COLUMN parent_issue_id TEXT",
+            // Single deadline per feature (replaces dev/QA handover dates), set on create.
+            "ALTER TABLE issues ADD COLUMN deadline TEXT",
         ];
         for (const sql of safeMigrations) {
             try { this.db.exec(sql); } catch (_) { /* column already exists */ }
@@ -185,7 +239,7 @@ class SessionStore {
         try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_issues_sprint ON issues(sprint_id)'); } catch (_) { }
     }
 
-    createSession(id, userPhone, task, claudeSessionId, workingDir, ownerId = null, model = 'claude-opus-4-7') {
+    createSession(id, userPhone, task, claudeSessionId, workingDir, ownerId = null, model = 'claude-opus-4-8') {
         this.db.prepare(
             `INSERT OR REPLACE INTO sessions (id, user_phone, owner_id, task, claude_session_id, status, working_dir, thread_open, model)
              VALUES (?, ?, ?, ?, ?, 'running', ?, 1, ?)`
@@ -282,6 +336,71 @@ class SessionStore {
         return this.db.prepare('SELECT COUNT(*) as count FROM sessions WHERE owner_id = ?').get(userId).count;
     }
 
+    _searchPattern(q) {
+        return `%${String(q).trim().replace(/[%_]/g, (m) => '\\' + m)}%`;
+    }
+
+    searchSessionsForUser(userId, q, limit = 20, offset = 0) {
+        const pattern = this._searchPattern(q);
+        return this.db.prepare(
+            `SELECT s.*,
+                    u.display_name as owner_name,
+                    u.email as owner_email,
+                    CASE WHEN s.owner_id = ? THEN 1 ELSE 0 END as is_mine,
+                    1 as has_access
+             FROM sessions s
+             LEFT JOIN users u ON s.owner_id = u.id
+             WHERE s.name LIKE ? ESCAPE '\\'
+                OR s.task LIKE ? ESCAPE '\\'
+                OR s.id LIKE ? ESCAPE '\\'
+                OR u.display_name LIKE ? ESCAPE '\\'
+                OR u.email LIKE ? ESCAPE '\\'
+             ORDER BY s.updated_at DESC LIMIT ? OFFSET ?`
+        ).all(userId, pattern, pattern, pattern, pattern, pattern, limit, offset);
+    }
+
+    searchOwnSessions(userId, q, limit = 20, offset = 0) {
+        const pattern = this._searchPattern(q);
+        return this.db.prepare(
+            `SELECT s.*,
+                    u.display_name as owner_name,
+                    u.email as owner_email,
+                    1 as is_mine,
+                    1 as has_access
+             FROM sessions s
+             LEFT JOIN users u ON s.owner_id = u.id
+             WHERE s.owner_id = ?
+               AND (s.name LIKE ? ESCAPE '\\'
+                    OR s.task LIKE ? ESCAPE '\\'
+                    OR s.id LIKE ? ESCAPE '\\')
+             ORDER BY s.updated_at DESC LIMIT ? OFFSET ?`
+        ).all(userId, pattern, pattern, pattern, limit, offset);
+    }
+
+    countSearchSessionsForUser(q) {
+        const pattern = this._searchPattern(q);
+        return this.db.prepare(
+            `SELECT COUNT(*) as count
+             FROM sessions s LEFT JOIN users u ON s.owner_id = u.id
+             WHERE s.name LIKE ? ESCAPE '\\'
+                OR s.task LIKE ? ESCAPE '\\'
+                OR s.id LIKE ? ESCAPE '\\'
+                OR u.display_name LIKE ? ESCAPE '\\'
+                OR u.email LIKE ? ESCAPE '\\'`
+        ).get(pattern, pattern, pattern, pattern, pattern).count;
+    }
+
+    countSearchOwnSessions(userId, q) {
+        const pattern = this._searchPattern(q);
+        return this.db.prepare(
+            `SELECT COUNT(*) as count FROM sessions s
+             WHERE s.owner_id = ?
+               AND (s.name LIKE ? ESCAPE '\\'
+                    OR s.task LIKE ? ESCAPE '\\'
+                    OR s.id LIKE ? ESCAPE '\\')`
+        ).get(userId, pattern, pattern, pattern).count;
+    }
+
     getAllSessions(limit = 20, offset = 0) {
         return this.db.prepare(
             `SELECT s.*, u.display_name as owner_name, u.email as owner_email
@@ -359,15 +478,29 @@ class SessionStore {
         for (const phone of phones) insert.run(String(phone).trim(), 'seed');
     }
 
-    createUser({ email, phone, displayName, role = 'developer', isAdmin = 0, passwordHash = null, createdBy = null }) {
+    createUser({ email, phone, displayName, role = 'developer', isAdmin = 0, canEdit = 1, sprintOnly = 0, passwordHash = null, createdBy = null }) {
         const id = crypto.randomUUID();
         this.db.prepare(
-            `INSERT INTO users (id, email, phone, display_name, role, is_admin, password_hash, created_by)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+            `INSERT INTO users (id, email, phone, display_name, role, is_admin, can_edit, sprint_only, password_hash, created_by)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         ).run(id, email || null, phone || null,
             displayName || email?.split('@')[0] || phone || 'User',
-            role, isAdmin ? 1 : 0, passwordHash, createdBy);
+            role, isAdmin ? 1 : 0, canEdit ? 1 : 0, sprintOnly ? 1 : 0, passwordHash, createdBy);
         return this.getUserById(id);
+    }
+
+    // Update a user's role / admin / edit-access / sprint-only (used by the Users settings panel).
+    updateUser(userId, { role, isAdmin, canEdit, sprintOnly } = {}) {
+        const fields = [];
+        const values = [];
+        if (role !== undefined) { fields.push('role = ?'); values.push(role); }
+        if (isAdmin !== undefined) { fields.push('is_admin = ?'); values.push(isAdmin ? 1 : 0); }
+        if (canEdit !== undefined) { fields.push('can_edit = ?'); values.push(canEdit ? 1 : 0); }
+        if (sprintOnly !== undefined) { fields.push('sprint_only = ?'); values.push(sprintOnly ? 1 : 0); }
+        if (!fields.length) return this.getUserById(userId);
+        values.push(userId);
+        this.db.prepare(`UPDATE users SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+        return this.getUserById(userId);
     }
 
     getUserById(id) { return this.db.prepare('SELECT * FROM users WHERE id = ?').get(id); }
@@ -384,7 +517,7 @@ class SessionStore {
 
     getAllUsers() {
         return this.db.prepare(
-            `SELECT u.id, u.email, u.phone, u.display_name, u.role, u.is_admin, u.created_at,
+            `SELECT u.id, u.email, u.phone, u.display_name, u.role, u.is_admin, u.can_edit, u.sprint_only, u.created_at,
                     creator.display_name as created_by_name
              FROM users u
              LEFT JOIN users creator ON u.created_by = creator.id
@@ -461,16 +594,25 @@ class SessionStore {
 
     // ── Issues ─────────────────────────────────────────────────
 
-    createIssue({ title, description = '', priority = 'medium', labels = [], createdBy = null, forkSessionId = null, sprintId = null, assignedTo = null, type = 'task', category = 'issue' }) {
-        const id = `ISS-${Date.now().toString(36)}`;
+    createIssue({ title, description = '', priority = 'medium', labels = [], createdBy = null, forkSessionId = null, sprintId = null, assignedTo = null, type = 'task', category = 'issue', mode = 'developer', platform = '', qaOwner = '', parentIssueId = null, sessionId = null, deadline = null }) {
+        const id = `ISS-${Date.now().toString(36)}${Math.floor(Math.random() * 1000)}`;
         const maxOrder = this.db.prepare("SELECT COALESCE(MAX(sort_order), 0) as m FROM issues WHERE status = 'todo'").get().m;
         this.db.prepare(
-            `INSERT INTO issues (id, title, description, priority, labels, created_by, sort_order, fork_session_id, sprint_id, assigned_to, type, category) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-        ).run(id, title, description, priority, JSON.stringify(labels), createdBy, maxOrder + 1, forkSessionId, sprintId, assignedTo, type, category);
+            `INSERT INTO issues (id, title, description, priority, labels, created_by, sort_order, fork_session_id, sprint_id, assigned_to, type, category, mode, platform, qa_owner, parent_issue_id, session_id, deadline) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ).run(id, title, description, priority, JSON.stringify(labels), createdBy, maxOrder + 1, forkSessionId, sprintId, assignedTo, type, category, mode === 'design' ? 'design' : 'developer', platform, qaOwner, parentIssueId, sessionId, deadline);
         return this.getIssue(id);
     }
 
     getIssue(id) { return this.db.prepare('SELECT * FROM issues WHERE id = ?').get(id); }
+
+    // Subtasks = child issues of a feature. Enriched with completion like the board rows.
+    getSubtasks(parentIssueId) {
+        return this.db.prepare(
+            `SELECT i.*, a.display_name as assignee_name FROM issues i
+             LEFT JOIN users a ON i.assigned_to = a.id
+             WHERE i.parent_issue_id = ? ORDER BY i.created_at ASC`
+        ).all(parentIssueId).map(r => ({ ...r, completion: this.featureCompletion(r) }));
+    }
 
     getAllIssues() {
         return this.db.prepare(
@@ -479,7 +621,21 @@ class SessionStore {
              LEFT JOIN users u ON i.created_by = u.id
              LEFT JOIN users a ON i.assigned_to = a.id
              ORDER BY i.sort_order ASC, i.created_at DESC`
-        ).all();
+        ).all().map(r => ({ ...r, completion: this.featureCompletion(r) }));
+    }
+
+    // Single source of truth for a feature's completion %, driven by the QA lifecycle:
+    //   QA Pass / Done → 100 · Dev Completed (no open bugs) → 70 · Dev Completed + open QA bug → 50
+    //   To Do / In Progress → 0
+    // The frontend mirrors this exact logic in SprintBoard.jsx (featureCompletion) for
+    // instant display; keep the two in sync.
+    featureCompletion(issue) {
+        if (!issue) return 0;
+        const qa = String(issue.qa_status || '').toLowerCase();
+        if (qa === 'pass' || qa === 'passed' || qa === 'tested') return 100;
+        if (issue.dev_status === 'done') return 100;
+        if (issue.dev_status === 'dev_completed') return (issue.open_bugs || 0) > 0 ? 50 : 70;
+        return 0; // todo / in_progress
     }
 
     getIssuesByStatus(status) {
@@ -506,12 +662,163 @@ class SessionStore {
 
     deleteIssue(id) { this.db.prepare('DELETE FROM issues WHERE id = ?').run(id); }
 
+    deleteSession(id) {
+        const tx = this.db.transaction((sessionId) => {
+            this.db.prepare('DELETE FROM messages WHERE session_id = ?').run(sessionId);
+            this.db.prepare('DELETE FROM session_collaborators WHERE session_id = ?').run(sessionId);
+            this.db.prepare('DELETE FROM session_share_links WHERE session_id = ?').run(sessionId);
+            this.db.prepare('DELETE FROM access_requests WHERE session_id = ?').run(sessionId);
+            this.db.prepare('DELETE FROM bookmarks WHERE session_id = ?').run(sessionId);
+            this.db.prepare('UPDATE issues SET session_id = NULL WHERE session_id = ?').run(sessionId);
+            this.db.prepare('DELETE FROM sessions WHERE id = ?').run(sessionId);
+        });
+        tx(id);
+    }
+
     getNextTodoIssue() {
         return this.db.prepare("SELECT * FROM issues WHERE status = 'todo' ORDER BY sort_order ASC LIMIT 1").get();
     }
 
     countIssuesByStatus() {
         return this.db.prepare("SELECT status, COUNT(*) as count FROM issues GROUP BY status").all();
+    }
+
+    // Feature (issue) linked to a dev session — used by the UAT-deploy auto-detect hook.
+    getFeatureBySession(sessionId) {
+        return this.db.prepare('SELECT * FROM issues WHERE session_id = ? LIMIT 1').get(sessionId);
+    }
+
+    // Auto-flip a feature to Done when its linked dev session reports a successful UAT deploy.
+    // Returns the updated issue if a change was made, else null.
+    // The dev session signalling completion (UAT push / agent decides done) moves the feature to
+    // "Dev Completed" so QA can pick it up. Final "QA Pass" (100%) is set by QA on the board.
+    markFeatureDoneBySession(sessionId) {
+        const issue = this.getFeatureBySession(sessionId);
+        if (!issue) return null;
+        if (issue.dev_status === 'dev_completed' || issue.dev_status === 'done') return null;
+        this.db.prepare(
+            `UPDATE issues SET dev_status = 'dev_completed', status = 'in_progress',
+                    updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?`
+        ).run(issue.id);
+        return this.getIssue(issue.id);
+    }
+
+    // Set a feature's lifecycle status from its linked session (the Workspace status control).
+    // status: 'in_progress' | 'dev_completed' | 'qa_pass'
+    setFeatureStatusBySession(sessionId, status) {
+        const issue = this.getFeatureBySession(sessionId);
+        if (!issue) return null;
+        if (status === 'qa_pass') {
+            this.db.prepare(`UPDATE issues SET qa_status = 'pass', dev_status = CASE WHEN dev_status IN ('todo','in_progress') THEN 'dev_completed' ELSE dev_status END, status = 'completed', completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(issue.id);
+        } else if (status === 'dev_completed') {
+            this.db.prepare(`UPDATE issues SET dev_status = 'dev_completed', status = 'in_progress', updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(issue.id);
+        } else { // in_progress
+            this.db.prepare(`UPDATE issues SET dev_status = 'in_progress', qa_status = CASE WHEN qa_status = 'pass' THEN '' ELSE qa_status END, status = 'in_progress', completed_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(issue.id);
+        }
+        return this.getIssue(issue.id);
+    }
+
+    // ── Bugs (per feature) ───────────────────────────────────────
+    createBug({ issueId, title, description = '', severity = 'normal', createdBy = null }) {
+        const id = `BUG-${Date.now().toString(36)}${Math.floor(Math.random() * 1000)}`;
+        this.db.prepare(
+            `INSERT INTO bugs (id, issue_id, title, description, severity, created_by) VALUES (?, ?, ?, ?, ?, ?)`
+        ).run(id, issueId, title, description, severity, createdBy);
+        this.recountBugs(issueId);
+        return this.getBug(id);
+    }
+
+    getBug(id) { return this.db.prepare('SELECT * FROM bugs WHERE id = ?').get(id); }
+
+    getBugsByIssue(issueId) {
+        return this.db.prepare(
+            `SELECT b.*, u.display_name as creator_name FROM bugs b
+             LEFT JOIN users u ON b.created_by = u.id
+             WHERE b.issue_id = ? ORDER BY b.created_at DESC`
+        ).all(issueId);
+    }
+
+    updateBug(id, updates) {
+        const allowed = ['title', 'description', 'severity', 'status', 'fix_session_id'];
+        const sets = [], vals = [];
+        for (const [k, v] of Object.entries(updates)) {
+            if (allowed.includes(k)) { sets.push(`${k} = ?`); vals.push(v); }
+        }
+        if (sets.length === 0) return this.getBug(id);
+        sets.push('updated_at = CURRENT_TIMESTAMP');
+        vals.push(id);
+        this.db.prepare(`UPDATE bugs SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
+        const bug = this.getBug(id);
+        if (bug) this.recountBugs(bug.issue_id);
+        return bug;
+    }
+
+    deleteBug(id) {
+        const bug = this.getBug(id);
+        this.db.prepare('DELETE FROM bugs WHERE id = ?').run(id);
+        if (bug) this.recountBugs(bug.issue_id);
+    }
+
+    // Keep issue.open_bugs / critical_bugs in sync with the bugs table.
+    recountBugs(issueId) {
+        const open = this.db.prepare("SELECT COUNT(*) as n FROM bugs WHERE issue_id = ? AND status NOT IN ('fixed','wont_fix')").get(issueId).n;
+        const critical = this.db.prepare("SELECT COUNT(*) as n FROM bugs WHERE issue_id = ? AND severity = 'critical' AND status NOT IN ('fixed','wont_fix')").get(issueId).n;
+        this.db.prepare('UPDATE issues SET open_bugs = ?, critical_bugs = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(open, critical, issueId);
+    }
+
+    // ── Test cases (per feature) ─────────────────────────────────
+    createTestCase({ issueId, title, steps = '', expected = '', status = 'pending', source = 'manual', createdBy = null }) {
+        const id = `TC-${Date.now().toString(36)}${Math.floor(Math.random() * 1000)}`;
+        this.db.prepare(
+            `INSERT INTO test_cases (id, issue_id, title, steps, expected, status, source, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        ).run(id, issueId, title, steps, expected, status, source, createdBy);
+        this.recountTestCases(issueId);
+        return this.getTestCase(id);
+    }
+
+    getTestCase(id) { return this.db.prepare('SELECT * FROM test_cases WHERE id = ?').get(id); }
+
+    getTestCasesByIssue(issueId) {
+        return this.db.prepare('SELECT * FROM test_cases WHERE issue_id = ? ORDER BY created_at ASC').all(issueId);
+    }
+
+    updateTestCase(id, updates) {
+        const allowed = ['title', 'steps', 'expected', 'status'];
+        const sets = [], vals = [];
+        for (const [k, v] of Object.entries(updates)) {
+            if (allowed.includes(k)) { sets.push(`${k} = ?`); vals.push(v); }
+        }
+        if (sets.length === 0) return this.getTestCase(id);
+        vals.push(id);
+        this.db.prepare(`UPDATE test_cases SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
+        return this.getTestCase(id);
+    }
+
+    deleteTestCase(id) {
+        const tc = this.getTestCase(id);
+        this.db.prepare('DELETE FROM test_cases WHERE id = ?').run(id);
+        if (tc) this.recountTestCases(tc.issue_id);
+    }
+
+    recountTestCases(issueId) {
+        const n = this.db.prepare('SELECT COUNT(*) as n FROM test_cases WHERE issue_id = ?').get(issueId).n;
+        this.db.prepare('UPDATE issues SET test_cases_count = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(n, issueId);
+    }
+
+    // Sprint progress — completion % across its features plus rollup counts.
+    getSprintProgress(sprintId) {
+        const rows = this.db.prepare('SELECT dev_status, dev_percent, qa_status, open_bugs, critical_bugs FROM issues WHERE sprint_id = ?').all(sprintId);
+        const total = rows.length;
+        const done = rows.filter(r => r.dev_status === 'done').length;
+        const inProgress = rows.filter(r => r.dev_status === 'in_progress' || r.dev_status === 'dev_completed').length;
+        const todo = total - done - inProgress;
+        // Sprint % = average of each feature's lifecycle completion (QA-driven), not raw Dev%.
+        const avgPercent = total ? Math.round(rows.reduce((s, r) => s + this.featureCompletion(r), 0) / total) : 0;
+        const passed = rows.filter(r => this.featureCompletion(r) === 100).length;
+        const openBugs = rows.reduce((s, r) => s + (r.open_bugs || 0), 0);
+        const criticalBugs = rows.reduce((s, r) => s + (r.critical_bugs || 0), 0);
+        return { total, done, inProgress, todo, passed, percent: avgPercent, openBugs, criticalBugs };
     }
 
     // ── Bookmarks ────────────────────────────────────────────────
