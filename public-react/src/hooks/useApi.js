@@ -342,11 +342,11 @@ export async function renameSession(sessionId, name) {
   });
 }
 
-export async function sendMessage(sessionId, text, imageTokens = []) {
+export async function sendMessage(sessionId, text, imageTokens = [], model = null) {
   return apiFetch(`/api/sessions/${sessionId}/message`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text, imageTokens }),
+    body: JSON.stringify({ text, imageTokens, model }),
   });
 }
 

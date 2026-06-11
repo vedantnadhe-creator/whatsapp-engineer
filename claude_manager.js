@@ -203,15 +203,18 @@ class ClaudeManager extends EventEmitter {
         return lines.join('\n');
     }
 
-    async resumeSession(sessionId, followUp, imagePath = null) {
+    async resumeSession(sessionId, followUp, imagePath = null, modelOverride = null) {
         const session = this.store.getSession(sessionId);
         if (!session) throw new Error(`Session ${sessionId} not found`);
         if (!session.claude_session_id) throw new Error(`Session ${sessionId} has no Claude ID yet`);
         if (this.isRunning(sessionId)) throw new Error(`Session ${sessionId} is currently running.`);
 
         this.store.addMessage(sessionId, 'user', followUp);
-        this.store.updateSession(sessionId, { status: 'running', thread_open: 1 });
-        const model = session.model || 'claude-opus-4-8';
+        // Mid-session model switch: persist the override so this resume — and every later message — uses it.
+        const updates = { status: 'running', thread_open: 1 };
+        if (modelOverride && modelOverride !== session.model) updates.model = modelOverride;
+        this.store.updateSession(sessionId, updates);
+        const model = modelOverride || session.model || 'claude-opus-4-8';
         this._spawnResume(sessionId, session.claude_session_id, followUp, session.working_dir, session.cost_usd || 0, imagePath, model);
         return { sessionId };
     }

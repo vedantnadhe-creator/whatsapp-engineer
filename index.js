@@ -248,7 +248,7 @@ claude.on('session_error', async ({ sessionId, error }) => {
 
 // ── WhatsApp message handler ──────────────────────────────────
 
-export async function handleIncomingMessage({ isWeb: explicitIsWeb, phone, text, pushName, groupJid, imagePath = null, ownerId = null, model = 'claude-opus-4-8', workingDir = null, mode = null, editAccess = undefined }) {
+export async function handleIncomingMessage({ isWeb: explicitIsWeb, phone, text, pushName, groupJid, imagePath = null, ownerId = null, model = null, workingDir = null, mode = null, editAccess = undefined }) {
     try {
         const isWeb = explicitIsWeb || pushName === 'Web Dashboard';
         // Use groupJid as the session owner if in a group, otherwise use personal phone
@@ -323,7 +323,7 @@ export async function handleIncomingMessage({ isWeb: explicitIsWeb, phone, text,
                 // Close any existing thread before starting fresh
                 if (currentThread) store.closeThread(threadKey);
                 const task = intent.task || text;
-                const { sessionId } = await claude.startSession(threadKey, task, workingDir, imagePath, ownerId, model, { mode, editAccess });
+                const { sessionId } = await claude.startSession(threadKey, task, workingDir, imagePath, ownerId, model || 'claude-opus-4-8', { mode, editAccess });
 
                 if (isWeb) {
                     webMutedSessions.add(sessionId);
@@ -340,7 +340,7 @@ export async function handleIncomingMessage({ isWeb: explicitIsWeb, phone, text,
             case 'PLAN_SESSION': {
                 if (currentThread) store.closeThread(threadKey);
                 const task = intent.task || text;
-                const { sessionId } = await claude.planSession(threadKey, task, null, model);
+                const { sessionId } = await claude.planSession(threadKey, task, null, model || 'claude-opus-4-8');
 
                 if (isWeb) {
                     webMutedSessions.add(sessionId);
@@ -431,7 +431,8 @@ export async function handleIncomingMessage({ isWeb: explicitIsWeb, phone, text,
 
                 // When resuming, we can optionally credit the individual user who sent the follow-up
                 const followUpText = groupJid ? `[From ${pushName || phone}]: ${intent.task || text}` : (intent.task || text);
-                await claude.resumeSession(target.id, followUpText, imagePath);
+                // Pass the (possibly switched) model so the dashboard can change models mid-session.
+                await claude.resumeSession(target.id, followUpText, imagePath, model);
                 return { sessionId: target.id };
             }
 
@@ -507,7 +508,7 @@ export async function handleIncomingMessage({ isWeb: explicitIsWeb, phone, text,
             case 'START_AUTONOMOUS_SESSION': {
                 if (currentThread) store.closeThread(threadKey);
                 const task = intent.task || text;
-                const { sessionId } = await claude.startAutonomousSession(threadKey, task, null, null, null, model);
+                const { sessionId } = await claude.startAutonomousSession(threadKey, task, null, null, null, model || 'claude-opus-4-8');
                 await wa.sendMessage(replyTo,
                     (intent.reply || '🚀 Starting Ralph Wiggum Autonomous Agent...') +
                     `\n📋 Session ID: *${sessionId}*\nRalph will self-loop and run background commands.`

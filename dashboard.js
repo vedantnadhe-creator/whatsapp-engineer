@@ -575,7 +575,11 @@ Do NOT ask for confirmation — proceed through each step automatically. If any 
             }
             const tokens = Array.isArray(req.body.imageTokens) ? req.body.imageTokens : (req.body.imageToken ? [req.body.imageToken] : []);
             const imagePath = tokens.map(t => { const p = pendingImages.get(t); pendingImages.delete(t); return p; }).filter(Boolean)[0] || null;
-            await messageHandler({ isWeb: true, phone: String(phone), text: `[resume ${sessionId}] ${text}`, pushName: req.user.displayName || 'Dashboard', imagePath });
+            // Allow switching the model mid-session: if the dashboard sends a model, persist it so the
+            // resume spawns the CLI with the new model on this (and every subsequent) message.
+            const model = (typeof req.body.model === 'string' && req.body.model.trim()) ? req.body.model.trim() : null;
+            if (model && model !== session.model) store.updateSession(sessionId, { model });
+            await messageHandler({ isWeb: true, phone: String(phone), text: `[resume ${sessionId}] ${text}`, pushName: req.user.displayName || 'Dashboard', imagePath, model: model || session.model });
             res.json({ success: true });
         } catch (err) { res.status(500).json({ error: err.message }); }
     });

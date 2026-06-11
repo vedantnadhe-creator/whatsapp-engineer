@@ -201,9 +201,15 @@ function Dashboard() {
 
   const _sendMessage = useCallback(async (text, model, imageTokens = []) => {
     if (!activeSession?.id) return
-    await sendMessage(activeSession.id, text, imageTokens)
+    const useModel = model || selectedModel || activeSession.model || 'claude-opus-4-8'
+    await sendMessage(activeSession.id, text, imageTokens, useModel)
+    // Reflect the (possibly switched) model locally so the dropdown doesn't snap back.
+    if (useModel !== activeSession.model) {
+      setActiveSession(s => s ? { ...s, model: useModel } : s)
+    }
+    setSelectedModel(useModel)
     setTimeout(() => refreshMessages(), 1000)
-  }, [activeSession?.id])
+  }, [activeSession?.id, activeSession?.model, selectedModel])
   const [handleSendMessage, sendingMessage] = useAction(_sendMessage)
 
   const handleAdvanceStage = useCallback(async (toStage) => {
