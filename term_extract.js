@@ -180,20 +180,22 @@ export function createExtractor({ cols = 80, rows = 24 } = {}) {
 
     const extract = () => {
         const all = readLines();
-        // Detect whether Claude is mid-turn (drives the live "thinking" box). While
-        // working, the live region shows a spinner line — a gerund + ellipsis like
-        // "✽ Zesting…" / "Baking… (2s · ↓ 36 tokens · thinking)" — plus a live token
-        // counter. When done it collapses to "✻ Cooked for 3s" (past tense, no "…").
-        // NOTE: do NOT key on a bare token counter — Claude's footer shows a
-        // persistent context-usage count (e.g. "↓ 152k tokens") in longer
-        // sessions, which would pin "working" on forever. The active spinner is
-        // identified by its ellipsis + "(Ns" timer / "· thinking" / gerund instead.
-        const working = all.some((l) => {
+        // Detect whether Claude is mid-turn (drives the live "thinking" box). The
+        // active spinner — a gerund + ellipsis like "✽ Zesting…" / "Baking… (2s ·
+        // … · thinking)" — renders in the LIVE region at the bottom of the screen,
+        // just above the input frame. We scan ONLY the screen tail: scanning the
+        // whole scrollback would let an old "Verb…"/"(2s" line in history pin
+        // "working" on forever (the bug where a concluded turn stayed "Working…").
+        // We also never key on a bare token counter — the footer shows a persistent
+        // context-usage count in long sessions.
+        const tail = all.filter((l) => l.trim()).slice(-14); // last few non-empty (live) lines
+        const MSG_GLYPH = /^[●⏺⎿❯>]/; // committed user/assistant/tool lines — never the spinner
+        const working = tail.some((l) => {
             const t = l.trim();
-            if (/esc to interrupt/i.test(t)) return true;                       // some builds
-            if (/·\s*thinking\b/i.test(t)) return true;                          // live "· thinking"
-            if (/…\s*\(\s*\d+\s*s\b/.test(t)) return true;                       // spinner "Verb… (2s …"
-            if (/^\S[\s]+[A-Z][a-z]+…$/.test(t)) return true;                    // bare "✽ Zesting…"
+            if (/esc to interrupt/i.test(t)) return true;                                  // some builds
+            if (/·\s*thinking\b/i.test(t)) return true;                                     // live "· thinking"
+            if (/…\s*\(\s*\d+\s*s\b/.test(t) && !MSG_GLYPH.test(t)) return true;            // spinner "Verb… (2s …"
+            if (/^\S[\s]+[A-Z][a-z]+…$/.test(t) && !MSG_GLYPH.test(t)) return true;         // bare "✽ Zesting…"
             return false;
         });
         const transcript = stripLiveRegion(all);
