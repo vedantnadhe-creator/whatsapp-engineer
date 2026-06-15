@@ -9,6 +9,7 @@ import {
   useModels, useSessions, renameSession, deleteSession, toggleBookmark, getTranscript,
   useCostStats, useAgents, useSprints, useIssues, useTeamMembers,
   runAgent, getSprintChangelog, requestIssueSummary, getIssueLastResponse, generateSprintChangelog,
+  uploadFile,
 } from '../hooks/useApi'
 import Login from './Login'
 import ShareSessionModal from '../components/ShareSessionModal'
@@ -19,7 +20,7 @@ import {
   ArrowLeft, Circle, RotateCw, TerminalSquare, PanelLeftClose, PanelLeft,
   Plus, Search, X, MoreVertical, GitFork, History, Share2, Pencil, Trash2, Star, Play,
   MessageSquare, SendHorizontal, Wrench, ChevronDown, LayoutGrid, Sparkles, DollarSign,
-  ChevronRight, Loader2,
+  ChevronRight, Loader2, Paperclip,
 } from 'lucide-react'
 
 // Interactive web terminal — /sessions/v2. Real human typing → subscription-billed.
@@ -69,6 +70,8 @@ export default function TerminalPage() {
   const [messages, setMessages] = useState([]) // [{role, content, tool}] from `chat` frames
   const [working, setWorking] = useState(false) // Claude is mid-turn (live thinking box)
   const [draft, setDraft] = useState('')
+  const [attachments, setAttachments] = useState([]) // [{url, fileName, path, name}] staged images
+  const [uploading, setUploading] = useState(false)
   const [atBottom, setAtBottom] = useState(true)
   const [activeId, setActiveId] = useState(null)
   const [menuFor, setMenuFor] = useState(null)
@@ -215,15 +218,35 @@ export default function TerminalPage() {
   // parsed `user` bubble — same path a human typing in the terminal would take.
   const sendChat = () => {
     const text = draft.replace(/\s+$/, '')
-    if (!text || wsRef.current?.readyState !== 1) return
-    wsRef.current.send(JSON.stringify({ type: 'input', data: text }))
+    if ((!text && attachments.length === 0) || wsRef.current?.readyState !== 1) return
+    // Hand images to interactive Claude by absolute path — it reads them via its
+    // Read tool. The paths echo back in the user bubble; the chat view turns any
+    // /uploads/<file> reference into a thumbnail and hides the raw path text.
+    let toSend = text
+    const paths = attachments.map(a => a.path).filter(Boolean)
+    if (paths.length) toSend = `${text || 'Please review the attached image(s).'} ${paths.join(' ')}`
+    wsRef.current.send(JSON.stringify({ type: 'input', data: toSend }))
     // Small gap so the TUI commits the (bracket-pasted) input before the submit.
-    setTimeout(() => { try { wsRef.current?.send(JSON.stringify({ type: 'input', data: '\r' })) } catch {} }, 40)
-    setDraft('')
+    setTimeout(() => { try { wsRef.current?.send(JSON.stringify({ type: 'input', data: '\r' })) } catch {} }, 60)
+    setDraft(''); setAttachments([])
   }
   const onDraftKey = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat() }
   }
+  // Upload one or more image files and stage them as attachments.
+  const addFiles = async (files) => {
+    const imgs = Array.from(files || []).filter(f => f.type?.startsWith('image/'))
+    if (!imgs.length) return
+    setUploading(true)
+    for (const f of imgs) {
+      try {
+        const r = await uploadFile(f)
+        if (r?.success) setAttachments(a => [...a, { url: r.url, fileName: r.fileName, path: r.path, name: f.name }])
+      } catch (_) { /* skip a failed upload */ }
+    }
+    setUploading(false)
+  }
+  const removeAttachment = (i) => setAttachments(a => a.filter((_, idx) => idx !== i))
 
   const startNew = () => {
     const name = window.prompt('Name this session (optional):', '')
@@ -427,6 +450,7 @@ export default function TerminalPage() {
               <ChatComposer
                 draft={draft} setDraft={setDraft} onKeyDown={onDraftKey} onSend={sendChat}
                 disabled={status !== 'live'} inputRef={draftRef} status={status}
+                attachments={attachments} onAddFiles={addFiles} onRemoveAttachment={removeAttachment} uploading={uploading}
               />
             </div>
           )}
@@ -539,6 +563,32 @@ function groupTurns(messages) {
   return turns
 }
 
+// A sent message echoes back with the attached images' absolute paths appended.
+// Pull those /uploads/<file> references out into thumbnails and strip the raw
+// path text from what we display. Whitespace is normalised first so a path that
+// wrapped across terminal lines still matches.
+const UPLOAD_RE = /uploads\/(\d{10,}-[a-z0-9]+\.(?:png|jpe?g|gif|webp|bmp|svg))/gi
+function parseUserContent(content) {
+  const raw = content || ''
+  // Extract thumbnails from a whitespace-STRIPPED copy so a path that wrapped
+  // across terminal lines (newline inside the filename) still matches.
+  const images = []
+  let m
+  UPLOAD_RE.lastIndex = 0
+  const joined = raw.replace(/\s+/g, '')
+  while ((m = UPLOAD_RE.exec(joined))) images.push(`/api/uploads/${m[1]}`)
+  // Display text: the appended paths always trail the user's text, so cut at the
+  // first /uploads reference, then scrub any leftover path/filename fragments.
+  let text = raw
+  const cut = text.search(/\S*\/uploads/)
+  if (cut >= 0) text = text.slice(0, cut)
+  text = text
+    .replace(/\S*\/?uploads\/\S*/gi, '')
+    .replace(/\b\d{10,}-[a-z0-9]+\.(?:png|jpe?g|gif|webp|bmp|svg)\b/gi, '')
+    .replace(/[ \t]{2,}/g, ' ').trim()
+  return { text, images: [...new Set(images)] }
+}
+
 // Markdown renderer tuned for the dark chat surface. Compact, readable, fenced
 // code in a monospace block, GFM tables/lists.
 const MD = {
@@ -618,13 +668,27 @@ function ChatTurn({ turn, active }) {
       if (steps[i].role === 'assistant' && !steps[i].tool) { answer = steps[i]; thinkingSteps = steps.slice(0, i); break }
     }
   }
+  const u = turn.user ? parseUserContent(turn.user.content) : null
   return (
     <div className="flex flex-col gap-3">
-      {turn.user && (
+      {turn.user && (u.text || u.images.length > 0) && (
         <div className="flex justify-end">
-          <div className="px-4 py-2.5 rounded-2xl rounded-br-md text-sm whitespace-pre-wrap break-words"
-            style={{ maxWidth: '85%', backgroundColor: 'rgba(59,130,246,0.16)', color: 'var(--c-text)', border: '1px solid rgba(59,130,246,0.30)', lineHeight: 1.55 }}>
-            {turn.user.content}
+          <div className="flex flex-col items-end gap-1.5" style={{ maxWidth: '85%' }}>
+            {u.images.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 justify-end">
+                {u.images.map((src, i) => (
+                  <a key={i} href={src} target="_blank" rel="noreferrer" className="block rounded-lg overflow-hidden" style={{ border: '1px solid var(--c-border)' }}>
+                    <img src={src} alt="attachment" style={{ maxWidth: 160, maxHeight: 160, objectFit: 'cover', display: 'block' }} />
+                  </a>
+                ))}
+              </div>
+            )}
+            {u.text && (
+              <div className="px-4 py-2.5 rounded-2xl rounded-br-md text-sm whitespace-pre-wrap break-words"
+                style={{ backgroundColor: 'rgba(59,130,246,0.16)', color: 'var(--c-text)', border: '1px solid rgba(59,130,246,0.30)', lineHeight: 1.55 }}>
+                {u.text}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -650,22 +714,65 @@ function ChatTurn({ turn, active }) {
   )
 }
 
-function ChatComposer({ draft, setDraft, onKeyDown, onSend, disabled, inputRef, status }) {
+function ChatComposer({ draft, setDraft, onKeyDown, onSend, disabled, inputRef, status, attachments = [], onAddFiles, onRemoveAttachment, uploading }) {
+  const fileRef = useRef(null)
+  const [dragOver, setDragOver] = useState(false)
+  const canSend = !disabled && (draft.trim() || attachments.length > 0)
+  const onPaste = (e) => {
+    const files = Array.from(e.clipboardData?.files || []).filter(f => f.type?.startsWith('image/'))
+    if (files.length) { e.preventDefault(); onAddFiles(files) }
+  }
+  const onDrop = (e) => {
+    e.preventDefault(); setDragOver(false)
+    if (e.dataTransfer?.files?.length) onAddFiles(e.dataTransfer.files)
+  }
   return (
     <div className="shrink-0 px-5 py-3" style={{ borderTop: '1px solid var(--c-border)', backgroundColor: 'var(--c-bg)' }}>
       <div className="mx-auto w-full" style={{ maxWidth: 760 }}>
-        <div className="flex items-end gap-2 rounded-xl px-3 py-2" style={{ backgroundColor: 'var(--c-surface)', border: '1px solid var(--c-border)' }}>
+        {/* Staged image attachments */}
+        {(attachments.length > 0 || uploading) && (
+          <div className="flex flex-wrap gap-2 mb-2">
+            {attachments.map((a, i) => (
+              <div key={i} className="relative group rounded-lg overflow-hidden" style={{ width: 56, height: 56, border: '1px solid var(--c-border)', backgroundColor: 'var(--c-surface-2)' }}>
+                <img src={a.url} alt={a.name || 'image'} className="w-full h-full" style={{ objectFit: 'cover' }} />
+                <button onClick={() => onRemoveAttachment(i)} title="Remove"
+                  className="absolute top-0.5 right-0.5 flex items-center justify-center rounded-full cursor-pointer"
+                  style={{ width: 16, height: 16, backgroundColor: 'rgba(0,0,0,0.65)', color: '#fff' }}>
+                  <X size={10} />
+                </button>
+              </div>
+            ))}
+            {uploading && (
+              <div className="flex items-center justify-center rounded-lg" style={{ width: 56, height: 56, border: '1px dashed var(--c-border)', color: 'var(--c-text-muted)' }}>
+                <Loader2 size={16} className="animate-spin" />
+              </div>
+            )}
+          </div>
+        )}
+        <div className="flex items-end gap-2 rounded-xl px-2 py-2"
+          onDragOver={(e) => { e.preventDefault(); if (!disabled) setDragOver(true) }}
+          onDragLeave={() => setDragOver(false)} onDrop={disabled ? undefined : onDrop}
+          style={{ backgroundColor: 'var(--c-surface)', border: `1px solid ${dragOver ? 'var(--c-accent)' : 'var(--c-border)'}` }}>
+          <input ref={fileRef} type="file" accept="image/*" multiple hidden
+            onChange={(e) => { onAddFiles(e.target.files); e.target.value = '' }} />
+          <button onClick={() => fileRef.current?.click()} disabled={disabled} title="Attach images"
+            className="flex items-center justify-center rounded-lg cursor-pointer shrink-0 transition-colors"
+            style={{ width: 32, height: 32, color: 'var(--c-text-secondary)', opacity: disabled ? 0.4 : 1 }}
+            onMouseEnter={(e) => { if (!disabled) e.currentTarget.style.backgroundColor = 'var(--c-surface-2)' }}
+            onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent' }}>
+            <Paperclip size={16} />
+          </button>
           <textarea
-            ref={inputRef} value={draft} rows={1} onKeyDown={onKeyDown}
+            ref={inputRef} value={draft} rows={1} onKeyDown={onKeyDown} onPaste={onPaste}
             onChange={(e) => { setDraft(e.target.value); const t = e.target; t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 160) + 'px' }}
-            placeholder={disabled ? 'Session not live — switch to a running session to chat' : 'Message Claude…  (Enter to send, Shift+Enter for newline)'}
+            placeholder={disabled ? 'Session not live — switch to a running session to chat' : 'Message Claude…  (Enter to send, paste or drop images)'}
             disabled={disabled}
-            className="flex-1 bg-transparent outline-none resize-none text-sm py-1"
+            className="flex-1 bg-transparent outline-none resize-none text-sm py-1.5"
             style={{ color: 'var(--c-text)', maxHeight: 160, lineHeight: 1.5 }}
           />
-          <button onClick={onSend} disabled={disabled || !draft.trim()} title="Send (Enter)"
+          <button onClick={onSend} disabled={!canSend} title="Send (Enter)"
             className="flex items-center justify-center rounded-lg cursor-pointer shrink-0 transition-opacity"
-            style={{ width: 34, height: 34, backgroundColor: 'var(--c-accent)', color: '#fff', opacity: disabled || !draft.trim() ? 0.4 : 1 }}>
+            style={{ width: 34, height: 34, backgroundColor: 'var(--c-accent)', color: '#fff', opacity: canSend ? 1 : 0.4 }}>
             <SendHorizontal size={16} />
           </button>
         </div>

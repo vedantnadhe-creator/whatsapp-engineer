@@ -858,7 +858,9 @@ Do NOT ask for confirmation — proceed through each step automatically. If any 
             // Also store in pending map for Claude session use
             const token = storePendingImage(filePath);
             const url = `/api/uploads/${fileName}`;
-            res.json({ success: true, token, url, fileName, mimeType });
+            // `path` (absolute) lets the V2 interactive terminal hand the file to
+            // Claude by reference; V1 ignores it and uses token/url as before.
+            res.json({ success: true, token, url, fileName, mimeType, path: filePath });
         } catch (err) { res.status(500).json({ error: err.message }); }
     });
     app.post('/api/upload-image', uploadHandler, (req, res) => res.redirect(307, '/api/upload-file'));
