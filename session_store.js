@@ -276,10 +276,16 @@ class SessionStore {
         return path.join(os.homedir(), '.claude', 'projects', folder, `${sessionId}.jsonl`);
     }
 
+    getSessionByClaudeId(claudeId) {
+        return this.db.prepare('SELECT * FROM sessions WHERE claude_session_id = ? ORDER BY updated_at DESC LIMIT 1').get(claudeId);
+    }
+
     // Parse the JSONL transcript into the messages table (for history / search /
-    // share). Returns the parsed messages. Idempotent — replaces prior rows.
-    syncTranscript(sessionId, workingDir) {
-        const file = this.transcriptPath(sessionId, workingDir);
+    // share). The transcript file is keyed by the Claude UUID (claudeId), while the
+    // messages rows are keyed by the OliBot row id (rowId) — these differ for agent
+    // sessions. Idempotent — replaces prior rows. Returns the parsed messages.
+    syncTranscript(rowId, workingDir, claudeId = null) {
+        const file = this.transcriptPath(claudeId || rowId, workingDir);
         if (!fs.existsSync(file)) return { messages: [], synced: 0 };
 
         const blockText = (content) => {
@@ -310,14 +316,14 @@ class SessionStore {
 
         // Only persist when the session row exists (messages.session_id is a FK).
         // History/search still get the parsed messages via the return value.
-        if (this.getSession(sessionId)) {
+        if (this.getSession(rowId)) {
             const tx = this.db.transaction(() => {
-                this.db.prepare('DELETE FROM messages WHERE session_id = ?').run(sessionId);
+                this.db.prepare('DELETE FROM messages WHERE session_id = ?').run(rowId);
                 const ins = this.db.prepare('INSERT INTO messages (session_id, role, content, timestamp) VALUES (?, ?, ?, ?)');
-                for (const m of msgs) ins.run(sessionId, m.role, m.content, m.ts);
+                for (const m of msgs) ins.run(rowId, m.role, m.content, m.ts);
             });
             tx();
-            try { this.updateSession(sessionId, { input_tokens: inTok, output_tokens: outTok }); } catch (_) {}
+            try { this.updateSession(rowId, { input_tokens: inTok, output_tokens: outTok }); } catch (_) {}
         }
         return { messages: msgs, synced: msgs.length };
     }

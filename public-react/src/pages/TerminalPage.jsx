@@ -45,7 +45,10 @@ export default function TerminalPage() {
   const [historyFor, setHistoryFor] = useState(null)
   const [shareFor, setShareFor] = useState(null)
   // Connection request — bump .key to (re)spawn the terminal with these params.
-  const [connReq, setConnReq] = useState({ key: 0, sessionId: null, resume: false, fork: false })
+  // sessionId = Claude session UUID passed to --resume; rowId = OliBot row id (for
+  // sidebar highlight; null for brand-new sessions); cwd = the session's working dir
+  // so Claude finds the transcript in the right project folder.
+  const [connReq, setConnReq] = useState({ key: 0, sessionId: null, rowId: null, resume: false, fork: false, cwd: null, name: null })
 
   const hostRef = useRef(null)
   const termRef = useRef(null)
@@ -86,12 +89,15 @@ export default function TerminalPage() {
         ws.send(JSON.stringify({
           type: 'start', cols: term.cols, rows: term.rows, model: modelRef.current,
           sessionId: c.sessionId || undefined, resume: !!c.resume, fork: !!c.fork,
+          cwd: c.cwd || undefined, name: c.name || undefined,
         }))
       }
       ws.onmessage = (ev) => {
         let msg; try { msg = JSON.parse(ev.data) } catch { return }
         if (msg.type === 'output') term.write(msg.data)
-        else if (msg.type === 'started') { setStatus('live'); setActiveId(msg.sessionId); setTimeout(refreshSessions, 400) }
+        // For an existing-row resume, keep highlight on the OliBot row id; for a
+        // brand-new session the server-created row id IS the Claude uuid.
+        else if (msg.type === 'started') { setStatus('live'); if (!connRef.current.rowId) setActiveId(msg.sessionId); setTimeout(refreshSessions, 400) }
         else if (msg.type === 'forked') { setActiveId(msg.sessionId); setTimeout(refreshSessions, 400) }
         else if (msg.type === 'exit') { setStatus('exited'); term.write(`\r\n\x1b[90m── exited (code ${msg.code}). ↻ to start new. ──\x1b[0m\r\n`); setTimeout(refreshSessions, 400) }
         else if (msg.type === 'error') { setStatus('error'); term.write(`\r\n\x1b[31m${msg.message}\x1b[0m\r\n`) }
@@ -124,9 +130,22 @@ export default function TerminalPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, connReq.key])
 
-  const startNew = () => { setActiveId(null); setConnReq(c => ({ key: c.key + 1, sessionId: null, resume: false, fork: false })) }
-  const openSession = (s) => { setMenuFor(null); setActiveId(s.id); setConnReq(c => ({ key: c.key + 1, sessionId: s.id, resume: true, fork: false })) }
-  const forkSession = (s) => { setMenuFor(null); setConnReq(c => ({ key: c.key + 1, sessionId: s.id, resume: true, fork: true })) }
+  const startNew = () => {
+    const name = window.prompt('Name this session (optional):', '')
+    if (name === null) return // cancelled
+    setActiveId(null)
+    setConnReq(c => ({ key: c.key + 1, sessionId: null, rowId: null, resume: false, fork: false, cwd: null, name: name.trim() || null }))
+  }
+  // Resume uses the mapped Claude session UUID (claude_session_id), NOT the OliBot
+  // row id, and runs in the session's own working dir so Claude finds the transcript.
+  const openSession = (s) => {
+    setMenuFor(null); setActiveId(s.id)
+    setConnReq(c => ({ key: c.key + 1, sessionId: s.claude_session_id || s.id, rowId: s.id, resume: true, fork: false, cwd: s.working_dir || null, name: null }))
+  }
+  const forkSession = (s) => {
+    setMenuFor(null)
+    setConnReq(c => ({ key: c.key + 1, sessionId: s.claude_session_id || s.id, rowId: null, resume: true, fork: true, cwd: s.working_dir || null, name: null }))
+  }
   const restart = (nextModel) => {
     if (nextModel) setModel(nextModel)
     setConnReq(c => ({ ...c, key: c.key + 1 }))

@@ -203,7 +203,7 @@ a{color:#60a5fa;text-decoration:none}</style></head>
             const session = store.getSession(req.params.id);
             if (!session) return res.status(404).json({ error: 'Session not found' });
             if (typeof store.syncTranscript !== 'function') return res.json({ messages: [] });
-            const result = store.syncTranscript(session.id, session.working_dir);
+            const result = store.syncTranscript(session.id, session.working_dir, session.claude_session_id || session.id);
             res.json({ messages: result.messages, synced: result.synced });
         } catch (err) {
             res.status(500).json({ error: err.message });

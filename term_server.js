@@ -50,16 +50,17 @@ export function attachTerminalServer(store) {
         }
 
         let proc = null;
-        let currentId = null;
+        let claudeId = null;  // Claude session UUID (transcript filename, --resume arg)
+        let rowId = null;     // OliBot sessions-table row id (may differ for agent sessions)
         let currentDir = config.DEFAULT_WORKING_DIR;
         let forkPending = null; // { parentId, sinceMs } when resuming with --fork-session
 
         const kill = () => { try { proc?.kill(); } catch (_) {} proc = null; };
 
         const finalize = () => {
-            if (!currentId || !store) return;
-            try { store.updateSession(currentId, { status: 'stopped' }); } catch (_) {}
-            try { store.syncTranscript(currentId, currentDir); } catch (_) {}
+            if (!rowId || !store) return;
+            try { store.updateSession(rowId, { status: 'stopped' }); } catch (_) {}
+            try { store.syncTranscript(rowId, currentDir, claudeId); } catch (_) {}
         };
 
         const spawnTerm = ({ cols = 80, rows = 24, model, sessionId, resume, fork, name, cwd } = {}) => {
@@ -71,20 +72,26 @@ export function attachTerminalServer(store) {
 
             const args = [];
             let mode;
+            forkPending = null;
             if (resume && sessionId) {
+                // sessionId is the Claude session UUID to resume.
                 args.push('--resume', sessionId);
+                claudeId = sessionId;
                 if (fork) {
                     args.push('--fork-session');
                     forkPending = { parentId: sessionId, sinceMs: Date.now() };
-                    currentId = null; // will be discovered post-spawn
+                    claudeId = null; rowId = null; // discovered post-spawn
                     mode = 'fork';
                 } else {
-                    currentId = sessionId;
+                    // Reuse the existing row (terminal row id == uuid; agent row id == WA-xxx).
+                    const existing = store?.getSession?.(sessionId) || store?.getSessionByClaudeId?.(sessionId);
+                    rowId = existing ? existing.id : sessionId;
                     mode = 'resume';
                 }
             } else {
-                currentId = sessionId || crypto.randomUUID();
-                args.push('--session-id', currentId);
+                claudeId = sessionId || crypto.randomUUID();
+                rowId = claudeId;
+                args.push('--session-id', claudeId);
                 mode = 'new';
             }
             if (model && model !== 'default') args.push('--model', model);
@@ -102,11 +109,19 @@ export function attachTerminalServer(store) {
                 return;
             }
 
-            // Register the session row so it appears in the list immediately.
-            // (Forks register lazily once Claude has created the new transcript.)
-            if (store && currentId) {
-                try { store.createTerminalSession(currentId, user.id, name || (mode === 'resume' ? null : 'Terminal session'), currentDir, model || 'claude-opus-4-8'); } catch (_) {}
-                if (mode === 'resume') { try { store.updateSession(currentId, { status: 'running' }); } catch (_) {} }
+            // Register/refresh the session row so it appears in the list immediately.
+            // - new: create a terminal row (id == uuid).
+            // - resume: reuse the existing row (created above as fallback if missing);
+            //   never duplicate an agent row. Just mark it running.
+            if (store && rowId) {
+                if (mode === 'new') {
+                    try { store.createTerminalSession(rowId, user.id, name || 'Terminal session', currentDir, model || 'claude-opus-4-8'); } catch (_) {}
+                } else if (mode === 'resume') {
+                    if (!store.getSession(rowId)) {
+                        try { store.createTerminalSession(rowId, user.id, name || 'Terminal session', currentDir, model || 'claude-opus-4-8'); } catch (_) {}
+                    }
+                    try { store.updateSession(rowId, { status: 'running' }); } catch (_) {}
+                }
             }
 
             // For a fork, poll the project dir for the freshly-written uuid.
@@ -118,9 +133,9 @@ export function attachTerminalServer(store) {
                     const found = store?.detectNewSession?.(currentDir, fp.sinceMs - 1500, fp.parentId);
                     if (found) {
                         clearInterval(timer);
-                        currentId = found;
+                        claudeId = found; rowId = found;
                         forkPending = null;
-                        try { store.createTerminalSession(found, user.id, 'Fork', currentDir, model || 'claude-opus-4-8', fp.parentId); } catch (_) {}
+                        try { store.createTerminalSession(found, user.id, name || 'Fork', currentDir, model || 'claude-opus-4-8', fp.parentId); } catch (_) {}
                         try { ws.send(JSON.stringify({ type: 'forked', sessionId: found, parentId: fp.parentId })); } catch (_) {}
                     } else if (tries > 20) {
                         clearInterval(timer);
@@ -136,7 +151,7 @@ export function attachTerminalServer(store) {
                 proc = null;
             });
 
-            try { ws.send(JSON.stringify({ type: 'started', sessionId: currentId, cwd: currentDir, model: model || 'default', mode })); } catch (_) {}
+            try { ws.send(JSON.stringify({ type: 'started', sessionId: rowId, cwd: currentDir, model: model || 'default', mode })); } catch (_) {}
         };
 
         ws.on('message', (raw) => {
