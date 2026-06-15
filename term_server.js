@@ -141,7 +141,11 @@ export function attachTerminalServer(store) {
         const base = config.DEFAULT_WORKING_DIR;
         const workingDir = (cwd && String(cwd).startsWith(base)) ? cwd : base;
 
-        const args = [];
+        // Default to no permission prompts: these sessions are driven from the
+        // chat view, where tool-permission dialogs would render in the stripped
+        // live region (invisible) and stall the session. (Claude refuses this
+        // flag as root; the service runs as the `ubuntu` user, so it's fine.)
+        const args = ['--dangerously-skip-permissions'];
         let claudeId, rowId, mode, forkParent = null;
         if (resume && sessionId) {
             args.push('--resume', sessionId);
