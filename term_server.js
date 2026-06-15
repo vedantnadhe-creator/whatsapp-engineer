@@ -58,6 +58,41 @@ const BUFFER_CAP = 256 * 1024;       // scrollback replayed to a (re)attaching c
 const IDLE_KILL_MS = 30 * 60 * 1000; // kill a PTY with no viewers after 30 min
 const CHAT_DEBOUNCE_MS = 180;        // settle window before re-parsing the screen into chat
 
+// Role-driven session persona (mirrors V1's claude_manager): designers run in the
+// designs repo (its own CLAUDE.md), developers use the default CLAUDE.md, testers
+// run in the code repo with a QA persona appended (+ read-only gating if they lack
+// edit access). Copied here so V1's module is left untouched.
+const EDIT_TOOLS = 'Edit,Write,NotebookEdit,MultiEdit';
+const TESTER_PROMPT = `[ROLE: TESTER] You are operating as a QA tester, not a developer. Your job is to verify the change under test — NOT to build features.
+SOURCE OF TRUTH — derive expected behavior in THIS strict priority order, do NOT jump to reading code first:
+  1. PRDs — the product requirements are the primary spec. If the tester's instruction names a PRD or links one, use it.
+  2. Knowledge Base — the pluginlive-kb GitHub repo cloned at /home/ubuntu/pluginlive-kb. Search it, then read the relevant doc.
+Work AUTONOMOUSLY: do NOT pause to ask for a PRD, acceptance criteria, scope, or permission. Pull expected behavior from the PRD/KB and the tester's instruction, then start testing. Focus on: understanding what changed and the expected behavior; writing structured test cases (happy path, edge, negative); reproducing reported behavior; running read-only checks and reporting findings (passed/failed, exact repro steps, severity).
+REPORTING — the bug report must contain ONLY: WHAT the bug is (observable wrong behavior, repro steps, severity) and WHY it happens (the root cause). You MAY read code (read-only) to pin down the root cause, but you must NOT output any fix: no code suggestions, diffs, patches, or corrected snippets. Stop at WHAT + WHY — fixing is the developer's job.`;
+
+// Map a user's role → { mode tag, working dir, extra claude args }. `roleMode` is
+// stored on the session so the board can tag designer/tester sessions.
+function roleConfig(user, store, cwd) {
+    const role = (user && user.role) || 'developer';
+    const roleMode = role === 'designer' ? 'design' : role === 'tester' ? 'tester' : 'developer';
+    const defaultBase = roleMode === 'design' && config.DESIGNS_DIR ? config.DESIGNS_DIR : config.DEFAULT_WORKING_DIR;
+    const root = config.DEFAULT_WORKING_DIR;
+    // Honour a resume/fork cwd that lives under the workspace root; new sessions
+    // fall back to the role's default dir (designers → designs repo).
+    const workingDir = (cwd && String(cwd).startsWith(root)) ? cwd : defaultBase;
+    const extraArgs = [];
+    if (roleMode === 'tester') {
+        let canEdit = true;
+        try { canEdit = store?.getUserById?.(user.id)?.can_edit !== 0; } catch (_) {}
+        const editLine = canEdit
+            ? 'You MAY edit code and test files to add or run tests.'
+            : 'READ-ONLY: you do NOT have code-edit access. Produce test cases, run read-only checks, and report findings. File-editing tools are disabled.';
+        extraArgs.push('--append-system-prompt', `${TESTER_PROMPT}\n${editLine}`);
+        if (!canEdit) extraArgs.push(`--disallowedTools=${EDIT_TOOLS}`);
+    }
+    return { roleMode, workingDir, extraArgs };
+}
+
 function parseCookies(header = '') {
     const out = {};
     for (const part of header.split(';')) {
@@ -145,14 +180,14 @@ export function attachTerminalServer(store) {
 
     const spawnTerminal = (user, { cols = 80, rows = 24, model, sessionId, resume, fork, name, cwd } = {}) => {
         const bin = config.CLAUDE_BIN;
-        const base = config.DEFAULT_WORKING_DIR;
-        const workingDir = (cwd && String(cwd).startsWith(base)) ? cwd : base;
+        // Role-driven dir + persona (designer/developer/tester).
+        const { roleMode, workingDir, extraArgs } = roleConfig(user, store, cwd);
 
         // Default to no permission prompts: these sessions are driven from the
         // chat view, where tool-permission dialogs would render in the stripped
         // live region (invisible) and stall the session. (Claude refuses this
         // flag as root; the service runs as the `ubuntu` user, so it's fine.)
-        const args = ['--dangerously-skip-permissions'];
+        const args = ['--dangerously-skip-permissions', ...extraArgs];
         let claudeId, rowId, mode, forkParent = null;
         if (resume && sessionId) {
             args.push('--resume', sessionId);
@@ -195,6 +230,7 @@ export function attachTerminalServer(store) {
         if (store && rowId && mode !== 'fork') {
             if (mode === 'new') {
                 try { store.createTerminalSession(rowId, user.id, name || 'Terminal session', workingDir, model || 'claude-opus-4-8'); } catch (_) {}
+                try { store.updateSession(rowId, { mode: roleMode }); } catch (_) {} // tag designer/tester sessions
             } else if (mode === 'resume') {
                 if (!store.getSession(rowId)) { try { store.createTerminalSession(rowId, user.id, name || 'Terminal session', workingDir, model || 'claude-opus-4-8'); } catch (_) {} }
                 try { store.updateSession(rowId, { status: 'running' }); } catch (_) {}
@@ -214,6 +250,7 @@ export function attachTerminalServer(store) {
                     entry.claudeId = found; entry.rowId = found;
                     terminals.set(found, entry);
                     try { store.createTerminalSession(found, user.id, name || 'Fork', workingDir, model || 'claude-opus-4-8', forkParent); } catch (_) {}
+                    try { store.updateSession(found, { mode: roleMode }); } catch (_) {}
                     for (const c of entry.clients) { if (c.readyState === 1) c.send(JSON.stringify({ type: 'forked', sessionId: found, terminalId: found, parentId: forkParent })); }
                 } else if (tries > 20) { clearInterval(timer); }
             }, 500);

@@ -425,7 +425,8 @@ export default function TerminalPage() {
         {activeSession && (
           <div className="flex items-center gap-2 min-w-0 pl-2" style={{ borderLeft: '1px solid var(--c-border)' }}>
             <span title={statusLabel} style={{ width: 7, height: 7, borderRadius: 99, backgroundColor: statusColor, flexShrink: 0 }} />
-            <span className="truncate text-sm font-medium" style={{ color: 'var(--c-text)', maxWidth: 240 }}>{activeSession.name || activeSession.task || activeSession.id}</span>
+            <span className="truncate text-sm font-medium" style={{ color: 'var(--c-text)', maxWidth: 220 }}>{activeSession.name || activeSession.task || activeSession.id}</span>
+            <ModeTag mode={activeSession.mode} />
             {(activeSession.owner_name || activeSession.owner_email) && (
               <span className="flex items-center gap-1 text-xs shrink-0 px-1.5 py-0.5 rounded" style={{ color: 'var(--c-text-secondary)', backgroundColor: 'var(--c-surface-2)' }} title={activeSession.owner_name || activeSession.owner_email}>
                 <UserIcon size={11} /> {activeSession.owner_name || activeSession.owner_email}
@@ -525,6 +526,7 @@ export default function TerminalPage() {
                       </button>
                     </div>
                     <div className="flex items-center gap-1.5 mt-0.5 font-mono text-[10px]" style={{ color: 'var(--c-text-muted)' }}>
+                      <ModeTag mode={s.mode} />
                       {(s.owner_name || s.owner_email) && (
                         <span className="flex items-center gap-0.5 truncate max-w-[90px]" style={{ color: 'var(--c-text-secondary)' }} title={s.owner_name || s.owner_email}>
                           <UserIcon size={9} /> {s.owner_name || s.owner_email}
@@ -769,6 +771,14 @@ function NavRail({ tab, setTab, isAdmin, onShowAdmin, pendingRequests = 0 }) {
       </a>
     </div>
   )
+}
+
+// Role tag for the board/header: designers and testers get a colored chip;
+// developers (the default) get nothing.
+function ModeTag({ mode }) {
+  if (mode === 'design') return <span className="px-1 rounded text-[9px] font-semibold" style={{ backgroundColor: 'rgba(210,168,255,0.18)', color: '#d2a8ff' }}>design</span>
+  if (mode === 'tester') return <span className="px-1 rounded text-[9px] font-semibold" style={{ backgroundColor: 'rgba(242,204,96,0.18)', color: '#f2cc60' }}>tester</span>
+  return null
 }
 
 function IconBtn({ title, onClick, active, children }) {
