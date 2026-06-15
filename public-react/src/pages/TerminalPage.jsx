@@ -3,13 +3,20 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import { useAuth } from '../context/AuthContext'
-import { useModels, useSessions, renameSession, deleteSession, toggleBookmark, getTranscript } from '../hooks/useApi'
+import {
+  useModels, useSessions, renameSession, deleteSession, toggleBookmark, getTranscript,
+  useCostStats, useAgents, useSprints, useIssues, useTeamMembers,
+  runAgent, getSprintChangelog, requestIssueSummary, getIssueLastResponse, generateSprintChangelog,
+} from '../hooks/useApi'
 import Login from './Login'
 import ShareSessionModal from '../components/ShareSessionModal'
+import CostView from '../components/CostView'
+import AgentsView from '../components/AgentsView'
+import SprintBoard from '../components/SprintBoard'
 import {
   ArrowLeft, Circle, RotateCw, TerminalSquare, PanelLeftClose, PanelLeft,
   Plus, Search, X, MoreVertical, GitFork, History, Share2, Pencil, Trash2, Star, Play,
-  MessageSquare, SendHorizontal, Wrench, ChevronDown,
+  MessageSquare, SendHorizontal, Wrench, ChevronDown, LayoutGrid, Sparkles, DollarSign,
 } from 'lucide-react'
 
 // Interactive web terminal — /sessions/v2. Real human typing → subscription-billed.
@@ -37,6 +44,17 @@ export default function TerminalPage() {
 
   const [search, setSearch] = useState('')
   const { sessions, refresh: refreshSessions } = useSessions(1, search)
+
+  // Top-level workspace tab. 'chat' is the terminal/conversation; the others mount
+  // the same feature views V1's dashboard uses (reused as-is, no fork).
+  const [tab, setTab] = useState('chat') // chat | sprint | agents | cost
+  const { cost, loading: costLoading, refresh: refreshCost } = useCostStats()
+  const { agents, loading: agentsLoading, refresh: refreshAgents } = useAgents()
+  const { issues, refresh: refreshIssues, createIssue, updateIssue, deleteIssue } = useIssues()
+  const { sprints, createSprint, updateSprint, deleteSprint } = useSprints()
+  const { members } = useTeamMembers()
+  // Work mode follows role, matching V1 (designer → design, tester → tester, else dev).
+  const workMode = user?.role === 'designer' ? 'design' : (user?.role === 'tester' ? 'tester' : 'developer')
 
   const [status, setStatus] = useState('idle') // idle | connecting | live | exited | error
   const [model, setModel] = useState('claude-opus-4-8')
@@ -170,8 +188,10 @@ export default function TerminalPage() {
     if (nearBottom) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
   }, [messages, view])
 
-  // xterm needs a refit when it becomes visible again (it can't size while hidden).
+  // xterm can't size while hidden — refit when the chat tab/terminal becomes
+  // visible again (returning from a feature tab, or toggling chat↔terminal).
   useEffect(() => {
+    if (tab !== 'chat') return
     if (view === 'terminal') {
       const id = setTimeout(() => {
         try { fitRef.current?.fit(); termRef.current?.focus() } catch {}
@@ -184,7 +204,7 @@ export default function TerminalPage() {
       const id = setTimeout(() => { try { draftRef.current?.focus() } catch {} }, 50)
       return () => clearTimeout(id)
     }
-  }, [view])
+  }, [view, tab])
 
   // Send a chat-mode message straight to the PTY stdin: the text, then Enter.
   // The PTY echoes it back through the headless emulator, so it reappears as a
@@ -210,8 +230,15 @@ export default function TerminalPage() {
   // Resume uses the mapped Claude session UUID (claude_session_id), NOT the OliBot
   // row id, and runs in the session's own working dir so Claude finds the transcript.
   const openSession = (s) => {
-    setMenuFor(null); setActiveId(s.id)
+    setMenuFor(null); setActiveId(s.id); setTab('chat')
     setConnReq(c => ({ key: c.key + 1, sessionId: s.claude_session_id || s.id, rowId: s.id, resume: true, fork: false, cwd: s.working_dir || null, name: null }))
+  }
+  // Feature views (sprint/agents) hand back a session id to open in the terminal.
+  const goToSession = (sessionId) => {
+    if (!sessionId) return
+    const s = (sessions || []).find(x => x.id === sessionId || x.claude_session_id === sessionId)
+    setTab('chat'); setActiveId(s?.id || sessionId)
+    setConnReq(c => ({ key: c.key + 1, sessionId: s?.claude_session_id || sessionId, rowId: s?.id || null, resume: true, fork: false, cwd: s?.working_dir || null, name: null }))
   }
   const forkSession = (s) => {
     setMenuFor(null)
@@ -244,7 +271,12 @@ export default function TerminalPage() {
   const statusLabel = status === 'live' ? 'Live · subscription' : status === 'connecting' ? 'Connecting…' : status === 'idle' ? 'No session' : status === 'exited' ? 'Exited' : 'Error'
 
   return (
-    <div className="flex flex-col" style={{ height: '100dvh', backgroundColor: 'var(--c-bg)' }}>
+    <div className="flex" style={{ height: '100dvh', backgroundColor: 'var(--c-bg)' }}>
+      <NavRail tab={tab} setTab={setTab} />
+      <div className="flex flex-col flex-1 min-w-0">
+      {/* Chat workspace stays mounted across tab switches so the live xterm + WS
+          survive; it's just hidden when another feature tab is active. */}
+      <div className="flex flex-col flex-1 min-h-0" style={{ display: tab === 'chat' ? 'flex' : 'none' }}>
       {/* Header */}
       <div className="flex items-center gap-3 px-3 py-2" style={{ borderBottom: '1px solid var(--c-border)' }}>
         <a href={window.location.pathname.startsWith('/sessions') ? '/sessions/' : '/'}
@@ -394,9 +426,83 @@ export default function TerminalPage() {
           )}
         </div>
       </div>
+      </div>
+      {tab !== 'chat' && (
+        <div className="flex-1 min-h-0 h-full overflow-hidden">
+          {tab === 'cost' && (
+            <CostView cost={cost} loading={costLoading} onRefresh={refreshCost} onGoToSession={goToSession} />
+          )}
+          {tab === 'agents' && (
+            <AgentsView agents={agents} loading={agentsLoading} onRunAgent={async (agentId, note) => {
+              const result = await runAgent(agentId, note)
+              if (result?.sessionId) { setTimeout(() => { refreshSessions(); refreshAgents() }, 800); goToSession(result.sessionId) }
+              return result
+            }} />
+          )}
+          {tab === 'sprint' && (
+            <SprintBoard
+              onBack={() => setTab('chat')}
+              issues={issues} refreshIssues={refreshIssues}
+              onCreateIssue={(data) => createIssue({ mode: workMode, ...data })}
+              onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}
+              sprints={sprints} onCreateSprint={createSprint} onUpdateSprint={updateSprint} onDeleteSprint={deleteSprint}
+              members={members} user={user} model={model}
+              onGoToSession={goToSession}
+              onGetChangelog={getSprintChangelog}
+              onRequestIssueSummary={requestIssueSummary}
+              onGetIssueLastResponse={getIssueLastResponse}
+              onGenerateChangelog={async (sprintId, summaries) => {
+                const result = await generateSprintChangelog(sprintId, summaries)
+                if (result?.sessionId) { setTimeout(() => { refreshSessions(); refreshIssues() }, 1000); goToSession(result.sessionId) }
+                return result
+              }}
+            />
+          )}
+        </div>
+      )}
+      </div>
 
       {historyFor && <HistoryModal session={historyFor} onClose={() => setHistoryFor(null)} />}
       {shareFor && <ShareSessionModal sessionId={shareFor.id} onClose={() => setShareFor(null)} />}
+    </div>
+  )
+}
+
+// Slim icon rail switching the top-level workspace tab. Chat is the terminal /
+// conversation; the rest mount V1's feature views (reused unchanged).
+function NavRail({ tab, setTab }) {
+  const items = [
+    { key: 'chat', icon: MessageSquare, label: 'Chat' },
+    { key: 'sprint', icon: LayoutGrid, label: 'Sprints' },
+    { key: 'agents', icon: Sparkles, label: 'Agents' },
+    { key: 'cost', icon: DollarSign, label: 'Cost' },
+  ]
+  const dashHref = window.location.pathname.startsWith('/sessions') ? '/sessions/' : '/'
+  return (
+    <div className="shrink-0 flex flex-col items-center gap-1 py-3" style={{ width: 56, borderRight: '1px solid var(--c-border)', backgroundColor: 'var(--c-surface)' }}>
+      <div className="mb-2 flex items-center justify-center rounded-lg" style={{ width: 32, height: 32, backgroundColor: 'var(--c-accent)' }} title="OliBot v2">
+        <TerminalSquare size={17} style={{ color: '#fff' }} />
+      </div>
+      {items.map(({ key, icon: Icon, label }) => {
+        const active = tab === key
+        return (
+          <button key={key} onClick={() => setTab(key)} title={label} aria-label={label} aria-current={active}
+            className="relative flex flex-col items-center justify-center gap-0.5 rounded-lg cursor-pointer transition-colors"
+            style={{ width: 44, height: 44, color: active ? 'var(--c-accent)' : 'var(--c-text-secondary)', backgroundColor: active ? 'color-mix(in srgb, var(--c-accent) 14%, transparent)' : 'transparent' }}
+            onMouseEnter={(e) => { if (!active) e.currentTarget.style.backgroundColor = 'var(--c-surface-2)' }}
+            onMouseLeave={(e) => { if (!active) e.currentTarget.style.backgroundColor = 'transparent' }}>
+            <Icon size={17} />
+            <span className="text-[9px] font-medium leading-none">{label}</span>
+          </button>
+        )
+      })}
+      <a href={dashHref} title="Back to dashboard" aria-label="Back to dashboard"
+        className="mt-auto flex items-center justify-center rounded-lg cursor-pointer transition-colors"
+        style={{ width: 44, height: 44, color: 'var(--c-text-muted)' }}
+        onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = 'var(--c-surface-2)'; e.currentTarget.style.color = 'var(--c-text)' }}
+        onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; e.currentTarget.style.color = 'var(--c-text-muted)' }}>
+        <ArrowLeft size={17} />
+      </a>
     </div>
   )
 }
