@@ -628,10 +628,12 @@ export default function App() {
       <AuthProvider>
         <BrowserRouter basename={ROUTER_BASENAME}>
           <Routes>
+            {/* V2 is now the primary surface. V1 (<Dashboard/>) stays in the code
+                but is no longer routed. /v2 remains as an alias. */}
             <Route path="/share/:token" element={<SharePage />} />
             <Route path="/v2" element={<TerminalPage />} />
-            <Route path="/s/:id" element={<Dashboard />} />
-            <Route path="*" element={<Dashboard />} />
+            <Route path="/s/:id" element={<TerminalPage />} />
+            <Route path="*" element={<TerminalPage />} />
           </Routes>
         </BrowserRouter>
       </AuthProvider>
