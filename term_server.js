@@ -85,6 +85,12 @@ export function attachTerminalServer(store) {
         if (!entry?.extractor) return;
         let snapshot;
         try { snapshot = entry.extractor.extract(); } catch (_) { return; }
+        // When a turn finishes (working true→false), bump the session's updated_at
+        // so the just-active session floats to the top of the list.
+        if (entry.wasWorking && !snapshot.working && store && entry.rowId) {
+            try { store.updateSession(entry.rowId, { status: 'running' }); } catch (_) {}
+        }
+        entry.wasWorking = snapshot.working;
         const payload = JSON.stringify({ type: 'chat', messages: snapshot.messages, text: snapshot.text, working: snapshot.working });
         for (const c of entry.clients) { if (c.readyState === 1) c.send(payload); }
     };

@@ -186,6 +186,15 @@ export default function TerminalPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, connReq.key])
 
+  // When a turn finishes (working true→false), the backend bumps the session's
+  // updated_at — refresh the list so the just-active session jumps to the top.
+  const prevWorkingRef = useRef(false)
+  useEffect(() => {
+    if (prevWorkingRef.current && !working) setTimeout(() => refreshSessions(), 500)
+    prevWorkingRef.current = working
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [working])
+
   // Keep the chat pinned to the latest message when the user is near the bottom.
   useEffect(() => {
     if (view !== 'chat') return
