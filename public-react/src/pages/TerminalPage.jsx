@@ -25,6 +25,7 @@ import {
   MessageSquare, SendHorizontal, Wrench, ChevronDown, LayoutGrid, Sparkles, DollarSign,
   ChevronRight, Loader2, Paperclip, CheckCircle2,
   Settings, Users, Phone, FileText, BookOpen, Clock, User as UserIcon, Bell, BellOff,
+  Square, Copy, Check,
 } from 'lucide-react'
 
 // Completion chime — same triangle-wave arpeggio V1 plays when the bot finishes.
@@ -308,6 +309,17 @@ export default function TerminalPage() {
   }
   const onDraftKey = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat() }
+  }
+  // Stop the current turn — send Esc to the interactive REPL (validated: interrupts).
+  const stopChat = () => {
+    if (wsRef.current?.readyState === 1) wsRef.current.send(JSON.stringify({ type: 'input', data: '\x1b' }))
+  }
+  // Per-question actions: edit (load into composer), reload (resend as-is).
+  const editText = (text) => { setDraft(text || ''); setTimeout(() => { try { draftRef.current?.focus() } catch {} }, 30) }
+  const reloadText = (text) => {
+    if (!text || working || wsRef.current?.readyState !== 1) return
+    wsRef.current.send(JSON.stringify({ type: 'input', data: text }))
+    setTimeout(() => { try { wsRef.current?.send(JSON.stringify({ type: 'input', data: '\r' })) } catch {} }, 60)
   }
   // Upload one or more image files and stage them as attachments.
   const addFiles = async (files) => {
@@ -596,7 +608,8 @@ export default function TerminalPage() {
                       <div className="text-xs" style={{ color: 'var(--c-text-muted)' }}>Messages are read live from the running Claude session.</div>
                     </div>
                   ) : groupTurns(messages).map((turn, i, arr) => (
-                    <ChatTurn key={i} turn={turn} active={i === arr.length - 1 && working} />
+                    <ChatTurn key={i} turn={turn} active={i === arr.length - 1 && working}
+                      working={working} onEdit={editText} onReload={reloadText} />
                   ))}
                 </div>
               </div>
@@ -611,6 +624,7 @@ export default function TerminalPage() {
                 draft={draft} setDraft={setDraft} onKeyDown={onDraftKey} onSend={sendChat}
                 disabled={status !== 'live'} inputRef={draftRef} status={status}
                 attachments={attachments} onAddFiles={addFiles} onRemoveAttachment={removeAttachment} uploading={uploading}
+                working={working} onStop={stopChat}
               />
             </div>
           )}
@@ -781,6 +795,30 @@ function ModeTag({ mode }) {
   return null
 }
 
+// Small action button under a user question (edit / reload).
+function QActionBtn({ title, onClick, disabled, children }) {
+  return (
+    <button onClick={onClick} title={title} disabled={disabled}
+      className="flex items-center justify-center rounded cursor-pointer transition-colors"
+      style={{ width: 24, height: 24, color: 'var(--c-text-muted)', opacity: disabled ? 0.4 : 1 }}
+      onMouseEnter={(e) => { if (!disabled) { e.currentTarget.style.backgroundColor = 'var(--c-surface-2)'; e.currentTarget.style.color = 'var(--c-text)' } }}
+      onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; e.currentTarget.style.color = 'var(--c-text-muted)' }}>
+      {children}
+    </button>
+  )
+}
+function CopyBtn({ text }) {
+  const [done, setDone] = useState(false)
+  return (
+    <QActionBtn title={done ? 'Copied' : 'Copy'} onClick={() => {
+      try { navigator.clipboard.writeText(text || '') } catch (_) {}
+      setDone(true); setTimeout(() => setDone(false), 1200)
+    }}>
+      {done ? <Check size={12} style={{ color: '#7ee787' }} /> : <Copy size={12} />}
+    </QActionBtn>
+  )
+}
+
 function IconBtn({ title, onClick, active, children }) {
   return (
     <button onClick={onClick} title={title} aria-label={title}
@@ -922,7 +960,7 @@ function ThinkingBox({ steps, active, done }) {
 // One full turn: the user bubble, a thinking box for intermediate work, and the
 // final answer in markdown. While `active`, all steps stay in the live box and
 // no answer is split out yet.
-function ChatTurn({ turn, active }) {
+function ChatTurn({ turn, active, working, onEdit, onReload }) {
   const steps = turn.steps
   let thinkingSteps = steps, answer = null
   if (!active) {
@@ -935,7 +973,7 @@ function ChatTurn({ turn, active }) {
   return (
     <div className="flex flex-col gap-3">
       {turn.user && (u.text || u.images.length > 0) && (
-        <div className="flex justify-end">
+        <div className="flex justify-end group/q">
           <div className="flex flex-col items-end gap-1.5" style={{ maxWidth: '85%' }}>
             {u.images.length > 0 && (
               <div className="flex flex-wrap gap-1.5 justify-end">
@@ -950,6 +988,13 @@ function ChatTurn({ turn, active }) {
               <div className="px-4 py-2.5 rounded-2xl rounded-br-md text-sm whitespace-pre-wrap break-words"
                 style={{ backgroundColor: 'rgba(59,130,246,0.16)', color: 'var(--c-text)', border: '1px solid rgba(59,130,246,0.30)', lineHeight: 1.55 }}>
                 {u.text}
+              </div>
+            )}
+            {u.text && (
+              <div className="flex items-center gap-0.5 opacity-0 group-hover/q:opacity-100 transition-opacity">
+                <CopyBtn text={u.text} />
+                <QActionBtn title="Edit & reuse" onClick={() => onEdit?.(u.text)}><Pencil size={12} /></QActionBtn>
+                <QActionBtn title={working ? 'Wait for the current turn to finish' : 'Ask again'} disabled={working} onClick={() => onReload?.(u.text)}><RotateCw size={12} /></QActionBtn>
               </div>
             )}
           </div>
@@ -969,10 +1014,12 @@ function ChatTurn({ turn, active }) {
   )
 }
 
-function ChatComposer({ draft, setDraft, onKeyDown, onSend, disabled, inputRef, status, attachments = [], onAddFiles, onRemoveAttachment, uploading }) {
+function ChatComposer({ draft, setDraft, onKeyDown, onSend, disabled, inputRef, status, attachments = [], onAddFiles, onRemoveAttachment, uploading, working, onStop }) {
   const fileRef = useRef(null)
   const [dragOver, setDragOver] = useState(false)
-  const canSend = !disabled && (draft.trim() || attachments.length > 0)
+  // While Claude is working you can't start a new question — only Stop.
+  const locked = disabled || working
+  const canSend = !locked && (draft.trim() || attachments.length > 0)
   const onPaste = (e) => {
     const files = Array.from(e.clipboardData?.files || []).filter(f => f.type?.startsWith('image/'))
     if (files.length) { e.preventDefault(); onAddFiles(files) }
@@ -1005,35 +1052,43 @@ function ChatComposer({ draft, setDraft, onKeyDown, onSend, disabled, inputRef, 
           </div>
         )}
         <div className="flex items-end gap-2 rounded-xl px-2 py-2"
-          onDragOver={(e) => { e.preventDefault(); if (!disabled) setDragOver(true) }}
-          onDragLeave={() => setDragOver(false)} onDrop={disabled ? undefined : onDrop}
+          onDragOver={(e) => { e.preventDefault(); if (!locked) setDragOver(true) }}
+          onDragLeave={() => setDragOver(false)} onDrop={locked ? undefined : onDrop}
           style={{ backgroundColor: 'var(--c-surface)', border: `1px solid ${dragOver ? 'var(--c-accent)' : 'var(--c-border)'}` }}>
           <input ref={fileRef} type="file" accept="image/*" multiple hidden
             onChange={(e) => { onAddFiles(e.target.files); e.target.value = '' }} />
-          <button onClick={() => fileRef.current?.click()} disabled={disabled} title="Attach images"
+          <button onClick={() => fileRef.current?.click()} disabled={locked} title="Attach images"
             className="flex items-center justify-center rounded-lg cursor-pointer shrink-0 transition-colors"
-            style={{ width: 32, height: 32, color: 'var(--c-text-secondary)', opacity: disabled ? 0.4 : 1 }}
-            onMouseEnter={(e) => { if (!disabled) e.currentTarget.style.backgroundColor = 'var(--c-surface-2)' }}
+            style={{ width: 32, height: 32, color: 'var(--c-text-secondary)', opacity: locked ? 0.4 : 1 }}
+            onMouseEnter={(e) => { if (!locked) e.currentTarget.style.backgroundColor = 'var(--c-surface-2)' }}
             onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent' }}>
             <Paperclip size={16} />
           </button>
           <textarea
             ref={inputRef} value={draft} rows={1} onKeyDown={onKeyDown} onPaste={onPaste}
             onChange={(e) => { setDraft(e.target.value); const t = e.target; t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 160) + 'px' }}
-            placeholder={disabled ? 'Session not live — switch to a running session to chat' : 'Message Claude…  (Enter to send, paste or drop images)'}
-            disabled={disabled}
+            placeholder={disabled ? 'Session not live — switch to a running session to chat' : working ? 'Claude is working… press Stop to interrupt' : 'Message Claude…  (Enter to send, paste or drop images)'}
+            disabled={locked}
             className="flex-1 bg-transparent outline-none resize-none text-sm py-1.5"
             style={{ color: 'var(--c-text)', maxHeight: 160, lineHeight: 1.5 }}
           />
-          <button onClick={onSend} disabled={!canSend} title="Send (Enter)"
-            className="flex items-center justify-center rounded-lg cursor-pointer shrink-0 transition-opacity"
-            style={{ width: 34, height: 34, backgroundColor: 'var(--c-accent)', color: '#fff', opacity: canSend ? 1 : 0.4 }}>
-            <SendHorizontal size={16} />
-          </button>
+          {working ? (
+            <button onClick={onStop} title="Stop (interrupt)"
+              className="flex items-center justify-center rounded-lg cursor-pointer shrink-0"
+              style={{ width: 34, height: 34, backgroundColor: '#ff6b6b', color: '#fff' }}>
+              <Square size={14} fill="#fff" />
+            </button>
+          ) : (
+            <button onClick={onSend} disabled={!canSend} title="Send (Enter)"
+              className="flex items-center justify-center rounded-lg cursor-pointer shrink-0 transition-opacity"
+              style={{ width: 34, height: 34, backgroundColor: 'var(--c-accent)', color: '#fff', opacity: canSend ? 1 : 0.4 }}>
+              <SendHorizontal size={16} />
+            </button>
+          )}
         </div>
         <div className="mt-1.5 text-[11px] flex items-center gap-1.5" style={{ color: 'var(--c-text-muted)' }}>
-          <Circle size={7} fill={status === 'live' ? '#7ee787' : '#6e7681'} style={{ color: status === 'live' ? '#7ee787' : '#6e7681' }} />
-          {status === 'live' ? 'Connected to the live session · billed to subscription' : 'Reconnecting…'}
+          <Circle size={7} fill={working ? '#7ee787' : status === 'live' ? '#6cb6ff' : '#6e7681'} style={{ color: working ? '#7ee787' : status === 'live' ? '#6cb6ff' : '#6e7681' }} />
+          {working ? 'Claude is working… — Stop to interrupt' : status === 'live' ? 'Connected to the live session · billed to subscription' : 'Reconnecting…'}
         </div>
       </div>
     </div>
