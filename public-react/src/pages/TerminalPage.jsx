@@ -20,7 +20,7 @@ import {
   ArrowLeft, Circle, RotateCw, TerminalSquare, PanelLeftClose, PanelLeft,
   Plus, Search, X, MoreVertical, GitFork, History, Share2, Pencil, Trash2, Star, Play,
   MessageSquare, SendHorizontal, Wrench, ChevronDown, LayoutGrid, Sparkles, DollarSign,
-  ChevronRight, Loader2, Paperclip,
+  ChevronRight, Loader2, Paperclip, CheckCircle2,
 } from 'lucide-react'
 
 // Interactive web terminal — /sessions/v2. Real human typing → subscription-billed.
@@ -228,6 +228,7 @@ export default function TerminalPage() {
     wsRef.current.send(JSON.stringify({ type: 'input', data: toSend }))
     // Small gap so the TUI commits the (bracket-pasted) input before the submit.
     setTimeout(() => { try { wsRef.current?.send(JSON.stringify({ type: 'input', data: '\r' })) } catch {} }, 60)
+    attachments.forEach(a => { if (a.previewUrl) URL.revokeObjectURL(a.previewUrl) })
     setDraft(''); setAttachments([])
   }
   const onDraftKey = (e) => {
@@ -239,14 +240,21 @@ export default function TerminalPage() {
     if (!imgs.length) return
     setUploading(true)
     for (const f of imgs) {
+      // Local blob preview renders instantly and reliably (V1 does the same);
+      // the server url/path are kept for sending + history thumbnails.
+      const previewUrl = URL.createObjectURL(f)
       try {
         const r = await uploadFile(f)
-        if (r?.success) setAttachments(a => [...a, { url: r.url, fileName: r.fileName, path: r.path, name: f.name }])
-      } catch (_) { /* skip a failed upload */ }
+        if (r?.success) setAttachments(a => [...a, { previewUrl, url: r.url, fileName: r.fileName, path: r.path, name: f.name }])
+        else URL.revokeObjectURL(previewUrl)
+      } catch (_) { URL.revokeObjectURL(previewUrl) }
     }
     setUploading(false)
   }
-  const removeAttachment = (i) => setAttachments(a => a.filter((_, idx) => idx !== i))
+  const removeAttachment = (i) => setAttachments(a => {
+    const gone = a[i]; if (gone?.previewUrl) URL.revokeObjectURL(gone.previewUrl)
+    return a.filter((_, idx) => idx !== i)
+  })
 
   const startNew = () => {
     const name = window.prompt('Name this session (optional):', '')
@@ -436,7 +444,7 @@ export default function TerminalPage() {
                       <div className="text-xs" style={{ color: 'var(--c-text-muted)' }}>Messages are read live from the running Claude session.</div>
                     </div>
                   ) : groupTurns(messages).map((turn, i, arr) => (
-                    <ChatTurn key={i} turn={turn} active={i === arr.length - 1 && working} />
+                    <ChatTurn key={i} turn={turn} active={i === arr.length - 1 && working} isLast={i === arr.length - 1} />
                   ))}
                 </div>
               </div>
@@ -567,6 +575,10 @@ function groupTurns(messages) {
 // Pull those /uploads/<file> references out into thumbnails and strip the raw
 // path text from what we display. Whitespace is normalised first so a path that
 // wrapped across terminal lines still matches.
+// The app may be served under /sessions — resolve bare /api/* asset urls against
+// that base (matches V1's UserContent). A raw /api/uploads/... 404s under /sessions.
+const ASSET_BASE = window.location.pathname.startsWith('/sessions') ? '/sessions' : ''
+
 const UPLOAD_RE = /uploads\/(\d{10,}-[a-z0-9]+\.(?:png|jpe?g|gif|webp|bmp|svg))/gi
 function parseUserContent(content) {
   const raw = content || ''
@@ -576,7 +588,7 @@ function parseUserContent(content) {
   let m
   UPLOAD_RE.lastIndex = 0
   const joined = raw.replace(/\s+/g, '')
-  while ((m = UPLOAD_RE.exec(joined))) images.push(`/api/uploads/${m[1]}`)
+  while ((m = UPLOAD_RE.exec(joined))) images.push(`${ASSET_BASE}/api/uploads/${m[1]}`)
   // Display text: the appended paths always trail the user's text, so cut at the
   // first /uploads reference, then scrub any leftover path/filename fragments.
   let text = raw
@@ -630,19 +642,22 @@ function ToolBlock({ content }) {
 
 // Collapsible "working" box holding the intermediate steps of a turn. Live while
 // the turn is still running (active); a quiet, collapsed summary once finished.
-function ThinkingBox({ steps, active }) {
+function ThinkingBox({ steps, active, isLast }) {
   const [open, setOpen] = useState(false)
-  if (!steps.length && !active) return null
+  if (!steps.length && !active && !isLast) return null
   const toolCount = steps.filter(s => s.tool).length
-  const label = active ? 'Working…' : `Worked on it${toolCount ? ` · ${toolCount} tool${toolCount > 1 ? 's' : ''}` : ''}`
+  const DONE_GREEN = '#7ee787'
+  const label = active ? 'Working…' : `Done${toolCount ? ` · ${toolCount} tool${toolCount > 1 ? 's' : ''}` : ''}`
+  const hasBody = steps.length > 0
   return (
-    <div className="rounded-lg" style={{ backgroundColor: 'var(--c-surface)', border: '1px solid var(--c-border)' }}>
-      <button onClick={() => setOpen(o => !o)} className="flex items-center gap-2 w-full px-3 py-2 cursor-pointer text-left text-xs font-medium"
-        style={{ color: 'var(--c-text-secondary)' }}>
-        {active ? <Loader2 size={13} className="animate-spin" style={{ color: 'var(--c-accent)' }} />
-                : (open ? <ChevronDown size={13} /> : <ChevronRight size={13} />)}
-        <span style={{ color: active ? 'var(--c-accent)' : 'var(--c-text-secondary)' }}>{label}</span>
-        {!active && <span className="ml-auto" style={{ color: 'var(--c-text-muted)' }}>{open ? 'hide' : 'show'}</span>}
+    <div className="rounded-lg" style={{ backgroundColor: 'var(--c-surface)', border: `1px solid ${active ? 'color-mix(in srgb, var(--c-accent) 40%, var(--c-border))' : 'var(--c-border)'}` }}>
+      <button onClick={() => hasBody && setOpen(o => !o)} className="flex items-center gap-2 w-full px-3 py-2 text-left text-xs font-medium"
+        style={{ color: 'var(--c-text-secondary)', cursor: hasBody ? 'pointer' : 'default' }}>
+        {active
+          ? <Loader2 size={13} className="animate-spin" style={{ color: 'var(--c-accent)' }} />
+          : <CheckCircle2 size={13} style={{ color: DONE_GREEN }} />}
+        <span style={{ color: active ? 'var(--c-accent)' : DONE_GREEN }}>{label}</span>
+        {!active && hasBody && <span className="ml-auto flex items-center gap-1" style={{ color: 'var(--c-text-muted)' }}>{open ? 'hide' : 'show'} {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}</span>}
       </button>
       {(open || active) && steps.length > 0 && (
         <div className="px-3 pb-3 pt-0 flex flex-col gap-2">
@@ -659,7 +674,7 @@ function ThinkingBox({ steps, active }) {
 // One full turn: the user bubble, a thinking box for intermediate work, and the
 // final answer in markdown. While `active`, all steps stay in the live box and
 // no answer is split out yet.
-function ChatTurn({ turn, active }) {
+function ChatTurn({ turn, active, isLast }) {
   const steps = turn.steps
   let thinkingSteps = steps, answer = null
   if (!active) {
@@ -692,22 +707,15 @@ function ChatTurn({ turn, active }) {
           </div>
         </div>
       )}
-      {(thinkingSteps.length > 0 || active) && (
+      {(thinkingSteps.length > 0 || active || isLast || answer) && (
         <div className="flex flex-col gap-1.5">
           <div className="flex items-center gap-1.5 text-[11px] font-medium" style={{ color: 'var(--c-text-secondary)' }}>
             <span style={{ width: 6, height: 6, borderRadius: 99, backgroundColor: 'var(--c-accent)', display: 'inline-block' }} /> Claude
           </div>
-          <ThinkingBox steps={thinkingSteps} active={active} />
-        </div>
-      )}
-      {answer && (
-        <div className="flex flex-col gap-1.5">
-          {thinkingSteps.length === 0 && (
-            <div className="flex items-center gap-1.5 text-[11px] font-medium" style={{ color: 'var(--c-text-secondary)' }}>
-              <span style={{ width: 6, height: 6, borderRadius: 99, backgroundColor: 'var(--c-accent)', display: 'inline-block' }} /> Claude
-            </div>
+          {(thinkingSteps.length > 0 || active || isLast) && (
+            <ThinkingBox steps={thinkingSteps} active={active} isLast={isLast} />
           )}
-          <Markdown>{answer.content}</Markdown>
+          {answer && <Markdown>{answer.content}</Markdown>}
         </div>
       )}
     </div>
@@ -734,7 +742,7 @@ function ChatComposer({ draft, setDraft, onKeyDown, onSend, disabled, inputRef, 
           <div className="flex flex-wrap gap-2 mb-2">
             {attachments.map((a, i) => (
               <div key={i} className="relative group rounded-lg overflow-hidden" style={{ width: 56, height: 56, border: '1px solid var(--c-border)', backgroundColor: 'var(--c-surface-2)' }}>
-                <img src={a.url} alt={a.name || 'image'} className="w-full h-full" style={{ objectFit: 'cover' }} />
+                <img src={a.previewUrl || a.url} alt={a.name || 'image'} className="w-full h-full" style={{ objectFit: 'cover' }} />
                 <button onClick={() => onRemoveAttachment(i)} title="Remove"
                   className="absolute top-0.5 right-0.5 flex items-center justify-center rounded-full cursor-pointer"
                   style={{ width: 16, height: 16, backgroundColor: 'rgba(0,0,0,0.65)', color: '#fff' }}>
