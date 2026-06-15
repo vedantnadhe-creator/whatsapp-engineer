@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { BrowserRouter, Routes, Route, useParams, useNavigate, useLocation } from 'react-router-dom'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import SharePage from './pages/SharePage'
+import TerminalPage from './pages/TerminalPage'
 import { useSessions, useStats, useCostStats, useSessionMessages, useModels, usePhones, useUsers, useCron, useAccessRequests, useIssues, useAutonomous, useSprints, useTeamMembers, useAction, useAgents, runAgent, startSession, sendMessage, stopSession, forkSession, testForkSession, mergeSessions, toggleBookmark, updateSessionSprint, getSprintChangelog, requestIssueSummary, getIssueLastResponse, generateSprintChangelog, uploadFile, transcribeAudio, requestAccess, getClaudePrompt, saveClaudePrompt, getLearnings, saveLearnings, getAdminSettings, saveAdminSetting, renameSession, deleteSession, sessionToIssue, apiFetch } from './hooks/useApi'
 import useWebSocket from './hooks/useWebSocket'
 import Sidebar from './components/Sidebar'
@@ -628,6 +629,7 @@ export default function App() {
         <BrowserRouter basename={ROUTER_BASENAME}>
           <Routes>
             <Route path="/share/:token" element={<SharePage />} />
+            <Route path="/v2" element={<TerminalPage />} />
             <Route path="/s/:id" element={<Dashboard />} />
             <Route path="*" element={<Dashboard />} />
           </Routes>

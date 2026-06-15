@@ -9,6 +9,7 @@ import http from 'http';
 import { WebSocketServer } from 'ws';
 import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 import config from './config.js';
+import { attachTerminalServer } from './term_server.js';
 // orchestrator import removed — Claude prompt is now file-based (CLAUDE.md)
 import {
     signJwt, requireAuth, optionalAuth, requireAdmin,
@@ -2051,6 +2052,9 @@ Steps:
     // ── WebSocket Server ────────────────────────────────────────
     const server = http.createServer(app);
     const wss = new WebSocketServer({ server, path: '/ws' });
+
+    // Interactive human-driven web terminal (/sessions/v2) on a separate WS path.
+    attachTerminalServer(server);
 
     // Track connected clients
     const wsClients = new Set();
