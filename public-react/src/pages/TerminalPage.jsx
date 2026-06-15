@@ -83,13 +83,30 @@ function useIsMobile(bp = 768) {
   return m
 }
 
-// Session status → dot colour: running green, stopped blue, exited red, else grey.
-function statusDot(status) {
-  const s = (status || '').toLowerCase()
-  if (s === 'running') return '#7ee787'
-  if (s === 'stopped') return '#6cb6ff'
-  if (s === 'exited' || s === 'error' || s === 'failed') return '#ff6b6b'
-  return '#6e7681'
+// Session status → dot colour. Same mapping V1 used (components/Sidebar.jsx):
+//   running → green (+pulse) · completed → blue · failed → red · stopped/else → grey
+// Driven now by the interactive PTY lifecycle (no SDK), not the Agent SDK.
+const STATUS_COLORS = {
+  running: 'var(--c-status-running)',
+  completed: 'var(--c-status-completed)',
+  failed: 'var(--c-status-failed)',
+  error: 'var(--c-status-failed)',
+  exited: 'var(--c-status-failed)',
+  stopped: 'var(--c-text-muted)',
+}
+function statusColorFor(status) {
+  return STATUS_COLORS[(status || '').toLowerCase()] || 'var(--c-text-muted)'
+}
+// Ported from V1's Sidebar StatusDot: a pulsing ring while running.
+function StatusDot({ status, size = 8 }) {
+  const color = statusColorFor(status)
+  const running = (status || '').toLowerCase() === 'running'
+  return (
+    <span className="relative inline-flex shrink-0" style={{ height: size, width: size }}>
+      {running && <span className="absolute inline-flex h-full w-full animate-ping rounded-full opacity-75" style={{ backgroundColor: color }} />}
+      <span className="relative inline-flex rounded-full" style={{ height: size, width: size, backgroundColor: color }} />
+    </span>
+  )
 }
 
 export default function TerminalPage() {
@@ -430,7 +447,7 @@ export default function TerminalPage() {
   const activeSession = (sessions || []).find(s => s.id === activeId) || null
   // Connection + activity aware: green only while Claude is actively working,
   // blue (done) when connected and idle, amber connecting, red exited/error.
-  const statusColor = status === 'live' ? (working ? '#7ee787' : '#6cb6ff') : status === 'connecting' ? '#f2cc60' : status === 'idle' ? '#6e7681' : '#ff6b6b'
+  const statusColor = status === 'live' ? (working ? 'var(--c-status-running)' : 'var(--c-status-completed)') : status === 'connecting' ? '#f2cc60' : status === 'idle' ? 'var(--c-text-muted)' : 'var(--c-status-failed)'
   const statusLabel = status === 'live' ? (working ? 'Working…' : 'Done') : status === 'connecting' ? 'Connecting…' : status === 'idle' ? 'No session' : status === 'exited' ? 'Exited' : 'Error'
 
   return (
@@ -554,7 +571,7 @@ export default function TerminalPage() {
                     onMouseEnter={(e) => { if (activeId !== s.id) e.currentTarget.style.backgroundColor = 'var(--c-surface)' }}
                     onMouseLeave={(e) => { if (activeId !== s.id) e.currentTarget.style.backgroundColor = 'transparent' }}>
                     <div className="flex items-center gap-1.5">
-                      <span title={s.status || 'unknown'} style={{ width: 7, height: 7, borderRadius: 99, backgroundColor: statusDot(s.status), flexShrink: 0 }} />
+                      <span title={s.status || 'unknown'}><StatusDot status={s.status} size={7} /></span>
                       {s.bookmarked ? <Star size={11} fill="#f2cc60" style={{ color: '#f2cc60' }} /> : null}
                       <span className="truncate flex-1" style={{ color: 'var(--c-text)' }}>{s.name || s.task || s.id}</span>
                       <button onClick={(e) => { e.stopPropagation(); setMenuFor(menuFor === s.id ? null : s.id) }}

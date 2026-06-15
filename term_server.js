@@ -214,10 +214,16 @@ export function attachTerminalServer(store) {
         // initial attach edge (undefined/false → false never pulses).
         const turnDone = entry.wasWorking === true && working === false;
 
-        // Reflect real activity in the session status: 'running' while working,
-        // 'stopped' when done — also bumps updated_at so it floats to the top.
+        // Session status lights — same vocabulary V1 drove via the Agent SDK, but
+        // derived here from the interactive PTY lifecycle (no SDK):
+        //   running  (green, pulsing) — a turn is actively working
+        //   completed(blue)           — turn finished, PTY still alive / ready
+        //   failed   (red)            — PTY crashed (set in finalize on non-zero exit)
+        //   stopped  (grey)           — PTY exited cleanly / GC'd (dormant, resumable)
+        // While the session is live we flip running↔completed; 'stopped'/'failed' are
+        // only set when the process actually exits. Bumps updated_at → floats to top.
         if (store && entry.rowId && entry.wasWorking !== working) {
-            try { store.updateSession(entry.rowId, { status: working ? 'running' : 'stopped' }); } catch (_) {}
+            try { store.updateSession(entry.rowId, { status: working ? 'running' : 'completed' }); } catch (_) {}
         }
         entry.wasWorking = working;
         // Settled turn → render the clean transcript (correct tables/code/markdown);
@@ -257,9 +263,11 @@ export function attachTerminalServer(store) {
         entry.chatTimer = setTimeout(() => { entry.chatTimer = null; broadcastChat(entry); }, CHAT_DEBOUNCE_MS);
     };
 
-    const finalize = (entry) => {
+    const finalize = (entry, exitCode = 0) => {
         if (!entry || !store || !entry.rowId) return;
-        try { store.updateSession(entry.rowId, { status: 'stopped' }); } catch (_) {}
+        // Clean exit (incl. idle-GC) → 'stopped' (grey, dormant); crash → 'failed' (red).
+        const status = exitCode === 0 ? 'stopped' : 'failed';
+        try { store.updateSession(entry.rowId, { status }); } catch (_) {}
         try { store.syncTranscript(entry.rowId, entry.cwd, entry.claudeId); } catch (_) {}
     };
 
@@ -393,7 +401,7 @@ export function attachTerminalServer(store) {
                 if (entry.graceTimer) { clearTimeout(entry.graceTimer); entry.graceTimer = null; }
             try { broadcastChat(entry); } catch (_) {}      // final clean snapshot
             try { entry.extractor?.dispose(); } catch (_) {}
-            finalize(entry);
+            finalize(entry, exitCode);
             for (const c of entry.clients) { if (c.readyState === 1) c.send(JSON.stringify({ type: 'exit', code: exitCode })); }
             terminals.delete(entry.claudeId);
         });
