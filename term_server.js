@@ -57,6 +57,7 @@ const ensureTrusted = (dir) => {
 const BUFFER_CAP = 256 * 1024;       // scrollback replayed to a (re)attaching client
 const IDLE_KILL_MS = 30 * 60 * 1000; // kill a PTY with no viewers after 30 min
 const CHAT_DEBOUNCE_MS = 180;        // settle window before re-parsing the screen into chat
+const WORK_GRACE_MS = 2500;          // keep "working" latched across brief inter-tool spinner gaps
 
 // Role-driven session persona (mirrors V1's claude_manager): designers run in the
 // designs repo (its own CLAUDE.md), developers use the default CLAUDE.md, testers
@@ -120,14 +121,27 @@ export function attachTerminalServer(store) {
         if (!entry?.extractor) return;
         let snapshot;
         try { snapshot = entry.extractor.extract(); } catch (_) { return; }
-        // Reflect real activity in the session status: 'running' while Claude is
-        // working, 'stopped' when the turn is done. This also bumps updated_at so
-        // a just-finished session floats to the top of the list.
-        if (store && entry.rowId && entry.wasWorking !== snapshot.working) {
-            try { store.updateSession(entry.rowId, { status: snapshot.working ? 'running' : 'stopped' }); } catch (_) {}
+
+        // Hysteresis: the spinner briefly vanishes between tool calls within one
+        // turn. Treat the turn as still working until the spinner has been gone for
+        // WORK_GRACE_MS, so the box stays "Working…" across the whole turn and only
+        // flips to "Done" when the chat truly stops.
+        const now = Date.now();
+        if (snapshot.working) { entry.lastSpinnerTs = now; if (entry.graceTimer) { clearTimeout(entry.graceTimer); entry.graceTimer = null; } }
+        const sinceSpinner = now - (entry.lastSpinnerTs || 0);
+        const working = snapshot.working || sinceSpinner < WORK_GRACE_MS;
+        // Still "working" only because of the grace window → schedule the flip to done.
+        if (!snapshot.working && working && !entry.graceTimer) {
+            entry.graceTimer = setTimeout(() => { entry.graceTimer = null; broadcastChat(entry); }, WORK_GRACE_MS - sinceSpinner + 50);
         }
-        entry.wasWorking = snapshot.working;
-        const payload = JSON.stringify({ type: 'chat', messages: snapshot.messages, text: snapshot.text, working: snapshot.working });
+
+        // Reflect real activity in the session status: 'running' while working,
+        // 'stopped' when done — also bumps updated_at so it floats to the top.
+        if (store && entry.rowId && entry.wasWorking !== working) {
+            try { store.updateSession(entry.rowId, { status: working ? 'running' : 'stopped' }); } catch (_) {}
+        }
+        entry.wasWorking = working;
+        const payload = JSON.stringify({ type: 'chat', messages: snapshot.messages, text: snapshot.text, working });
         for (const c of entry.clients) { if (c.readyState === 1) c.send(payload); }
     };
 
@@ -152,6 +166,7 @@ export function attachTerminalServer(store) {
         if (entry.clients.size === 0 && !entry.idleTimer) {
             entry.idleTimer = setTimeout(() => {
                 if (entry.chatTimer) { clearTimeout(entry.chatTimer); entry.chatTimer = null; }
+                if (entry.graceTimer) { clearTimeout(entry.graceTimer); entry.graceTimer = null; }
                 try { entry.extractor?.dispose(); } catch (_) {}
                 try { entry.proc?.kill(); } catch (_) {}
                 terminals.delete(entry.claudeId);
@@ -265,6 +280,7 @@ export function attachTerminalServer(store) {
         proc.on('exit', (code) => {
             const exitCode = typeof code === 'number' ? code : 0;
             if (entry.chatTimer) { clearTimeout(entry.chatTimer); entry.chatTimer = null; }
+                if (entry.graceTimer) { clearTimeout(entry.graceTimer); entry.graceTimer = null; }
             try { broadcastChat(entry); } catch (_) {}      // final clean snapshot
             try { entry.extractor?.dispose(); } catch (_) {}
             finalize(entry);
