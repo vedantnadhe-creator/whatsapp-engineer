@@ -659,6 +659,17 @@ function SidebarContent({
           <Bot size={12} />
           Agents
         </button>
+        <button
+          onClick={() => onViewChange?.('cost')}
+          className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded text-xs font-medium cursor-pointer transition-colors"
+          style={{
+            backgroundColor: view === 'cost' ? 'var(--c-surface-2)' : 'transparent',
+            color: view === 'cost' ? 'var(--c-text)' : 'var(--c-text-secondary)',
+          }}
+        >
+          <DollarSign size={12} />
+          Cost
+        </button>
       </div>
 
       {/* Search sessions */}

@@ -195,6 +195,18 @@ a{color:#60a5fa;text-decoration:none}</style></head>
         ]);
     });
 
+    // Cost meter — per-session API-equivalent cost, aggregated. Read-only, no caps.
+    app.get('/api/cost-stats', requireAuth, (req, res) => {
+        try {
+            if (typeof store.getCostStats !== 'function') {
+                return res.json({ unavailable: true });
+            }
+            res.json(store.getCostStats(50));
+        } catch (err) {
+            res.status(500).json({ error: err.message });
+        }
+    });
+
     // ── Request / Grant Access ─────────────────────────────────
 
     /** Any logged-in user can request access to a session */

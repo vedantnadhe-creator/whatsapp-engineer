@@ -2,12 +2,13 @@ import { useState, useEffect, useCallback } from 'react'
 import { BrowserRouter, Routes, Route, useParams, useNavigate, useLocation } from 'react-router-dom'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import SharePage from './pages/SharePage'
-import { useSessions, useStats, useSessionMessages, useModels, usePhones, useUsers, useCron, useAccessRequests, useIssues, useAutonomous, useSprints, useTeamMembers, useAction, useAgents, runAgent, startSession, sendMessage, stopSession, forkSession, testForkSession, mergeSessions, toggleBookmark, updateSessionSprint, getSprintChangelog, requestIssueSummary, getIssueLastResponse, generateSprintChangelog, uploadFile, transcribeAudio, requestAccess, getClaudePrompt, saveClaudePrompt, getLearnings, saveLearnings, getAdminSettings, saveAdminSetting, renameSession, deleteSession, sessionToIssue, apiFetch } from './hooks/useApi'
+import { useSessions, useStats, useCostStats, useSessionMessages, useModels, usePhones, useUsers, useCron, useAccessRequests, useIssues, useAutonomous, useSprints, useTeamMembers, useAction, useAgents, runAgent, startSession, sendMessage, stopSession, forkSession, testForkSession, mergeSessions, toggleBookmark, updateSessionSprint, getSprintChangelog, requestIssueSummary, getIssueLastResponse, generateSprintChangelog, uploadFile, transcribeAudio, requestAccess, getClaudePrompt, saveClaudePrompt, getLearnings, saveLearnings, getAdminSettings, saveAdminSetting, renameSession, deleteSession, sessionToIssue, apiFetch } from './hooks/useApi'
 import useWebSocket from './hooks/useWebSocket'
 import Sidebar from './components/Sidebar'
 import Workspace from './components/Workspace'
 import SprintBoard from './components/SprintBoard'
 import AgentsView from './components/AgentsView'
+import CostView from './components/CostView'
 import Login from './pages/Login'
 import ShareSessionModal from './components/ShareSessionModal'
 import MergeDialog from './components/MergeDialog'
@@ -42,6 +43,7 @@ function Dashboard() {
   const [workMode, setWorkMode] = useState('developer')
 
   const { stats, refresh: refreshStats } = useStats()
+  const { cost, loading: costLoading, refresh: refreshCost } = useCostStats()
   const { sessions, total, totalPages, showAllSessions, refresh: refreshSessions } = useSessions(page, sessionSearch)
   const { messages, refresh: refreshMessages } = useSessionMessages(activeSession?.id)
   const { models } = useModels()
@@ -408,7 +410,20 @@ function Dashboard() {
       />
       )}
       <div className="flex-1 min-w-0 min-h-0 h-full overflow-hidden">
-        {view === 'agents' ? (
+        {view === 'cost' ? (
+          <CostView
+            cost={cost}
+            loading={costLoading}
+            onRefresh={refreshCost}
+            onGoToSession={(sessionId) => {
+              if (!sessionId) return
+              const found = sessions.find(s => s.id === sessionId)
+              if (found) handleSelectSession(found)
+              else { setActiveSession({ id: sessionId }); setIsNewSession(false); navigate(`/s/${sessionId}`) }
+              setView('chat')
+            }}
+          />
+        ) : view === 'agents' ? (
           <AgentsView
             agents={agents}
             loading={agentsLoading}

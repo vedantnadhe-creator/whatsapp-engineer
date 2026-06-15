@@ -93,6 +93,11 @@ export function useStats() {
   return { stats: data, loading, error, refresh };
 }
 
+export function useCostStats() {
+  const { data, loading, error, refresh } = useGet('/api/cost-stats');
+  return { cost: data, loading, error, refresh };
+}
+
 // Pagination: `page` is the max page currently loaded. Lower pages stay in state
 // so the list accumulates instead of being replaced on "Load more".
 // When `q` (search query) changes, paging is reset and the list is re-fetched

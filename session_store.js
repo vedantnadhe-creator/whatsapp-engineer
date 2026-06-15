@@ -304,6 +304,50 @@ class SessionStore {
         return this.db.prepare('SELECT COALESCE(SUM(input_tokens), 0) as input, COALESCE(SUM(output_tokens), 0) as output FROM sessions').get();
     }
 
+    // Cost meter: aggregate per-session API-equivalent cost (cost_usd) across
+    // time windows + by model, plus the most expensive recent sessions. Purely
+    // informational — no caps/limits. Note: programmatic (--print) sessions are
+    // billed from the separate Agent SDK credit pool as of 2026-06-15.
+    getCostStats(recentLimit = 50) {
+        const win = (sql) => this.db.prepare(
+            `SELECT COALESCE(SUM(cost_usd),0) cost, COUNT(*) count FROM sessions WHERE cost_usd IS NOT NULL${sql}`
+        ).get();
+
+        const today = win(" AND created_at >= date('now','start of day')");
+        const last7 = win(" AND created_at >= datetime('now','-7 day')");
+        const last30 = win(" AND created_at >= datetime('now','-30 day')");
+        const month = win(" AND created_at >= date('now','start of month')");
+        const all = win('');
+
+        const byModel = this.db.prepare(
+            `SELECT COALESCE(NULLIF(model,''),'unknown') model,
+                    COALESCE(SUM(cost_usd),0) cost, COUNT(*) count
+             FROM sessions WHERE cost_usd IS NOT NULL
+             GROUP BY COALESCE(NULLIF(model,''),'unknown')
+             ORDER BY cost DESC`
+        ).all();
+
+        // Last 14 days of daily spend for a sparkline
+        const daily = this.db.prepare(
+            `SELECT date(created_at) day, COALESCE(SUM(cost_usd),0) cost, COUNT(*) count
+             FROM sessions
+             WHERE cost_usd IS NOT NULL AND created_at >= datetime('now','-14 day')
+             GROUP BY date(created_at) ORDER BY day ASC`
+        ).all();
+
+        const topSessions = this.db.prepare(
+            `SELECT s.id, s.task, s.model, s.cost_usd cost, s.status, s.created_at,
+                    u.display_name owner
+             FROM sessions s LEFT JOIN users u ON u.id = s.owner_id
+             WHERE s.cost_usd IS NOT NULL AND s.cost_usd > 0
+             ORDER BY s.cost_usd DESC LIMIT ?`
+        ).all(recentLimit);
+
+        const avgPerSession = all.count > 0 ? all.cost / all.count : 0;
+
+        return { today, last7, last30, month, all, avgPerSession, byModel, daily, topSessions };
+    }
+
     getSessionsForUser(userId, limit = 20, offset = 0) {
         return this.db.prepare(
             `SELECT s.*,
