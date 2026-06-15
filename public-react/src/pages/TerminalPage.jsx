@@ -24,8 +24,30 @@ import {
   Plus, Search, X, MoreVertical, GitFork, History, Share2, Pencil, Trash2, Star, Play,
   MessageSquare, SendHorizontal, Wrench, ChevronDown, LayoutGrid, Sparkles, DollarSign,
   ChevronRight, Loader2, Paperclip, CheckCircle2,
-  Settings, Users, Phone, FileText, BookOpen, Clock, User as UserIcon,
+  Settings, Users, Phone, FileText, BookOpen, Clock, User as UserIcon, Bell, BellOff,
 } from 'lucide-react'
+
+// Completion chime — same triangle-wave arpeggio V1 plays when the bot finishes.
+function playDoneBeep() {
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext
+    if (!Ctx) return
+    const ctx = new Ctx()
+    const t0 = ctx.currentTime
+    const tone = (freq, start, dur = 0.22) => {
+      const osc = ctx.createOscillator(), gain = ctx.createGain()
+      osc.type = 'triangle'
+      osc.frequency.setValueAtTime(freq, t0 + start)
+      gain.gain.setValueAtTime(0, t0 + start)
+      gain.gain.linearRampToValueAtTime(0.6, t0 + start + 0.02)
+      gain.gain.exponentialRampToValueAtTime(0.001, t0 + start + dur)
+      osc.connect(gain).connect(ctx.destination)
+      osc.start(t0 + start); osc.stop(t0 + start + dur + 0.02)
+    }
+    tone(880, 0); tone(1320, 0.22); tone(1760, 0.44, 0.28)
+    setTimeout(() => { try { ctx.close() } catch {} }, 1200)
+  } catch {}
+}
 
 // Interactive web terminal — /sessions/v2. Real human typing → subscription-billed.
 // Each session's id IS the Claude session UUID, so open/resume/fork map onto
@@ -102,6 +124,9 @@ export default function TerminalPage() {
   const [shareFor, setShareFor] = useState(null)
   const [forkFor, setForkFor] = useState(null) // session being forked (opens the fork dialog)
   const [creatingName, setCreatingName] = useState(null) // string while naming a new session inline
+  const [notifySound, setNotifySound] = useState(true) // bell: chime when a turn completes (default on)
+  const notifySoundRef = useRef(true)
+  notifySoundRef.current = notifySound
   // Connection request — bump .key to (re)spawn the terminal with these params.
   // sessionId = Claude session UUID passed to --resume; rowId = OliBot row id (for
   // sidebar highlight; null for brand-new sessions); cwd = the session's working dir
@@ -228,7 +253,10 @@ export default function TerminalPage() {
   // updated_at — refresh the list so the just-active session jumps to the top.
   const prevWorkingRef = useRef(false)
   useEffect(() => {
-    if (prevWorkingRef.current && !working) setTimeout(() => refreshSessions(), 500)
+    if (prevWorkingRef.current && !working) {
+      setTimeout(() => refreshSessions(), 500)
+      if (notifySoundRef.current) playDoneBeep() // chime when the turn finishes
+    }
     prevWorkingRef.current = working
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [working])
@@ -367,8 +395,10 @@ export default function TerminalPage() {
   if (!user) return <Login />
 
   const activeSession = (sessions || []).find(s => s.id === activeId) || null
-  const statusColor = status === 'live' ? '#7ee787' : status === 'connecting' ? '#f2cc60' : status === 'idle' ? '#6e7681' : '#ff6b6b'
-  const statusLabel = status === 'live' ? 'Live · subscription' : status === 'connecting' ? 'Connecting…' : status === 'idle' ? 'No session' : status === 'exited' ? 'Exited' : 'Error'
+  // Connection + activity aware: green only while Claude is actively working,
+  // blue (done) when connected and idle, amber connecting, red exited/error.
+  const statusColor = status === 'live' ? (working ? '#7ee787' : '#6cb6ff') : status === 'connecting' ? '#f2cc60' : status === 'idle' ? '#6e7681' : '#ff6b6b'
+  const statusLabel = status === 'live' ? (working ? 'Working…' : 'Done') : status === 'connecting' ? 'Connecting…' : status === 'idle' ? 'No session' : status === 'exited' ? 'Exited' : 'Error'
 
   return (
     <div className="flex" style={{ height: '100dvh', backgroundColor: 'var(--c-bg)' }}>
@@ -394,16 +424,26 @@ export default function TerminalPage() {
         </div>
         {activeSession && (
           <div className="flex items-center gap-2 min-w-0 pl-2" style={{ borderLeft: '1px solid var(--c-border)' }}>
-            <span title={activeSession.status || ''} style={{ width: 7, height: 7, borderRadius: 99, backgroundColor: statusDot(activeSession.status), flexShrink: 0 }} />
-            <span className="truncate text-sm font-medium" style={{ color: 'var(--c-text)', maxWidth: 260 }}>{activeSession.name || activeSession.task || activeSession.id}</span>
+            <span title={statusLabel} style={{ width: 7, height: 7, borderRadius: 99, backgroundColor: statusColor, flexShrink: 0 }} />
+            <span className="truncate text-sm font-medium" style={{ color: 'var(--c-text)', maxWidth: 240 }}>{activeSession.name || activeSession.task || activeSession.id}</span>
             {(activeSession.owner_name || activeSession.owner_email) && (
               <span className="flex items-center gap-1 text-xs shrink-0 px-1.5 py-0.5 rounded" style={{ color: 'var(--c-text-secondary)', backgroundColor: 'var(--c-surface-2)' }} title={activeSession.owner_name || activeSession.owner_email}>
                 <UserIcon size={11} /> {activeSession.owner_name || activeSession.owner_email}
               </span>
             )}
+            {/* Per-session quick actions as icons */}
+            <div className="flex items-center gap-0.5 ml-1">
+              <IconBtn title="Fork session" onClick={() => setForkFor(activeSession)}><GitFork size={14} /></IconBtn>
+              <IconBtn title="Share session" onClick={() => setShareFor(activeSession)}><Share2 size={14} /></IconBtn>
+              <IconBtn title="History" onClick={() => setHistoryFor(activeSession)}><History size={14} /></IconBtn>
+            </div>
           </div>
         )}
         <div className="ml-auto flex items-center gap-3">
+          <IconBtn title={notifySound ? 'Sound on — chimes when a turn finishes (click to mute)' : 'Sound off — click to chime on finish'}
+            onClick={() => setNotifySound(v => !v)} active={notifySound}>
+            {notifySound ? <Bell size={15} /> : <BellOff size={15} />}
+          </IconBtn>
           {/* View toggle — Chat (extracted conversation) vs raw Terminal */}
           <div className="flex items-center p-0.5 rounded-md" style={{ backgroundColor: 'var(--c-surface-2)', border: '1px solid var(--c-border)' }} role="tablist" aria-label="View mode">
             <ViewTab active={view === 'chat'} onClick={() => setView('chat')} icon={<MessageSquare size={12} />} label="Chat" />
@@ -728,6 +768,18 @@ function NavRail({ tab, setTab, isAdmin, onShowAdmin, pendingRequests = 0 }) {
         <ArrowLeft size={17} />
       </a>
     </div>
+  )
+}
+
+function IconBtn({ title, onClick, active, children }) {
+  return (
+    <button onClick={onClick} title={title} aria-label={title}
+      className="flex items-center justify-center rounded-md cursor-pointer transition-colors"
+      style={{ width: 30, height: 30, color: active ? 'var(--c-accent)' : 'var(--c-text-secondary)', backgroundColor: active ? 'color-mix(in srgb, var(--c-accent) 14%, transparent)' : 'transparent' }}
+      onMouseEnter={(e) => { if (!active) e.currentTarget.style.backgroundColor = 'var(--c-surface-2)' }}
+      onMouseLeave={(e) => { if (!active) e.currentTarget.style.backgroundColor = 'transparent' }}>
+      {children}
+    </button>
   )
 }
 

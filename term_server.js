@@ -85,10 +85,11 @@ export function attachTerminalServer(store) {
         if (!entry?.extractor) return;
         let snapshot;
         try { snapshot = entry.extractor.extract(); } catch (_) { return; }
-        // When a turn finishes (working true→false), bump the session's updated_at
-        // so the just-active session floats to the top of the list.
-        if (entry.wasWorking && !snapshot.working && store && entry.rowId) {
-            try { store.updateSession(entry.rowId, { status: 'running' }); } catch (_) {}
+        // Reflect real activity in the session status: 'running' while Claude is
+        // working, 'stopped' when the turn is done. This also bumps updated_at so
+        // a just-finished session floats to the top of the list.
+        if (store && entry.rowId && entry.wasWorking !== snapshot.working) {
+            try { store.updateSession(entry.rowId, { status: snapshot.working ? 'running' : 'stopped' }); } catch (_) {}
         }
         entry.wasWorking = snapshot.working;
         const payload = JSON.stringify({ type: 'chat', messages: snapshot.messages, text: snapshot.text, working: snapshot.working });
