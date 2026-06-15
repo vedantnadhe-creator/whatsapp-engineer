@@ -931,9 +931,13 @@ const MD = {
   strong: ({ children }) => <strong style={{ color: 'var(--c-text)', fontWeight: 700 }}>{children}</strong>,
   blockquote: ({ children }) => <blockquote className="my-2 pl-3" style={{ borderLeft: '2px solid var(--c-border)', color: 'var(--c-text-secondary)' }}>{children}</blockquote>,
   hr: () => <hr className="my-3" style={{ border: 0, borderTop: '1px solid var(--c-border)' }} />,
-  table: ({ children }) => <div className="my-2 overflow-x-auto"><table className="text-xs" style={{ borderCollapse: 'collapse' }}>{children}</table></div>,
-  th: ({ children }) => <th className="px-2 py-1 text-left font-semibold" style={{ border: '1px solid var(--c-border)', backgroundColor: 'var(--c-surface-2)' }}>{children}</th>,
-  td: ({ children }) => <td className="px-2 py-1" style={{ border: '1px solid var(--c-border)' }}>{children}</td>,
+  table: ({ children }) => (
+    <div className="my-3 overflow-x-auto rounded-lg" style={{ border: '1px solid var(--c-border)' }}>
+      <table className="w-full text-xs" style={{ borderCollapse: 'collapse' }}>{children}</table>
+    </div>
+  ),
+  th: ({ children }) => <th className="px-3 py-2 text-left font-semibold whitespace-nowrap" style={{ borderBottom: '1px solid var(--c-border)', backgroundColor: 'var(--c-surface-2)', color: 'var(--c-text)' }}>{children}</th>,
+  td: ({ children }) => <td className="px-3 py-2 align-top" style={{ borderTop: '1px solid var(--c-border)' }}>{children}</td>,
   code: ({ inline, children }) => inline
     ? <code className="px-1 py-0.5 rounded text-[0.85em]" style={{ backgroundColor: 'var(--c-surface-2)', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>{children}</code>
     : <pre className="my-2 p-3 rounded-lg overflow-x-auto text-xs" style={{ backgroundColor: 'var(--c-surface-2)', border: '1px solid var(--c-border)' }}><code style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', lineHeight: 1.5 }}>{children}</code></pre>,

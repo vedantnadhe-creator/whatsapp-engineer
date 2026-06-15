@@ -80,6 +80,54 @@ const readCtxRemaining = (claudeId) => {
     } catch (_) { return null; }
 };
 
+// Clean chat from the session transcript (the source of truth) instead of the
+// scraped TUI screen. The interactive TUI REFLOWS rich content to the terminal
+// width — markdown tables in particular get wrapped/box-drawn and arrive as
+// mangled pipe-soup that remark-gfm can't parse. The JSONL transcript holds the
+// model's ORIGINAL markdown (clean `| h |` / `|---|` tables, fenced code, etc.).
+// We use it for the settled view; the live TUI scrape still drives the in-flight
+// turn (the transcript is only written as each message completes).
+const toolLabel = (b) => {
+    const inp = b.input || {};
+    const arg = inp.file_path || inp.path || inp.pattern || inp.command || inp.description
+        || inp.query || inp.skill || inp.subject || inp.url || inp.taskId || '';
+    const short = String(arg).split('\n')[0].slice(0, 60);
+    return short ? `${b.name}(${short})` : b.name;
+};
+const userText = (content) => {
+    if (typeof content === 'string') return content;
+    if (!Array.isArray(content)) return '';
+    if (content.some((b) => b.type === 'tool_result')) return ''; // tool output, NOT a user turn
+    return content.filter((b) => b.type === 'text').map((b) => b.text).join('\n');
+};
+const readCleanMessages = (store, entry) => {
+    if (!store?.transcriptPath || !entry?.claudeId || entry.claudeId.startsWith('pending-')) return null;
+    let file;
+    try { file = store.transcriptPath(entry.claudeId, entry.cwd); } catch (_) { return null; }
+    if (!file || !fs.existsSync(file)) return null;
+    const out = [];
+    try {
+        for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
+            if (!line.trim()) continue;
+            let o; try { o = JSON.parse(line); } catch (_) { continue; }
+            if (o.isSidechain) continue;                       // skip subagent internals
+            if (o.type === 'user') {
+                const t = userText(o.message?.content);
+                if (t && t.trim() && !t.startsWith('<')) out.push({ role: 'user', content: t.trim(), tool: false });
+            } else if (o.type === 'assistant') {
+                const c = o.message?.content;
+                if (typeof c === 'string') { if (c.trim()) out.push({ role: 'assistant', content: c, tool: false }); continue; }
+                if (!Array.isArray(c)) continue;
+                for (const b of c) {
+                    if (b.type === 'text' && b.text && b.text.trim()) out.push({ role: 'assistant', content: b.text, tool: false });
+                    else if (b.type === 'tool_use') out.push({ role: 'assistant', content: toolLabel(b), tool: true });
+                }
+            }
+        }
+    } catch (_) { return null; }
+    return out.length ? out : null;
+};
+
 // Role-driven session persona (mirrors V1's claude_manager): designers run in the
 // designs repo (its own CLAUDE.md), developers use the default CLAUDE.md, testers
 // run in the code repo with a QA persona appended (+ read-only gating if they lack
@@ -172,7 +220,12 @@ export function attachTerminalServer(store) {
             try { store.updateSession(entry.rowId, { status: working ? 'running' : 'stopped' }); } catch (_) {}
         }
         entry.wasWorking = working;
-        const payload = JSON.stringify({ type: 'chat', messages: snapshot.messages, text: snapshot.text, working, turnDone });
+        // Settled turn → render the clean transcript (correct tables/code/markdown);
+        // mid-turn → the live TUI scrape (transcript isn't written until a message
+        // completes). Falls back to the scrape if the transcript can't be read.
+        let messages = snapshot.messages;
+        if (!working) { const clean = readCleanMessages(store, entry); if (clean) messages = clean; }
+        const payload = JSON.stringify({ type: 'chat', messages, text: snapshot.text, working, turnDone });
         for (const c of entry.clients) { if (c.readyState === 1) c.send(payload); }
 
         // A turn just ended → if context is nearly spent, auto-compact before the
@@ -242,7 +295,11 @@ export function attachTerminalServer(store) {
         // Hand the (re)attaching client the current clean conversation immediately.
         try {
             const snap = entry.extractor?.extract();
-            if (snap && ws.readyState === 1) ws.send(JSON.stringify({ type: 'chat', messages: snap.messages, text: snap.text, working: snap.working }));
+            if (snap && ws.readyState === 1) {
+                let messages = snap.messages;
+                if (!snap.working) { const clean = readCleanMessages(store, entry); if (clean) messages = clean; }
+                ws.send(JSON.stringify({ type: 'chat', messages, text: snap.text, working: snap.working }));
+            }
         } catch (_) {}
     };
 
