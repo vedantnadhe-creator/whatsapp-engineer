@@ -5,6 +5,9 @@
 import Database from 'better-sqlite3';
 import config from './config.js';
 import crypto from 'crypto';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 
 class SessionStore {
     constructor() {
@@ -231,6 +234,11 @@ class SessionStore {
             "ALTER TABLE issues ADD COLUMN parent_issue_id TEXT",
             // Single deadline per feature (replaces dev/QA handover dates), set on create.
             "ALTER TABLE issues ADD COLUMN deadline TEXT",
+            // Source of a session: 'agent' (claude --print, Agent-SDK billed) vs
+            // 'terminal' (interactive web terminal /sessions/v2, subscription billed).
+            "ALTER TABLE sessions ADD COLUMN source TEXT DEFAULT 'agent'",
+            "ALTER TABLE sessions ADD COLUMN bookmarked INTEGER DEFAULT 0",
+            "ALTER TABLE sessions ADD COLUMN parent_session_id TEXT",
         ];
         for (const sql of safeMigrations) {
             try { this.db.exec(sql); } catch (_) { /* column already exists */ }
@@ -248,6 +256,90 @@ class SessionStore {
 
     getSession(id) {
         return this.db.prepare('SELECT * FROM sessions WHERE id = ?').get(id);
+    }
+
+    // ── Interactive web-terminal (/sessions/v2) bridge ──────────────────
+    // A terminal session's id IS the Claude session UUID (set via --session-id),
+    // so resume/fork map directly onto `claude --resume <id>`. Subscription-billed.
+    createTerminalSession(id, ownerId, name, workingDir, model = 'claude-opus-4-8', parentSessionId = null) {
+        this.db.prepare(
+            `INSERT OR IGNORE INTO sessions
+               (id, user_phone, owner_id, task, name, claude_session_id, status, working_dir, thread_open, model, source, parent_session_id)
+             VALUES (?, ?, ?, ?, ?, ?, 'running', ?, 1, ?, 'terminal', ?)`
+        ).run(id, String(ownerId || 'web'), ownerId, name || 'Terminal session', name || null, id, workingDir, model, parentSessionId);
+        return this.getSession(id);
+    }
+
+    // Path to Claude Code's own JSONL transcript for a session (its native store).
+    transcriptPath(sessionId, workingDir) {
+        const folder = (workingDir || config.DEFAULT_WORKING_DIR).replace(/\//g, '-');
+        return path.join(os.homedir(), '.claude', 'projects', folder, `${sessionId}.jsonl`);
+    }
+
+    // Parse the JSONL transcript into the messages table (for history / search /
+    // share). Returns the parsed messages. Idempotent — replaces prior rows.
+    syncTranscript(sessionId, workingDir) {
+        const file = this.transcriptPath(sessionId, workingDir);
+        if (!fs.existsSync(file)) return { messages: [], synced: 0 };
+
+        const blockText = (content) => {
+            if (typeof content === 'string') return content;
+            if (Array.isArray(content)) {
+                return content.map(b => {
+                    if (b.type === 'text') return b.text;
+                    if (b.type === 'tool_use') return `⚙ ${b.name}`;
+                    return '';
+                }).filter(Boolean).join('\n');
+            }
+            return '';
+        };
+
+        const msgs = [];
+        let inTok = 0, outTok = 0;
+        for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
+            if (!line.trim()) continue;
+            let o; try { o = JSON.parse(line); } catch (_) { continue; }
+            if (o.type !== 'user' && o.type !== 'assistant') continue;
+            if (o.message?.usage) {
+                inTok += o.message.usage.input_tokens || 0;
+                outTok += o.message.usage.output_tokens || 0;
+            }
+            const text = blockText(o.message?.content);
+            if (text && text.trim()) msgs.push({ role: o.message?.role || o.type, content: text, ts: o.timestamp || null });
+        }
+
+        // Only persist when the session row exists (messages.session_id is a FK).
+        // History/search still get the parsed messages via the return value.
+        if (this.getSession(sessionId)) {
+            const tx = this.db.transaction(() => {
+                this.db.prepare('DELETE FROM messages WHERE session_id = ?').run(sessionId);
+                const ins = this.db.prepare('INSERT INTO messages (session_id, role, content, timestamp) VALUES (?, ?, ?, ?)');
+                for (const m of msgs) ins.run(sessionId, m.role, m.content, m.ts);
+            });
+            tx();
+            try { this.updateSession(sessionId, { input_tokens: inTok, output_tokens: outTok }); } catch (_) {}
+        }
+        return { messages: msgs, synced: msgs.length };
+    }
+
+    // After a --fork-session resume, Claude writes a NEW uuid.jsonl. Find it so we
+    // can register the fork. Returns the newest transcript id created since `sinceMs`
+    // (excluding the parent), or null.
+    detectNewSession(workingDir, sinceMs, excludeId) {
+        try {
+            const folder = (workingDir || config.DEFAULT_WORKING_DIR).replace(/\//g, '-');
+            const dir = path.join(os.homedir(), '.claude', 'projects', folder);
+            if (!fs.existsSync(dir)) return null;
+            let best = null, bestM = 0;
+            for (const f of fs.readdirSync(dir)) {
+                if (!f.endsWith('.jsonl')) continue;
+                const id = f.replace(/\.jsonl$/, '');
+                if (id === excludeId) continue;
+                const m = fs.statSync(path.join(dir, f)).mtimeMs;
+                if (m >= sinceMs && m > bestM) { best = id; bestM = m; }
+            }
+            return best;
+        } catch (_) { return null; }
     }
 
     getActiveSessions(userPhone) {

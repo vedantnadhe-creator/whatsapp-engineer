@@ -196,6 +196,20 @@ a{color:#60a5fa;text-decoration:none}</style></head>
         ]);
     });
 
+    // Terminal-session transcript — parse Claude Code's native JSONL into the
+    // messages table and return it (powers v2 history view, search, share).
+    app.get('/api/sessions/:id/transcript', requireAuth, (req, res) => {
+        try {
+            const session = store.getSession(req.params.id);
+            if (!session) return res.status(404).json({ error: 'Session not found' });
+            if (typeof store.syncTranscript !== 'function') return res.json({ messages: [] });
+            const result = store.syncTranscript(session.id, session.working_dir);
+            res.json({ messages: result.messages, synced: result.synced });
+        } catch (err) {
+            res.status(500).json({ error: err.message });
+        }
+    });
+
     // Cost meter — per-session API-equivalent cost, aggregated. Read-only, no caps.
     app.get('/api/cost-stats', requireAuth, (req, res) => {
         try {
@@ -2057,7 +2071,7 @@ Steps:
     const wss = new WebSocketServer({ noServer: true });
 
     // Interactive human-driven web terminal (/sessions/v2).
-    const termWss = attachTerminalServer();
+    const termWss = attachTerminalServer(store);
 
     server.on('upgrade', (req, socket, head) => {
         let pathname = '/';

@@ -98,6 +98,11 @@ export function useCostStats() {
   return { cost: data, loading, error, refresh };
 }
 
+// Parse + fetch a session's Claude transcript (terminal sessions: history view).
+export async function getTranscript(sessionId) {
+  return apiFetch(`/api/sessions/${sessionId}/transcript`);
+}
+
 // Pagination: `page` is the max page currently loaded. Lower pages stay in state
 // so the list accumulates instead of being replaced on "Load more".
 // When `q` (search query) changes, paging is reset and the list is re-fetched
