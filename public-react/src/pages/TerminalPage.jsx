@@ -69,6 +69,18 @@ function wsUrl() {
   return `${proto}//${window.location.host}${prefix}/term`
 }
 
+// Track a mobile viewport so the sidebar can become an overlay drawer and the
+// header can condense. < 768px is the mobile breakpoint.
+function useIsMobile(bp = 768) {
+  const [m, setM] = useState(typeof window !== 'undefined' && window.innerWidth < bp)
+  useEffect(() => {
+    const f = () => setM(window.innerWidth < bp)
+    window.addEventListener('resize', f)
+    return () => window.removeEventListener('resize', f)
+  }, [bp])
+  return m
+}
+
 // Session status → dot colour: running green, stopped blue, exited red, else grey.
 function statusDot(status) {
   const s = (status || '').toLowerCase()
@@ -108,7 +120,8 @@ export default function TerminalPage() {
 
   const [status, setStatus] = useState('idle') // idle | connecting | live | exited | error
   const [model, setModel] = useState('claude-opus-4-8')
-  const [showSidebar, setShowSidebar] = useState(true)
+  const isMobile = useIsMobile()
+  const [showSidebar, setShowSidebar] = useState(typeof window !== 'undefined' ? window.innerWidth >= 768 : true)
   // View mode — 'chat' renders the server-extracted conversation (subscription
   // billed, no raw TUI); 'terminal' is the raw xterm. The xterm instance stays
   // mounted-but-hidden in chat mode so toggling back shows full live state.
@@ -365,6 +378,7 @@ export default function TerminalPage() {
   // row id, and runs in the session's own working dir so Claude finds the transcript.
   const openSession = (s) => {
     setMenuFor(null); setActiveId(s.id); setTab('chat')
+    if (isMobile) setShowSidebar(false) // collapse the drawer after picking on mobile
     setConnReq(c => ({ key: c.key + 1, sessionId: s.claude_session_id || s.id, rowId: s.id, resume: true, fork: false, cwd: s.working_dir || null, name: null }))
   }
   // Feature views (sprint/agents) hand back a session id to open in the terminal.
@@ -420,67 +434,71 @@ export default function TerminalPage() {
           survive; it's just hidden when another feature tab is active. */}
       <div className="flex flex-col flex-1 min-h-0" style={{ display: tab === 'chat' ? 'flex' : 'none' }}>
       {/* Header */}
-      <div className="flex items-center gap-3 px-3 py-2" style={{ borderBottom: '1px solid var(--c-border)' }}>
+      <div className="flex items-center gap-2 sm:gap-3 px-2 sm:px-3 py-2" style={{ borderBottom: '1px solid var(--c-border)' }}>
         <a href={window.location.pathname.startsWith('/sessions') ? '/sessions/' : '/'}
-          className="flex items-center gap-1.5 text-xs font-medium px-2 py-1.5 rounded cursor-pointer"
+          className="hidden sm:flex items-center gap-1.5 text-xs font-medium px-2 py-1.5 rounded cursor-pointer"
           style={{ color: 'var(--c-text-secondary)', border: '1px solid var(--c-border)' }}>
           <ArrowLeft size={13} /> Dashboard
         </a>
-        <button onClick={() => setShowSidebar(s => !s)} className="p-1.5 rounded cursor-pointer"
+        <button onClick={() => setShowSidebar(s => !s)} className="p-1.5 rounded cursor-pointer shrink-0"
           style={{ color: 'var(--c-text-secondary)', border: '1px solid var(--c-border)' }} title={showSidebar ? 'Hide sessions' : 'Show sessions'}>
-          {showSidebar ? <PanelLeftClose size={14} /> : <PanelLeft size={14} />}
+          {showSidebar ? <PanelLeftClose size={16} /> : <PanelLeft size={16} />}
         </button>
-        <div className="flex items-center gap-2 font-bold shrink-0" style={{ color: 'var(--c-text)' }}>
+        <div className="hidden md:flex items-center gap-2 font-bold shrink-0" style={{ color: 'var(--c-text)' }}>
           <TerminalSquare size={16} style={{ color: 'var(--c-accent)' }} />
           Terminal <span className="text-[10px] font-mono px-1.5 py-0.5 rounded" style={{ backgroundColor: 'var(--c-surface-3)', color: 'var(--c-text-muted)' }}>v2</span>
         </div>
         {activeSession && (
-          <div className="flex items-center gap-2 min-w-0 pl-2" style={{ borderLeft: '1px solid var(--c-border)' }}>
-            <span title={statusLabel} style={{ width: 7, height: 7, borderRadius: 99, backgroundColor: statusColor, flexShrink: 0 }} />
-            <span className="truncate text-sm font-medium" style={{ color: 'var(--c-text)', maxWidth: 220 }}>{activeSession.name || activeSession.task || activeSession.id}</span>
+          <div className="flex items-center gap-2 min-w-0 md:pl-2" style={{ borderLeft: '1px solid var(--c-border)' }}>
+            <span title={statusLabel} style={{ width: 8, height: 8, borderRadius: 99, backgroundColor: statusColor, flexShrink: 0, marginLeft: 4 }} />
+            <span className="truncate text-sm font-medium min-w-0" style={{ color: 'var(--c-text)', maxWidth: 220 }}>{activeSession.name || activeSession.task || activeSession.id}</span>
             <ModeTag mode={activeSession.mode} />
             {(activeSession.owner_name || activeSession.owner_email) && (
-              <span className="flex items-center gap-1 text-xs shrink-0 px-1.5 py-0.5 rounded" style={{ color: 'var(--c-text-secondary)', backgroundColor: 'var(--c-surface-2)' }} title={activeSession.owner_name || activeSession.owner_email}>
+              <span className="hidden sm:flex items-center gap-1 text-xs shrink-0 px-1.5 py-0.5 rounded" style={{ color: 'var(--c-text-secondary)', backgroundColor: 'var(--c-surface-2)' }} title={activeSession.owner_name || activeSession.owner_email}>
                 <UserIcon size={11} /> {activeSession.owner_name || activeSession.owner_email}
               </span>
             )}
-            {/* Per-session quick actions as icons */}
-            <div className="flex items-center gap-0.5 ml-1">
+            {/* Per-session quick actions — collapse on mobile (also in the sidebar menu) */}
+            <div className="hidden sm:flex items-center gap-0.5 ml-1">
               <IconBtn title="Fork session" onClick={() => setForkFor(activeSession)}><GitFork size={14} /></IconBtn>
               <IconBtn title="Share session" onClick={() => setShareFor(activeSession)}><Share2 size={14} /></IconBtn>
               <IconBtn title="History" onClick={() => setHistoryFor(activeSession)}><History size={14} /></IconBtn>
             </div>
           </div>
         )}
-        <div className="ml-auto flex items-center gap-3">
+        <div className="ml-auto flex items-center gap-1.5 sm:gap-3 shrink-0">
           <IconBtn title={notifySound ? 'Sound on — chimes when a turn finishes (click to mute)' : 'Sound off — click to chime on finish'}
             onClick={() => setNotifySound(v => !v)} active={notifySound}>
             {notifySound ? <Bell size={15} /> : <BellOff size={15} />}
           </IconBtn>
           {/* View toggle — Chat (extracted conversation) vs raw Terminal */}
           <div className="flex items-center p-0.5 rounded-md" style={{ backgroundColor: 'var(--c-surface-2)', border: '1px solid var(--c-border)' }} role="tablist" aria-label="View mode">
-            <ViewTab active={view === 'chat'} onClick={() => setView('chat')} icon={<MessageSquare size={12} />} label="Chat" />
-            <ViewTab active={view === 'terminal'} onClick={() => setView('terminal')} icon={<TerminalSquare size={12} />} label="Terminal" />
+            <ViewTab active={view === 'chat'} onClick={() => setView('chat')} icon={<MessageSquare size={13} />} label="Chat" />
+            <ViewTab active={view === 'terminal'} onClick={() => setView('terminal')} icon={<TerminalSquare size={13} />} label="Terminal" />
           </div>
           <select value={model} onChange={(e) => restart(e.target.value)}
-            className="text-xs rounded px-2 py-1.5 cursor-pointer outline-none"
-            style={{ backgroundColor: 'var(--c-surface)', color: 'var(--c-text)', border: '1px solid var(--c-border)' }} title="Model — applies on restart">
+            className="hidden sm:block text-xs rounded px-2 py-1.5 cursor-pointer outline-none"
+            style={{ backgroundColor: 'var(--c-surface)', color: 'var(--c-text)', border: '1px solid var(--c-border)', maxWidth: 130 }} title="Model — applies on restart">
             {(models?.length ? models : [{ id: 'claude-opus-4-8', name: 'Opus 4.8' }]).map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
           </select>
-          <button onClick={() => restart()} className="flex items-center gap-1.5 text-xs px-2 py-1.5 rounded cursor-pointer"
+          <button onClick={() => restart()} className="flex items-center gap-1.5 text-xs px-2 py-1.5 rounded cursor-pointer shrink-0"
             style={{ color: 'var(--c-text-secondary)', border: '1px solid var(--c-border)' }} title="Restart current session">
-            <RotateCw size={13} /> Restart
+            <RotateCw size={14} /> <span className="hidden sm:inline">Restart</span>
           </button>
-          <span className="flex items-center gap-1.5 text-xs font-mono" style={{ color: 'var(--c-text-secondary)' }}>
-            <Circle size={9} fill={statusColor} style={{ color: statusColor }} /> {statusLabel}
+          <span className="flex items-center gap-1.5 text-xs font-mono shrink-0" style={{ color: 'var(--c-text-secondary)' }}>
+            <Circle size={9} fill={statusColor} style={{ color: statusColor }} /> <span className="hidden lg:inline">{statusLabel}</span>
           </span>
         </div>
       </div>
 
       {/* Body */}
-      <div className="flex flex-1 min-h-0">
+      <div className="flex flex-1 min-h-0 relative">
+        {/* On mobile the sidebar is a fixed drawer over the workspace with a backdrop. */}
+        {showSidebar && isMobile && (
+          <div className="fixed inset-0 z-30" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }} onClick={() => setShowSidebar(false)} />
+        )}
         {showSidebar && (
-          <div className="w-72 shrink-0 flex flex-col" style={{ borderRight: '1px solid var(--c-border)', backgroundColor: 'var(--c-bg)' }}>
+          <div className={`${isMobile ? 'fixed inset-y-0 left-14 z-40 max-w-[80vw]' : ''} w-72 shrink-0 flex flex-col`} style={{ borderRight: '1px solid var(--c-border)', backgroundColor: 'var(--c-bg)' }}>
             <div className="p-2 flex gap-2" style={{ borderBottom: '1px solid var(--c-border)' }}>
               {creatingName === null ? (
                 <button onClick={beginNewSession} className="flex items-center justify-center gap-1.5 flex-1 text-xs font-medium text-white rounded px-2 py-1.5 cursor-pointer"
@@ -600,7 +618,7 @@ export default function TerminalPage() {
             <div className="absolute inset-0 z-10 flex flex-col chat-fade" style={{ backgroundColor: 'var(--c-bg)' }}>
               <div ref={scrollRef} className="flex-1 overflow-y-auto" style={{ scrollbarWidth: 'thin' }}
                 onScroll={(e) => { const el = e.currentTarget; setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 160) }}>
-                <div className="mx-auto w-full px-5 py-6 flex flex-col gap-6" style={{ maxWidth: 760 }}>
+                <div className="mx-auto w-full px-3 sm:px-5 py-4 sm:py-6 flex flex-col gap-5 sm:gap-6" style={{ maxWidth: 760 }}>
                   {messages.length === 0 ? (
                     <div className="flex flex-col items-center justify-center gap-2 text-center py-20" style={{ color: 'var(--c-text-muted)' }}>
                       <MessageSquare size={26} />
@@ -839,7 +857,7 @@ function ViewTab({ active, onClick, icon, label }) {
         backgroundColor: active ? 'var(--c-surface-3)' : 'transparent',
         color: active ? 'var(--c-text)' : 'var(--c-text-secondary)',
       }}>
-      {icon} {label}
+      {icon} <span className="hidden sm:inline">{label}</span>
     </button>
   )
 }
@@ -1029,7 +1047,7 @@ function ChatComposer({ draft, setDraft, onKeyDown, onSend, disabled, inputRef, 
     if (e.dataTransfer?.files?.length) onAddFiles(e.dataTransfer.files)
   }
   return (
-    <div className="shrink-0 px-5 py-3" style={{ borderTop: '1px solid var(--c-border)', backgroundColor: 'var(--c-bg)' }}>
+    <div className="shrink-0 px-3 sm:px-5 py-2.5 sm:py-3" style={{ borderTop: '1px solid var(--c-border)', backgroundColor: 'var(--c-bg)' }}>
       <div className="mx-auto w-full" style={{ maxWidth: 760 }}>
         {/* Staged image attachments */}
         {(attachments.length > 0 || uploading) && (
