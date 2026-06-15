@@ -59,6 +59,27 @@ const IDLE_KILL_MS = 30 * 60 * 1000; // kill a PTY with no viewers after 30 min
 const CHAT_DEBOUNCE_MS = 180;        // settle window before re-parsing the screen into chat
 const WORK_GRACE_MS = 4000;          // keep "working" latched across brief inter-tool / pre-stop-hook spinner gaps
 
+// Auto-/compact: the gsd statusline hook writes a per-session bridge file
+// (os.tmpdir()/claude-ctx-<session-uuid>.json) holding the live context window
+// state — { remaining_percentage, used_pct, … }. We read it (no terminal
+// scraping) and, when a turn ENDS with little context left, inject `/compact`
+// into the PTY ourselves so long sessions don't hit Claude's hard limit
+// mid-turn. Firing only between turns (at turn-done, working=false) means we
+// never interrupt a running turn. `remaining_percentage` is the raw remaining %
+// (Claude's own auto-compact is ~20% remaining / 80% used) — we trigger a touch
+// earlier so it's our controlled compaction, in the chat flow.
+const CTX_BRIDGE_DIR = os.tmpdir();
+const CTX_COMPACT_REMAINING = 25;    // auto-/compact when ≤ this much context remains (raw %)
+const CTX_REARM_REMAINING = 50;      // only re-arm after a compaction frees space back above this
+
+const readCtxRemaining = (claudeId) => {
+    if (!claudeId || claudeId.startsWith('pending-')) return null;
+    try {
+        const j = JSON.parse(fs.readFileSync(path.join(CTX_BRIDGE_DIR, `claude-ctx-${claudeId}.json`), 'utf8'));
+        return typeof j.remaining_percentage === 'number' ? j.remaining_percentage : null;
+    } catch (_) { return null; }
+};
+
 // Role-driven session persona (mirrors V1's claude_manager): designers run in the
 // designs repo (its own CLAUDE.md), developers use the default CLAUDE.md, testers
 // run in the code repo with a QA persona appended (+ read-only gating if they lack
@@ -153,6 +174,28 @@ export function attachTerminalServer(store) {
         entry.wasWorking = working;
         const payload = JSON.stringify({ type: 'chat', messages: snapshot.messages, text: snapshot.text, working, turnDone });
         for (const c of entry.clients) { if (c.readyState === 1) c.send(payload); }
+
+        // A turn just ended → if context is nearly spent, auto-compact before the
+        // next message. Done here (working=false) so we never cut into a live turn.
+        if (turnDone) maybeAutoCompact(entry);
+    };
+
+    // Inject `/compact` into the PTY when the session is low on context. Re-arms
+    // only after compaction frees space, so it fires once per fill cycle — not on
+    // every turn while sitting near the limit.
+    const maybeAutoCompact = (entry) => {
+        if (!entry?.proc) return;
+        const rem = readCtxRemaining(entry.claudeId);
+        if (rem == null) return;
+        if (rem >= CTX_REARM_REMAINING) entry.autoCompacted = false; // freed up → arm again
+        if (rem > CTX_COMPACT_REMAINING || entry.autoCompacted) return;
+        entry.autoCompacted = true;
+        try {
+            entry.proc.write('/compact');
+            setTimeout(() => { try { entry.proc.write('\r'); } catch (_) {} }, 80);
+        } catch (_) { return; }
+        const notice = JSON.stringify({ type: 'notice', level: 'info', message: `Context ~${100 - rem}% full — auto-compacting to free space…` });
+        for (const c of entry.clients) { if (c.readyState === 1) c.send(notice); }
     };
 
     const scheduleChat = (entry) => {

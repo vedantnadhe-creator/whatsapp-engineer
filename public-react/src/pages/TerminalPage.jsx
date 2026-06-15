@@ -128,6 +128,8 @@ export default function TerminalPage() {
   const [view, setView] = useState('chat') // chat | terminal
   const [messages, setMessages] = useState([]) // [{role, content, tool}] from `chat` frames
   const [working, setWorking] = useState(false) // Claude is mid-turn (live thinking box)
+  const [notice, setNotice] = useState(null) // transient banner (e.g. backend auto-compact)
+  const noticeTimerRef = useRef(null)
   const [draft, setDraft] = useState('')
   const [attachments, setAttachments] = useState([]) // [{url, fileName, path, name}] staged images
   const [uploading, setUploading] = useState(false)
@@ -216,6 +218,10 @@ export default function TerminalPage() {
           // pulse — never re-derive "done" from `working` here, or a turn with N
           // tools would chime N times (the "buzzing 11 times" bug).
           if (msg.turnDone) { setTimeout(() => refreshSessions(), 500); if (notifySoundRef.current) playDoneBeep() }
+        }
+        else if (msg.type === 'notice') {
+          setNotice(msg.message || ''); clearTimeout(noticeTimerRef.current)
+          noticeTimerRef.current = setTimeout(() => setNotice(null), 7000)
         }
         else if (msg.type === 'pong') { /* keepalive */ }
         else if (msg.type === 'attached') { setStatus('live'); if (msg.terminalId) assignedIdRef.current = msg.terminalId }
@@ -615,6 +621,13 @@ export default function TerminalPage() {
           {/* Chat — server-extracted conversation. */}
           {view === 'chat' && connReq.key !== 0 && (
             <div className="absolute inset-0 z-10 flex flex-col chat-fade" style={{ backgroundColor: 'var(--c-bg)' }}>
+              {notice && (
+                <div className="flex items-center gap-2 px-3 sm:px-5 py-2 text-xs font-medium border-b"
+                  style={{ color: '#f2cc60', borderColor: 'var(--c-border)', backgroundColor: 'rgba(242,204,96,0.08)' }}>
+                  <Loader2 size={13} className="animate-spin" style={{ flexShrink: 0 }} />
+                  <span className="truncate">{notice}</span>
+                </div>
+              )}
               <div ref={scrollRef} className="flex-1 overflow-y-auto" style={{ scrollbarWidth: 'thin' }}
                 onScroll={(e) => { const el = e.currentTarget; setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 160) }}>
                 <div className="mx-auto w-full px-3 sm:px-5 py-4 sm:py-6 flex flex-col gap-5 sm:gap-6" style={{ maxWidth: 760 }}>
