@@ -26,9 +26,33 @@
 import pty from 'node-pty';
 import { WebSocketServer } from 'ws';
 import crypto from 'crypto';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import config from './config.js';
 import { verifyJwt } from './auth.js';
 import { createExtractor } from './term_extract.js';
+
+// Claude Code persists per-folder trust in ~/.claude.json. We pre-accept it for
+// any working dir before spawning, so the interactive "Do you trust this folder?"
+// dialog never appears. That dialog renders in the live region the chat view
+// strips, so an untrusted dir would otherwise look permanently stuck.
+const CLAUDE_CONFIG = process.env.CLAUDE_CONFIG_DIR
+    ? path.join(process.env.CLAUDE_CONFIG_DIR, '.claude.json')
+    : path.join(os.homedir(), '.claude.json');
+
+const ensureTrusted = (dir) => {
+    try {
+        const cfg = JSON.parse(fs.readFileSync(CLAUDE_CONFIG, 'utf8'));
+        cfg.projects = cfg.projects || {};
+        const proj = cfg.projects[dir] || (cfg.projects[dir] = {});
+        if (proj.hasTrustDialogAccepted === true && proj.hasCompletedProjectOnboarding === true) return;
+        proj.hasTrustDialogAccepted = true;
+        proj.hasCompletedProjectOnboarding = true;
+        if (proj.projectOnboardingSeenCount == null) proj.projectOnboardingSeenCount = 1;
+        fs.writeFileSync(CLAUDE_CONFIG, JSON.stringify(cfg, null, 2));
+    } catch (_) { /* best-effort: if the config can't be written the dialog still shows */ }
+};
 
 const BUFFER_CAP = 256 * 1024;       // scrollback replayed to a (re)attaching client
 const IDLE_KILL_MS = 30 * 60 * 1000; // kill a PTY with no viewers after 30 min
@@ -138,6 +162,8 @@ export function attachTerminalServer(store) {
             mode = 'new';
         }
         if (model && model !== 'default') args.push('--model', model);
+
+        ensureTrusted(workingDir); // pre-accept folder trust so no dialog blocks the session
 
         const proc = pty.spawn(bin, args, {
             name: 'xterm-256color',
