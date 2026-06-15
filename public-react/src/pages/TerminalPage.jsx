@@ -42,6 +42,15 @@ function wsUrl() {
   return `${proto}//${window.location.host}${prefix}/term`
 }
 
+// Session status → dot colour: running green, stopped blue, exited red, else grey.
+function statusDot(status) {
+  const s = (status || '').toLowerCase()
+  if (s === 'running') return '#7ee787'
+  if (s === 'stopped') return '#6cb6ff'
+  if (s === 'exited' || s === 'error' || s === 'failed') return '#ff6b6b'
+  return '#6e7681'
+}
+
 export default function TerminalPage() {
   const { user, loading } = useAuth()
   const { models } = useModels()
@@ -77,6 +86,7 @@ export default function TerminalPage() {
   const [menuFor, setMenuFor] = useState(null)
   const [historyFor, setHistoryFor] = useState(null)
   const [shareFor, setShareFor] = useState(null)
+  const [forkFor, setForkFor] = useState(null) // session being forked (opens the fork dialog)
   // Connection request — bump .key to (re)spawn the terminal with these params.
   // sessionId = Claude session UUID passed to --resume; rowId = OliBot row id (for
   // sidebar highlight; null for brand-new sessions); cwd = the session's working dir
@@ -89,6 +99,7 @@ export default function TerminalPage() {
   const wsRef = useRef(null)
   const scrollRef = useRef(null)   // chat scroll container
   const draftRef = useRef(null)    // chat input textarea
+  const forkPromptRef = useRef(null) // prompt to auto-send once a fork session boots
   const viewRef = useRef(view)
   viewRef.current = view
   const connRef = useRef(connReq)
@@ -149,7 +160,19 @@ export default function TerminalPage() {
         else if (msg.type === 'attached') { setStatus('live'); if (msg.terminalId) assignedIdRef.current = msg.terminalId }
         // For an existing-row resume, keep highlight on the OliBot row id; for a
         // brand-new session the server-created row id IS the Claude uuid.
-        else if (msg.type === 'started') { setStatus('live'); assignedIdRef.current = msg.terminalId || msg.sessionId; if (!connRef.current.rowId) setActiveId(msg.sessionId); setTimeout(refreshSessions, 400) }
+        else if (msg.type === 'started') {
+          setStatus('live'); assignedIdRef.current = msg.terminalId || msg.sessionId; if (!connRef.current.rowId) setActiveId(msg.sessionId); setTimeout(refreshSessions, 400)
+          // Forked with an opening prompt → send it once the resumed session is ready.
+          if (forkPromptRef.current) {
+            const p = forkPromptRef.current; forkPromptRef.current = null
+            setTimeout(() => {
+              if (wsRef.current?.readyState === 1) {
+                wsRef.current.send(JSON.stringify({ type: 'input', data: p }))
+                setTimeout(() => { try { wsRef.current?.send(JSON.stringify({ type: 'input', data: '\r' })) } catch {} }, 80)
+              }
+            }, 5000)
+          }
+        }
         else if (msg.type === 'forked') { assignedIdRef.current = msg.terminalId || msg.sessionId; setActiveId(msg.sessionId); setTimeout(refreshSessions, 400) }
         else if (msg.type === 'exit') { setStatus('exited'); assignedIdRef.current = null; term.write(`\r\n\x1b[90m── exited (code ${msg.code}). ↻ to start new. ──\x1b[0m\r\n`); setTimeout(refreshSessions, 400) }
         else if (msg.type === 'error') { setStatus('error'); term.write(`\r\n\x1b[31m${msg.message}\x1b[0m\r\n`) }
@@ -284,9 +307,14 @@ export default function TerminalPage() {
     setTab('chat'); setActiveId(s?.id || sessionId)
     setConnReq(c => ({ key: c.key + 1, sessionId: s?.claude_session_id || sessionId, rowId: s?.id || null, resume: true, fork: false, cwd: s?.working_dir || null, name: null }))
   }
-  const forkSession = (s) => {
-    setMenuFor(null)
-    setConnReq(c => ({ key: c.key + 1, sessionId: s.claude_session_id || s.id, rowId: null, resume: true, fork: true, cwd: s.working_dir || null, name: null }))
+  // Fork a session with a chosen name and an optional opening prompt. The prompt
+  // is auto-sent to the forked PTY once it boots (see the 'started' handler), so
+  // the new session immediately answers the question you forked it to explore.
+  const doFork = (s, name, prompt) => {
+    setForkFor(null); setMenuFor(null)
+    forkPromptRef.current = (prompt || '').trim() || null
+    setActiveId(null); setTab('chat')
+    setConnReq(c => ({ key: c.key + 1, sessionId: s.claude_session_id || s.id, rowId: null, resume: true, fork: true, cwd: s.working_dir || null, name: (name || '').trim() || null }))
   }
   const restart = (nextModel) => {
     if (nextModel) setModel(nextModel)
@@ -384,6 +412,7 @@ export default function TerminalPage() {
                     onMouseEnter={(e) => { if (activeId !== s.id) e.currentTarget.style.backgroundColor = 'var(--c-surface)' }}
                     onMouseLeave={(e) => { if (activeId !== s.id) e.currentTarget.style.backgroundColor = 'transparent' }}>
                     <div className="flex items-center gap-1.5">
+                      <span title={s.status || 'unknown'} style={{ width: 7, height: 7, borderRadius: 99, backgroundColor: statusDot(s.status), flexShrink: 0 }} />
                       {s.bookmarked ? <Star size={11} fill="#f2cc60" style={{ color: '#f2cc60' }} /> : null}
                       <span className="truncate flex-1" style={{ color: 'var(--c-text)' }}>{s.name || s.task || s.id}</span>
                       <button onClick={(e) => { e.stopPropagation(); setMenuFor(menuFor === s.id ? null : s.id) }}
@@ -402,7 +431,7 @@ export default function TerminalPage() {
                       style={{ backgroundColor: 'var(--c-surface)', border: '1px solid var(--c-border)', minWidth: 150 }}
                       onMouseLeave={() => setMenuFor(null)}>
                       <MenuItem icon={<Play size={12} />} label="Open / Resume" onClick={() => openSession(s)} />
-                      <MenuItem icon={<GitFork size={12} />} label="Fork" onClick={() => forkSession(s)} />
+                      <MenuItem icon={<GitFork size={12} />} label="Fork" onClick={() => { setMenuFor(null); setForkFor(s) }} />
                       <MenuItem icon={<History size={12} />} label="History" onClick={() => { setMenuFor(null); setHistoryFor(s) }} />
                       <MenuItem icon={<Share2 size={12} />} label="Share" onClick={() => { setMenuFor(null); setShareFor(s) }} />
                       <MenuItem icon={<Pencil size={12} />} label="Rename" onClick={() => doRename(s)} />
@@ -511,6 +540,7 @@ export default function TerminalPage() {
 
       {historyFor && <HistoryModal session={historyFor} onClose={() => setHistoryFor(null)} />}
       {shareFor && <ShareSessionModal sessionId={shareFor.id} onClose={() => setShareFor(null)} />}
+      {forkFor && <ForkModal session={forkFor} onClose={() => setForkFor(null)} onConfirm={(name, prompt) => doFork(forkFor, name, prompt)} />}
     </div>
   )
 }
@@ -809,6 +839,49 @@ function MenuItem({ icon, label, onClick, danger }) {
       onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}>
       {icon} {label}
     </button>
+  )
+}
+
+// Fork dialog: name the fork and (optionally) give it an opening prompt that's
+// auto-sent once the forked session boots, so it starts by answering that.
+function ForkModal({ session, onClose, onConfirm }) {
+  const base = session.name || session.task || 'session'
+  const [name, setName] = useState(`Fork of ${base}`.slice(0, 60))
+  const [prompt, setPrompt] = useState('')
+  const submit = () => onConfirm(name, prompt)
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ backgroundColor: 'rgba(0,0,0,0.6)' }} onClick={onClose}>
+      <div className="w-full max-w-md rounded-lg flex flex-col" style={{ backgroundColor: 'var(--c-surface)', border: '1px solid var(--c-border)' }} onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-4 py-3" style={{ borderBottom: '1px solid var(--c-border)' }}>
+          <span className="font-bold text-sm flex items-center gap-1.5" style={{ color: 'var(--c-text)' }}><GitFork size={14} /> Fork session</span>
+          <button onClick={onClose} className="cursor-pointer" style={{ color: 'var(--c-text-muted)' }}><X size={16} /></button>
+        </div>
+        <div className="p-4 flex flex-col gap-3">
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium" style={{ color: 'var(--c-text-secondary)' }}>Fork name</span>
+            <input value={name} onChange={(e) => setName(e.target.value)} autoFocus
+              className="text-sm rounded-lg px-3 py-2 outline-none"
+              style={{ backgroundColor: 'var(--c-bg)', color: 'var(--c-text)', border: '1px solid var(--c-border)' }} />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium" style={{ color: 'var(--c-text-secondary)' }}>Opening prompt <span style={{ color: 'var(--c-text-muted)' }}>(sent to the fork)</span></span>
+            <textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} rows={4} placeholder="e.g. Try a different approach: refactor this with a state machine instead."
+              onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) submit() }}
+              className="text-sm rounded-lg px-3 py-2 outline-none resize-none"
+              style={{ backgroundColor: 'var(--c-bg)', color: 'var(--c-text)', border: '1px solid var(--c-border)', lineHeight: 1.5 }} />
+          </label>
+          <div className="text-[11px]" style={{ color: 'var(--c-text-muted)' }}>
+            The fork resumes this session's full context, then runs your prompt. Leave the prompt empty to fork without asking anything.
+          </div>
+        </div>
+        <div className="flex items-center justify-end gap-2 px-4 py-3" style={{ borderTop: '1px solid var(--c-border)' }}>
+          <button onClick={onClose} className="text-xs font-medium px-3 py-1.5 rounded-lg cursor-pointer" style={{ color: 'var(--c-text-secondary)', border: '1px solid var(--c-border)' }}>Cancel</button>
+          <button onClick={submit} className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg cursor-pointer text-white" style={{ backgroundColor: 'var(--c-accent)' }}>
+            <GitFork size={13} /> Create fork
+          </button>
+        </div>
+      </div>
+    </div>
   )
 }
 
