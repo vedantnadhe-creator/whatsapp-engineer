@@ -192,10 +192,18 @@ export function createExtractor({ cols = 80, rows = 24 } = {}) {
         const MSG_GLYPH = /^[●⏺⎿❯>]/; // committed user/assistant/tool lines — never the spinner
         const working = tail.some((l) => {
             const t = l.trim();
+            if (MSG_GLYPH.test(t)) return false;                                            // committed line, never the spinner
             if (/esc to interrupt/i.test(t)) return true;                                  // some builds
             if (/·\s*thinking\b/i.test(t)) return true;                                     // live "· thinking"
-            if (/…\s*\(\s*\d+\s*s\b/.test(t) && !MSG_GLYPH.test(t)) return true;            // spinner "Verb… (2s …"
-            if (/^\S[\s]+[A-Z][a-z]+…$/.test(t) && !MSG_GLYPH.test(t)) return true;         // bare "✽ Zesting…"
+            // A spinner-glyph line that carries a live marker (ellipsis, an elapsed
+            // "Ns" timer, or a "running … hook" note). Robust across every transient
+            // phase of a turn — including the post-answer Stop hook, whose status line
+            // looks like "✽ Zesting… (running stop hook · 21s · ↓ 595 tokens)" and was
+            // previously missed (text after the …, a non-digit after the "("), letting
+            // `working` drop false mid-turn and fire a premature "Done".
+            if (SPINNER_RE.test(l) && /(…|\b\d+\s*s\b|running .*hook)/.test(t)) return true;
+            if (/…\s*\(\s*\d+\s*s\b/.test(t)) return true;                                  // spinner "Verb… (2s …"
+            if (/^\S\s+[A-Z][a-z]+…$/.test(t)) return true;                                 // bare "✽ Zesting…"
             return false;
         });
         const transcript = stripLiveRegion(all);

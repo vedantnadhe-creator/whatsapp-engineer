@@ -209,7 +209,14 @@ export default function TerminalPage() {
       ws.onmessage = (ev) => {
         let msg; try { msg = JSON.parse(ev.data) } catch { return }
         if (msg.type === 'output') term.write(msg.data)
-        else if (msg.type === 'chat') { setMessages(Array.isArray(msg.messages) ? msg.messages : []); setWorking(!!msg.working) }
+        else if (msg.type === 'chat') {
+          setMessages(Array.isArray(msg.messages) ? msg.messages : []); setWorking(!!msg.working)
+          // The backend pulses `turnDone` exactly once when the whole turn ends
+          // (one continuous working span). Chime + float-to-top off that single
+          // pulse — never re-derive "done" from `working` here, or a turn with N
+          // tools would chime N times (the "buzzing 11 times" bug).
+          if (msg.turnDone) { setTimeout(() => refreshSessions(), 500); if (notifySoundRef.current) playDoneBeep() }
+        }
         else if (msg.type === 'pong') { /* keepalive */ }
         else if (msg.type === 'attached') { setStatus('live'); if (msg.terminalId) assignedIdRef.current = msg.terminalId }
         // For an existing-row resume, keep highlight on the OliBot row id; for a
@@ -263,17 +270,9 @@ export default function TerminalPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, connReq.key])
 
-  // When a turn finishes (working true→false), the backend bumps the session's
-  // updated_at — refresh the list so the just-active session jumps to the top.
-  const prevWorkingRef = useRef(false)
-  useEffect(() => {
-    if (prevWorkingRef.current && !working) {
-      setTimeout(() => refreshSessions(), 500)
-      if (notifySoundRef.current) playDoneBeep() // chime when the turn finishes
-    }
-    prevWorkingRef.current = working
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [working])
+  // Turn-finished side effects (chime + float-to-top) are driven by the backend's
+  // single `turnDone` pulse in the `chat` handler above — NOT re-derived from the
+  // `working` boolean here, which flickers across inter-tool spinner gaps.
 
   // Keep the chat pinned to the latest message when the user is near the bottom.
   useEffect(() => {

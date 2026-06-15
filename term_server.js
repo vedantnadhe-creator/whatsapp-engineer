@@ -57,7 +57,7 @@ const ensureTrusted = (dir) => {
 const BUFFER_CAP = 256 * 1024;       // scrollback replayed to a (re)attaching client
 const IDLE_KILL_MS = 30 * 60 * 1000; // kill a PTY with no viewers after 30 min
 const CHAT_DEBOUNCE_MS = 180;        // settle window before re-parsing the screen into chat
-const WORK_GRACE_MS = 2500;          // keep "working" latched across brief inter-tool spinner gaps
+const WORK_GRACE_MS = 4000;          // keep "working" latched across brief inter-tool / pre-stop-hook spinner gaps
 
 // Role-driven session persona (mirrors V1's claude_manager): designers run in the
 // designs repo (its own CLAUDE.md), developers use the default CLAUDE.md, testers
@@ -135,13 +135,23 @@ export function attachTerminalServer(store) {
             entry.graceTimer = setTimeout(() => { entry.graceTimer = null; broadcastChat(entry); }, WORK_GRACE_MS - sinceSpinner + 50);
         }
 
+        // Authoritative "turn done" — fires EXACTLY ONCE per turn, in the backend.
+        // A turn is one continuous `working` span (the grace window above stitches
+        // the brief inter-tool / pre-stop-hook spinner gaps into a single span). The
+        // single composite true→false edge is the turn end; we pulse `turnDone` on
+        // that one frame only. The client beeps on this pulse instead of re-deriving
+        // "done" from the `working` boolean — so the chime can't fire per-tool
+        // (the "buzzing 11 times" bug). `entry.wasWorking === true` guards the
+        // initial attach edge (undefined/false → false never pulses).
+        const turnDone = entry.wasWorking === true && working === false;
+
         // Reflect real activity in the session status: 'running' while working,
         // 'stopped' when done — also bumps updated_at so it floats to the top.
         if (store && entry.rowId && entry.wasWorking !== working) {
             try { store.updateSession(entry.rowId, { status: working ? 'running' : 'stopped' }); } catch (_) {}
         }
         entry.wasWorking = working;
-        const payload = JSON.stringify({ type: 'chat', messages: snapshot.messages, text: snapshot.text, working });
+        const payload = JSON.stringify({ type: 'chat', messages: snapshot.messages, text: snapshot.text, working, turnDone });
         for (const c of entry.clients) { if (c.readyState === 1) c.send(payload); }
     };
 
