@@ -28,9 +28,11 @@ import { WebSocketServer } from 'ws';
 import crypto from 'crypto';
 import config from './config.js';
 import { verifyJwt } from './auth.js';
+import { createExtractor } from './term_extract.js';
 
 const BUFFER_CAP = 256 * 1024;       // scrollback replayed to a (re)attaching client
 const IDLE_KILL_MS = 30 * 60 * 1000; // kill a PTY with no viewers after 30 min
+const CHAT_DEBOUNCE_MS = 180;        // settle window before re-parsing the screen into chat
 
 function parseCookies(header = '') {
     const out = {};
@@ -52,6 +54,23 @@ export function attachTerminalServer(store) {
         if (entry.buffer.length > BUFFER_CAP) entry.buffer = entry.buffer.slice(entry.buffer.length - BUFFER_CAP);
     };
 
+    // Re-parse the headless screen into a clean conversation and push it to viewers.
+    // Runs alongside the raw `output` stream — xterm clients ignore `chat`, chat
+    // clients ignore `output`, so neither view interferes with the other.
+    const broadcastChat = (entry) => {
+        if (!entry?.extractor) return;
+        let snapshot;
+        try { snapshot = entry.extractor.extract(); } catch (_) { return; }
+        const payload = JSON.stringify({ type: 'chat', messages: snapshot.messages, text: snapshot.text });
+        for (const c of entry.clients) { if (c.readyState === 1) c.send(payload); }
+    };
+
+    const scheduleChat = (entry) => {
+        if (!entry?.extractor) return;
+        if (entry.chatTimer) return; // a parse is already pending within the debounce window
+        entry.chatTimer = setTimeout(() => { entry.chatTimer = null; broadcastChat(entry); }, CHAT_DEBOUNCE_MS);
+    };
+
     const finalize = (entry) => {
         if (!entry || !store || !entry.rowId) return;
         try { store.updateSession(entry.rowId, { status: 'stopped' }); } catch (_) {}
@@ -66,6 +85,8 @@ export function attachTerminalServer(store) {
         // Keep the PTY alive with no viewers, but GC after a long idle window.
         if (entry.clients.size === 0 && !entry.idleTimer) {
             entry.idleTimer = setTimeout(() => {
+                if (entry.chatTimer) { clearTimeout(entry.chatTimer); entry.chatTimer = null; }
+                try { entry.extractor?.dispose(); } catch (_) {}
                 try { entry.proc?.kill(); } catch (_) {}
                 terminals.delete(entry.claudeId);
             }, IDLE_KILL_MS);
@@ -80,7 +101,15 @@ export function attachTerminalServer(store) {
         if (entry.idleTimer) { clearTimeout(entry.idleTimer); entry.idleTimer = null; }
         // Replay scrollback so the fresh xterm shows current state.
         if (entry.buffer && ws.readyState === 1) ws.send(JSON.stringify({ type: 'output', data: entry.buffer }));
-        if (cols && rows) { try { entry.proc?.resize(Math.max(20, cols | 0), Math.max(5, rows | 0)); } catch (_) {} }
+        if (cols && rows) {
+            try { entry.proc?.resize(Math.max(20, cols | 0), Math.max(5, rows | 0)); } catch (_) {}
+            try { entry.extractor?.resize(cols, rows); } catch (_) {}
+        }
+        // Hand the (re)attaching client the current clean conversation immediately.
+        try {
+            const snap = entry.extractor?.extract();
+            if (snap && ws.readyState === 1) ws.send(JSON.stringify({ type: 'chat', messages: snap.messages, text: snap.text }));
+        } catch (_) {}
     };
 
     const spawnTerminal = (user, { cols = 80, rows = 24, model, sessionId, resume, fork, name, cwd } = {}) => {
@@ -118,8 +147,11 @@ export function attachTerminalServer(store) {
             env: { ...process.env, TERM: 'xterm-256color' },
         });
 
+        // Headless emulator mirror — same bytes as the PTY, read back as clean text.
+        const extractor = createExtractor({ cols, rows });
+
         // For a non-fork session we know the key up-front; forks get keyed once detected.
-        const entry = { proc, claudeId: claudeId || `pending-${crypto.randomUUID()}`, rowId, cwd: workingDir, buffer: '', clients: new Set(), idleTimer: null, mode };
+        const entry = { proc, extractor, chatTimer: null, claudeId: claudeId || `pending-${crypto.randomUUID()}`, rowId, cwd: workingDir, buffer: '', clients: new Set(), idleTimer: null, mode };
         terminals.set(entry.claudeId, entry);
 
         // Register / refresh the DB row.
@@ -152,10 +184,15 @@ export function attachTerminalServer(store) {
 
         proc.on('data', (data) => {
             appendBuffer(entry, data);
+            try { entry.extractor?.feed(data); } catch (_) {}
             for (const c of entry.clients) { if (c.readyState === 1) c.send(JSON.stringify({ type: 'output', data })); }
+            scheduleChat(entry);
         });
         proc.on('exit', (code) => {
             const exitCode = typeof code === 'number' ? code : 0;
+            if (entry.chatTimer) { clearTimeout(entry.chatTimer); entry.chatTimer = null; }
+            try { broadcastChat(entry); } catch (_) {}      // final clean snapshot
+            try { entry.extractor?.dispose(); } catch (_) {}
             finalize(entry);
             for (const c of entry.clients) { if (c.readyState === 1) c.send(JSON.stringify({ type: 'exit', code: exitCode })); }
             terminals.delete(entry.claudeId);
@@ -209,6 +246,7 @@ export function attachTerminalServer(store) {
                     break;
                 case 'resize':
                     try { ws._term?.proc?.resize(Math.max(20, msg.cols | 0), Math.max(5, msg.rows | 0)); } catch (_) {}
+                    try { ws._term?.extractor?.resize(msg.cols, msg.rows); } catch (_) {}
                     break;
                 case 'ping':
                     try { ws.send(JSON.stringify({ type: 'pong' })); } catch (_) {}

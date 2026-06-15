@@ -9,6 +9,7 @@ import ShareSessionModal from '../components/ShareSessionModal'
 import {
   ArrowLeft, Circle, RotateCw, TerminalSquare, PanelLeftClose, PanelLeft,
   Plus, Search, X, MoreVertical, GitFork, History, Share2, Pencil, Trash2, Star, Play,
+  MessageSquare, SendHorizontal, Wrench, ChevronDown,
 } from 'lucide-react'
 
 // Interactive web terminal — /sessions/v2. Real human typing → subscription-billed.
@@ -40,6 +41,13 @@ export default function TerminalPage() {
   const [status, setStatus] = useState('idle') // idle | connecting | live | exited | error
   const [model, setModel] = useState('claude-opus-4-8')
   const [showSidebar, setShowSidebar] = useState(true)
+  // View mode — 'chat' renders the server-extracted conversation (subscription
+  // billed, no raw TUI); 'terminal' is the raw xterm. The xterm instance stays
+  // mounted-but-hidden in chat mode so toggling back shows full live state.
+  const [view, setView] = useState('chat') // chat | terminal
+  const [messages, setMessages] = useState([]) // [{role, content, tool}] from `chat` frames
+  const [draft, setDraft] = useState('')
+  const [atBottom, setAtBottom] = useState(true)
   const [activeId, setActiveId] = useState(null)
   const [menuFor, setMenuFor] = useState(null)
   const [historyFor, setHistoryFor] = useState(null)
@@ -54,6 +62,10 @@ export default function TerminalPage() {
   const termRef = useRef(null)
   const fitRef = useRef(null)
   const wsRef = useRef(null)
+  const scrollRef = useRef(null)   // chat scroll container
+  const draftRef = useRef(null)    // chat input textarea
+  const viewRef = useRef(view)
+  viewRef.current = view
   const connRef = useRef(connReq)
   connRef.current = connReq
   const modelRef = useRef(model)
@@ -83,6 +95,7 @@ export default function TerminalPage() {
     // Fresh connection request → forget any previous PTY id so the first open
     // sends start; later reconnects within this same session re-attach.
     assignedIdRef.current = null
+    setMessages([]) // clear chat for the newly-requested session
 
     const connect = () => {
       if (disposed) return
@@ -106,6 +119,7 @@ export default function TerminalPage() {
       ws.onmessage = (ev) => {
         let msg; try { msg = JSON.parse(ev.data) } catch { return }
         if (msg.type === 'output') term.write(msg.data)
+        else if (msg.type === 'chat') setMessages(Array.isArray(msg.messages) ? msg.messages : [])
         else if (msg.type === 'pong') { /* keepalive */ }
         else if (msg.type === 'attached') { setStatus('live'); if (msg.terminalId) assignedIdRef.current = msg.terminalId }
         // For an existing-row resume, keep highlight on the OliBot row id; for a
@@ -146,6 +160,46 @@ export default function TerminalPage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, connReq.key])
+
+  // Keep the chat pinned to the latest message when the user is near the bottom.
+  useEffect(() => {
+    if (view !== 'chat') return
+    const el = scrollRef.current
+    if (!el) return
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 160
+    if (nearBottom) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+  }, [messages, view])
+
+  // xterm needs a refit when it becomes visible again (it can't size while hidden).
+  useEffect(() => {
+    if (view === 'terminal') {
+      const id = setTimeout(() => {
+        try { fitRef.current?.fit(); termRef.current?.focus() } catch {}
+        if (wsRef.current?.readyState === 1 && termRef.current) {
+          wsRef.current.send(JSON.stringify({ type: 'resize', cols: termRef.current.cols, rows: termRef.current.rows }))
+        }
+      }, 50)
+      return () => clearTimeout(id)
+    } else {
+      const id = setTimeout(() => { try { draftRef.current?.focus() } catch {} }, 50)
+      return () => clearTimeout(id)
+    }
+  }, [view])
+
+  // Send a chat-mode message straight to the PTY stdin: the text, then Enter.
+  // The PTY echoes it back through the headless emulator, so it reappears as a
+  // parsed `user` bubble — same path a human typing in the terminal would take.
+  const sendChat = () => {
+    const text = draft.replace(/\s+$/, '')
+    if (!text || wsRef.current?.readyState !== 1) return
+    wsRef.current.send(JSON.stringify({ type: 'input', data: text }))
+    // Small gap so the TUI commits the (bracket-pasted) input before the submit.
+    setTimeout(() => { try { wsRef.current?.send(JSON.stringify({ type: 'input', data: '\r' })) } catch {} }, 40)
+    setDraft('')
+  }
+  const onDraftKey = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat() }
+  }
 
   const startNew = () => {
     const name = window.prompt('Name this session (optional):', '')
@@ -207,6 +261,11 @@ export default function TerminalPage() {
           Terminal <span className="text-[10px] font-mono px-1.5 py-0.5 rounded" style={{ backgroundColor: 'var(--c-surface-3)', color: 'var(--c-text-muted)' }}>v2</span>
         </div>
         <div className="ml-auto flex items-center gap-3">
+          {/* View toggle — Chat (extracted conversation) vs raw Terminal */}
+          <div className="flex items-center p-0.5 rounded-md" style={{ backgroundColor: 'var(--c-surface-2)', border: '1px solid var(--c-border)' }} role="tablist" aria-label="View mode">
+            <ViewTab active={view === 'chat'} onClick={() => setView('chat')} icon={<MessageSquare size={12} />} label="Chat" />
+            <ViewTab active={view === 'terminal'} onClick={() => setView('terminal')} icon={<TerminalSquare size={12} />} label="Terminal" />
+          </div>
           <select value={model} onChange={(e) => restart(e.target.value)}
             className="text-xs rounded px-2 py-1.5 cursor-pointer outline-none"
             style={{ backgroundColor: 'var(--c-surface)', color: 'var(--c-text)', border: '1px solid var(--c-border)' }} title="Model — applies on restart">
@@ -282,10 +341,12 @@ export default function TerminalPage() {
           </div>
         )}
 
-        {/* Terminal host */}
+        {/* Workspace — xterm host and the chat panel are stacked; the xterm stays
+            sized at all times (so FitAddon can measure) and is just hidden under
+            the chat panel in chat view. */}
         <div className="flex-1 min-w-0 min-h-0 relative" style={{ backgroundColor: XTERM_THEME.background }}>
           {connReq.key === 0 && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-sm" style={{ color: 'var(--c-text-muted)' }}>
+            <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 text-sm" style={{ color: 'var(--c-text-muted)', backgroundColor: 'var(--c-bg)' }}>
               <TerminalSquare size={28} style={{ color: 'var(--c-text-muted)' }} />
               <div>Pick a session on the left, or</div>
               <button onClick={startNew} className="flex items-center gap-1.5 text-xs font-medium text-white rounded px-3 py-1.5 cursor-pointer" style={{ backgroundColor: 'var(--c-accent)' }}>
@@ -293,12 +354,130 @@ export default function TerminalPage() {
               </button>
             </div>
           )}
-          <div ref={hostRef} style={{ height: '100%', width: '100%', padding: '8px 10px', display: connReq.key === 0 ? 'none' : 'block' }} />
+
+          {/* Raw terminal — always mounted; faded out (not unmounted) in chat view. */}
+          <div ref={hostRef} aria-hidden={view !== 'terminal'}
+            style={{
+              position: 'absolute', inset: 0, padding: '8px 10px',
+              opacity: view === 'terminal' ? 1 : 0,
+              pointerEvents: view === 'terminal' ? 'auto' : 'none',
+              transition: 'opacity 140ms ease-out',
+            }} />
+
+          {/* Chat — server-extracted conversation. */}
+          {view === 'chat' && connReq.key !== 0 && (
+            <div className="absolute inset-0 z-10 flex flex-col chat-fade" style={{ backgroundColor: 'var(--c-bg)' }}>
+              <div ref={scrollRef} className="flex-1 overflow-y-auto" style={{ scrollbarWidth: 'thin' }}
+                onScroll={(e) => { const el = e.currentTarget; setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 160) }}>
+                <div className="mx-auto w-full px-5 py-6 flex flex-col gap-5" style={{ maxWidth: 760 }}>
+                  {messages.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center gap-2 text-center py-20" style={{ color: 'var(--c-text-muted)' }}>
+                      <MessageSquare size={26} />
+                      <div className="text-sm">{status === 'live' ? 'Listening for the conversation…' : 'Connecting to the session…'}</div>
+                      <div className="text-xs" style={{ color: 'var(--c-text-muted)' }}>Messages are read live from the running Claude session.</div>
+                    </div>
+                  ) : messages.map((m, i) => <ChatMessage key={i} role={m.role} content={m.content} tool={m.tool} />)}
+                </div>
+              </div>
+              {!atBottom && messages.length > 0 && (
+                <button onClick={() => scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })}
+                  className="absolute left-1/2 -translate-x-1/2 flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full shadow-lg cursor-pointer"
+                  style={{ bottom: 96, backgroundColor: 'var(--c-surface-3)', color: 'var(--c-text)', border: '1px solid var(--c-border)' }}>
+                  <ChevronDown size={13} /> Latest
+                </button>
+              )}
+              <ChatComposer
+                draft={draft} setDraft={setDraft} onKeyDown={onDraftKey} onSend={sendChat}
+                disabled={status !== 'live'} inputRef={draftRef} status={status}
+              />
+            </div>
+          )}
         </div>
       </div>
 
       {historyFor && <HistoryModal session={historyFor} onClose={() => setHistoryFor(null)} />}
       {shareFor && <ShareSessionModal sessionId={shareFor.id} onClose={() => setShareFor(null)} />}
+    </div>
+  )
+}
+
+function ViewTab({ active, onClick, icon, label }) {
+  return (
+    <button onClick={onClick} role="tab" aria-selected={active}
+      className="flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded cursor-pointer transition-colors"
+      style={{
+        backgroundColor: active ? 'var(--c-surface-3)' : 'transparent',
+        color: active ? 'var(--c-text)' : 'var(--c-text-secondary)',
+      }}>
+      {icon} {label}
+    </button>
+  )
+}
+
+// One conversation turn. Roles are visually distinct without being identical
+// cards: user is an accent-tinted bubble on the right, assistant is open prose
+// on the left, tool output is a quiet monospace block.
+function ChatMessage({ role, content, tool }) {
+  if (role === 'user') {
+    return (
+      <div className="flex justify-end">
+        <div className="px-4 py-2.5 rounded-2xl rounded-br-md text-sm whitespace-pre-wrap break-words"
+          style={{ maxWidth: '85%', backgroundColor: 'rgba(59,130,246,0.16)', color: 'var(--c-text)', border: '1px solid rgba(59,130,246,0.30)', lineHeight: 1.55 }}>
+          {content}
+        </div>
+      </div>
+    )
+  }
+  if (tool) {
+    return (
+      <div className="rounded-lg overflow-hidden" style={{ backgroundColor: 'var(--c-surface)', border: '1px solid var(--c-border)' }}>
+        <div className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-medium" style={{ color: 'var(--c-text-secondary)', borderBottom: '1px solid var(--c-border)' }}>
+          <Wrench size={11} /> tool
+        </div>
+        <pre className="px-3 py-2 text-xs overflow-x-auto whitespace-pre-wrap break-words" style={{ color: 'var(--c-text-secondary)', maxHeight: 280, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', margin: 0 }}>
+          {content}
+        </pre>
+      </div>
+    )
+  }
+  // assistant
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex items-center gap-1.5 text-[11px] font-medium" style={{ color: 'var(--c-text-secondary)' }}>
+        <span style={{ width: 6, height: 6, borderRadius: 99, backgroundColor: 'var(--c-accent)', display: 'inline-block' }} />
+        Claude
+      </div>
+      <div className="text-sm whitespace-pre-wrap break-words" style={{ color: 'var(--c-text)', lineHeight: 1.6 }}>
+        {content}
+      </div>
+    </div>
+  )
+}
+
+function ChatComposer({ draft, setDraft, onKeyDown, onSend, disabled, inputRef, status }) {
+  return (
+    <div className="shrink-0 px-5 py-3" style={{ borderTop: '1px solid var(--c-border)', backgroundColor: 'var(--c-bg)' }}>
+      <div className="mx-auto w-full" style={{ maxWidth: 760 }}>
+        <div className="flex items-end gap-2 rounded-xl px-3 py-2" style={{ backgroundColor: 'var(--c-surface)', border: '1px solid var(--c-border)' }}>
+          <textarea
+            ref={inputRef} value={draft} rows={1} onKeyDown={onKeyDown}
+            onChange={(e) => { setDraft(e.target.value); const t = e.target; t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 160) + 'px' }}
+            placeholder={disabled ? 'Session not live — switch to a running session to chat' : 'Message Claude…  (Enter to send, Shift+Enter for newline)'}
+            disabled={disabled}
+            className="flex-1 bg-transparent outline-none resize-none text-sm py-1"
+            style={{ color: 'var(--c-text)', maxHeight: 160, lineHeight: 1.5 }}
+          />
+          <button onClick={onSend} disabled={disabled || !draft.trim()} title="Send (Enter)"
+            className="flex items-center justify-center rounded-lg cursor-pointer shrink-0 transition-opacity"
+            style={{ width: 34, height: 34, backgroundColor: 'var(--c-accent)', color: '#fff', opacity: disabled || !draft.trim() ? 0.4 : 1 }}>
+            <SendHorizontal size={16} />
+          </button>
+        </div>
+        <div className="mt-1.5 text-[11px] flex items-center gap-1.5" style={{ color: 'var(--c-text-muted)' }}>
+          <Circle size={7} fill={status === 'live' ? '#7ee787' : '#6e7681'} style={{ color: status === 'live' ? '#7ee787' : '#6e7681' }} />
+          {status === 'live' ? 'Connected to the live session · billed to subscription' : 'Reconnecting…'}
+        </div>
+      </div>
     </div>
   )
 }

@@ -65,6 +65,18 @@ html, body, #root {
   background: var(--c-selection);
 }
 
+/* V2 chat view: gentle fade-in when switching from the terminal. */
+.chat-fade {
+  animation: chatFade 160ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+@keyframes chatFade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-fade { animation: none; }
+}
+
 ::-webkit-scrollbar {
   width: 6px;
 }
