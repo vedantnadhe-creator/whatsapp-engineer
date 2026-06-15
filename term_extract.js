@@ -180,13 +180,26 @@ export function createExtractor({ cols = 80, rows = 24 } = {}) {
 
     const extract = () => {
         const all = readLines();
+        // Detect whether Claude is mid-turn (drives the live "thinking" box). While
+        // working, the live region shows a spinner line — a gerund + ellipsis like
+        // "✽ Zesting…" / "Baking… (2s · ↓ 36 tokens · thinking)" — plus a live token
+        // counter. When done it collapses to "✻ Cooked for 3s" (past tense, no "…").
+        const working = all.some((l) => {
+            const t = l.trim();
+            if (/esc to interrupt/i.test(t)) return true;                       // some builds
+            if (/·\s*thinking\b/i.test(t)) return true;                          // "· thinking"
+            if (/[↑↓]\s*[\d.,]+\s*tokens?/i.test(t)) return true;                // live token counter
+            if (/…\s*\(\s*\d+\s*s\b/.test(t)) return true;                       // "Verb… (2s …"
+            if (/^\S[\s]+[A-Z][a-z]+…$/.test(t)) return true;                    // bare "✽ Zesting…"
+            return false;
+        });
         const transcript = stripLiveRegion(all);
         // Clean plaintext fallback: drop banner / rule / hint noise too.
         const text = transcript
             .filter((l) => !isHrule(l) && !isNoise(l))
             .join('\n').replace(/\n{3,}/g, '\n\n').replace(/^\n+|\n+$/g, '');
         const messages = parse(transcript);
-        return { messages, text };
+        return { messages, text, working };
     };
 
     return { feed, resize, dispose, extract, readLines };

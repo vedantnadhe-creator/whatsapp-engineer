@@ -85,7 +85,7 @@ export function attachTerminalServer(store) {
         if (!entry?.extractor) return;
         let snapshot;
         try { snapshot = entry.extractor.extract(); } catch (_) { return; }
-        const payload = JSON.stringify({ type: 'chat', messages: snapshot.messages, text: snapshot.text });
+        const payload = JSON.stringify({ type: 'chat', messages: snapshot.messages, text: snapshot.text, working: snapshot.working });
         for (const c of entry.clients) { if (c.readyState === 1) c.send(payload); }
     };
 
@@ -132,7 +132,7 @@ export function attachTerminalServer(store) {
         // Hand the (re)attaching client the current clean conversation immediately.
         try {
             const snap = entry.extractor?.extract();
-            if (snap && ws.readyState === 1) ws.send(JSON.stringify({ type: 'chat', messages: snap.messages, text: snap.text }));
+            if (snap && ws.readyState === 1) ws.send(JSON.stringify({ type: 'chat', messages: snap.messages, text: snap.text, working: snap.working }));
         } catch (_) {}
     };
 

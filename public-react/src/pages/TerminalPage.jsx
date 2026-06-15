@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { useAuth } from '../context/AuthContext'
 import {
   useModels, useSessions, renameSession, deleteSession, toggleBookmark, getTranscript,
@@ -17,6 +19,7 @@ import {
   ArrowLeft, Circle, RotateCw, TerminalSquare, PanelLeftClose, PanelLeft,
   Plus, Search, X, MoreVertical, GitFork, History, Share2, Pencil, Trash2, Star, Play,
   MessageSquare, SendHorizontal, Wrench, ChevronDown, LayoutGrid, Sparkles, DollarSign,
+  ChevronRight, Loader2,
 } from 'lucide-react'
 
 // Interactive web terminal — /sessions/v2. Real human typing → subscription-billed.
@@ -64,6 +67,7 @@ export default function TerminalPage() {
   // mounted-but-hidden in chat mode so toggling back shows full live state.
   const [view, setView] = useState('chat') // chat | terminal
   const [messages, setMessages] = useState([]) // [{role, content, tool}] from `chat` frames
+  const [working, setWorking] = useState(false) // Claude is mid-turn (live thinking box)
   const [draft, setDraft] = useState('')
   const [atBottom, setAtBottom] = useState(true)
   const [activeId, setActiveId] = useState(null)
@@ -113,7 +117,7 @@ export default function TerminalPage() {
     // Fresh connection request → forget any previous PTY id so the first open
     // sends start; later reconnects within this same session re-attach.
     assignedIdRef.current = null
-    setMessages([]) // clear chat for the newly-requested session
+    setMessages([]); setWorking(false) // clear chat for the newly-requested session
 
     const connect = () => {
       if (disposed) return
@@ -137,7 +141,7 @@ export default function TerminalPage() {
       ws.onmessage = (ev) => {
         let msg; try { msg = JSON.parse(ev.data) } catch { return }
         if (msg.type === 'output') term.write(msg.data)
-        else if (msg.type === 'chat') setMessages(Array.isArray(msg.messages) ? msg.messages : [])
+        else if (msg.type === 'chat') { setMessages(Array.isArray(msg.messages) ? msg.messages : []); setWorking(!!msg.working) }
         else if (msg.type === 'pong') { /* keepalive */ }
         else if (msg.type === 'attached') { setStatus('live'); if (msg.terminalId) assignedIdRef.current = msg.terminalId }
         // For an existing-row resume, keep highlight on the OliBot row id; for a
@@ -401,14 +405,16 @@ export default function TerminalPage() {
             <div className="absolute inset-0 z-10 flex flex-col chat-fade" style={{ backgroundColor: 'var(--c-bg)' }}>
               <div ref={scrollRef} className="flex-1 overflow-y-auto" style={{ scrollbarWidth: 'thin' }}
                 onScroll={(e) => { const el = e.currentTarget; setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 160) }}>
-                <div className="mx-auto w-full px-5 py-6 flex flex-col gap-5" style={{ maxWidth: 760 }}>
+                <div className="mx-auto w-full px-5 py-6 flex flex-col gap-6" style={{ maxWidth: 760 }}>
                   {messages.length === 0 ? (
                     <div className="flex flex-col items-center justify-center gap-2 text-center py-20" style={{ color: 'var(--c-text-muted)' }}>
                       <MessageSquare size={26} />
                       <div className="text-sm">{status === 'live' ? 'Listening for the conversation…' : 'Connecting to the session…'}</div>
                       <div className="text-xs" style={{ color: 'var(--c-text-muted)' }}>Messages are read live from the running Claude session.</div>
                     </div>
-                  ) : messages.map((m, i) => <ChatMessage key={i} role={m.role} content={m.content} tool={m.tool} />)}
+                  ) : groupTurns(messages).map((turn, i, arr) => (
+                    <ChatTurn key={i} turn={turn} active={i === arr.length - 1 && working} />
+                  ))}
                 </div>
               </div>
               {!atBottom && messages.length > 0 && (
@@ -520,42 +526,126 @@ function ViewTab({ active, onClick, icon, label }) {
   )
 }
 
-// One conversation turn. Roles are visually distinct without being identical
-// cards: user is an accent-tinted bubble on the right, assistant is open prose
-// on the left, tool output is a quiet monospace block.
-function ChatMessage({ role, content, tool }) {
-  if (role === 'user') {
-    return (
-      <div className="flex justify-end">
-        <div className="px-4 py-2.5 rounded-2xl rounded-br-md text-sm whitespace-pre-wrap break-words"
-          style={{ maxWidth: '85%', backgroundColor: 'rgba(59,130,246,0.16)', color: 'var(--c-text)', border: '1px solid rgba(59,130,246,0.30)', lineHeight: 1.55 }}>
-          {content}
-        </div>
-      </div>
-    )
+// Group the flat extracted message list into conversation turns: a user message
+// and everything Claude does in response (intermediate text + tool calls + the
+// final answer). One turn renders as one assistant block, mirroring V1.
+function groupTurns(messages) {
+  const turns = []
+  let cur = null
+  for (const m of messages) {
+    if (m.role === 'user') { cur = { user: m, steps: [] }; turns.push(cur) }
+    else { if (!cur) { cur = { user: null, steps: [] }; turns.push(cur) }; cur.steps.push(m) }
   }
-  if (tool) {
-    return (
-      <div className="rounded-lg overflow-hidden" style={{ backgroundColor: 'var(--c-surface)', border: '1px solid var(--c-border)' }}>
-        <div className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-medium" style={{ color: 'var(--c-text-secondary)', borderBottom: '1px solid var(--c-border)' }}>
-          <Wrench size={11} /> tool
-        </div>
-        <pre className="px-3 py-2 text-xs overflow-x-auto whitespace-pre-wrap break-words" style={{ color: 'var(--c-text-secondary)', maxHeight: 280, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', margin: 0 }}>
-          {content}
-        </pre>
-      </div>
-    )
-  }
-  // assistant
+  return turns
+}
+
+// Markdown renderer tuned for the dark chat surface. Compact, readable, fenced
+// code in a monospace block, GFM tables/lists.
+const MD = {
+  p: ({ children }) => <p className="my-2 first:mt-0 last:mb-0" style={{ lineHeight: 1.65 }}>{children}</p>,
+  h1: ({ children }) => <h1 className="text-lg font-bold mt-4 mb-2" style={{ color: 'var(--c-text)' }}>{children}</h1>,
+  h2: ({ children }) => <h2 className="text-base font-bold mt-4 mb-2" style={{ color: 'var(--c-text)' }}>{children}</h2>,
+  h3: ({ children }) => <h3 className="text-sm font-bold mt-3 mb-1.5" style={{ color: 'var(--c-text)' }}>{children}</h3>,
+  ul: ({ children }) => <ul className="my-2 pl-5" style={{ listStyle: 'disc' }}>{children}</ul>,
+  ol: ({ children }) => <ol className="my-2 pl-5" style={{ listStyle: 'decimal' }}>{children}</ol>,
+  li: ({ children }) => <li className="my-0.5" style={{ lineHeight: 1.6 }}>{children}</li>,
+  a: ({ children, href }) => <a href={href} target="_blank" rel="noreferrer" style={{ color: 'var(--c-accent)', textDecoration: 'underline' }}>{children}</a>,
+  strong: ({ children }) => <strong style={{ color: 'var(--c-text)', fontWeight: 700 }}>{children}</strong>,
+  blockquote: ({ children }) => <blockquote className="my-2 pl-3" style={{ borderLeft: '2px solid var(--c-border)', color: 'var(--c-text-secondary)' }}>{children}</blockquote>,
+  hr: () => <hr className="my-3" style={{ border: 0, borderTop: '1px solid var(--c-border)' }} />,
+  table: ({ children }) => <div className="my-2 overflow-x-auto"><table className="text-xs" style={{ borderCollapse: 'collapse' }}>{children}</table></div>,
+  th: ({ children }) => <th className="px-2 py-1 text-left font-semibold" style={{ border: '1px solid var(--c-border)', backgroundColor: 'var(--c-surface-2)' }}>{children}</th>,
+  td: ({ children }) => <td className="px-2 py-1" style={{ border: '1px solid var(--c-border)' }}>{children}</td>,
+  code: ({ inline, children }) => inline
+    ? <code className="px-1 py-0.5 rounded text-[0.85em]" style={{ backgroundColor: 'var(--c-surface-2)', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>{children}</code>
+    : <pre className="my-2 p-3 rounded-lg overflow-x-auto text-xs" style={{ backgroundColor: 'var(--c-surface-2)', border: '1px solid var(--c-border)' }}><code style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', lineHeight: 1.5 }}>{children}</code></pre>,
+}
+function Markdown({ children }) {
+  return <div className="text-sm" style={{ color: 'var(--c-text)' }}><ReactMarkdown remarkPlugins={[remarkGfm]} components={MD}>{children || ''}</ReactMarkdown></div>
+}
+
+// A tool invocation + its output, shown as a quiet monospace block.
+function ToolBlock({ content }) {
   return (
-    <div className="flex flex-col gap-1.5">
-      <div className="flex items-center gap-1.5 text-[11px] font-medium" style={{ color: 'var(--c-text-secondary)' }}>
-        <span style={{ width: 6, height: 6, borderRadius: 99, backgroundColor: 'var(--c-accent)', display: 'inline-block' }} />
-        Claude
+    <div className="rounded-lg overflow-hidden" style={{ backgroundColor: 'var(--c-surface)', border: '1px solid var(--c-border)' }}>
+      <div className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-medium" style={{ color: 'var(--c-text-secondary)', borderBottom: '1px solid var(--c-border)' }}>
+        <Wrench size={11} /> {(content.split('\n')[0] || 'tool').slice(0, 80)}
       </div>
-      <div className="text-sm whitespace-pre-wrap break-words" style={{ color: 'var(--c-text)', lineHeight: 1.6 }}>
-        {content}
-      </div>
+      <pre className="px-3 py-2 text-xs overflow-x-auto whitespace-pre-wrap break-words" style={{ color: 'var(--c-text-secondary)', maxHeight: 240, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', margin: 0 }}>
+        {content.split('\n').slice(1).join('\n') || content}
+      </pre>
+    </div>
+  )
+}
+
+// Collapsible "working" box holding the intermediate steps of a turn. Live while
+// the turn is still running (active); a quiet, collapsed summary once finished.
+function ThinkingBox({ steps, active }) {
+  const [open, setOpen] = useState(false)
+  if (!steps.length && !active) return null
+  const toolCount = steps.filter(s => s.tool).length
+  const label = active ? 'Working…' : `Worked on it${toolCount ? ` · ${toolCount} tool${toolCount > 1 ? 's' : ''}` : ''}`
+  return (
+    <div className="rounded-lg" style={{ backgroundColor: 'var(--c-surface)', border: '1px solid var(--c-border)' }}>
+      <button onClick={() => setOpen(o => !o)} className="flex items-center gap-2 w-full px-3 py-2 cursor-pointer text-left text-xs font-medium"
+        style={{ color: 'var(--c-text-secondary)' }}>
+        {active ? <Loader2 size={13} className="animate-spin" style={{ color: 'var(--c-accent)' }} />
+                : (open ? <ChevronDown size={13} /> : <ChevronRight size={13} />)}
+        <span style={{ color: active ? 'var(--c-accent)' : 'var(--c-text-secondary)' }}>{label}</span>
+        {!active && <span className="ml-auto" style={{ color: 'var(--c-text-muted)' }}>{open ? 'hide' : 'show'}</span>}
+      </button>
+      {(open || active) && steps.length > 0 && (
+        <div className="px-3 pb-3 pt-0 flex flex-col gap-2">
+          {steps.map((s, i) => s.tool
+            ? <ToolBlock key={i} content={s.content} />
+            : <div key={i} className="text-xs" style={{ color: 'var(--c-text-secondary)', lineHeight: 1.55 }}><Markdown>{s.content}</Markdown></div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// One full turn: the user bubble, a thinking box for intermediate work, and the
+// final answer in markdown. While `active`, all steps stay in the live box and
+// no answer is split out yet.
+function ChatTurn({ turn, active }) {
+  const steps = turn.steps
+  let thinkingSteps = steps, answer = null
+  if (!active) {
+    // The last plain-assistant block is the final answer; the rest is "thinking".
+    for (let i = steps.length - 1; i >= 0; i--) {
+      if (steps[i].role === 'assistant' && !steps[i].tool) { answer = steps[i]; thinkingSteps = steps.slice(0, i); break }
+    }
+  }
+  return (
+    <div className="flex flex-col gap-3">
+      {turn.user && (
+        <div className="flex justify-end">
+          <div className="px-4 py-2.5 rounded-2xl rounded-br-md text-sm whitespace-pre-wrap break-words"
+            style={{ maxWidth: '85%', backgroundColor: 'rgba(59,130,246,0.16)', color: 'var(--c-text)', border: '1px solid rgba(59,130,246,0.30)', lineHeight: 1.55 }}>
+            {turn.user.content}
+          </div>
+        </div>
+      )}
+      {(thinkingSteps.length > 0 || active) && (
+        <div className="flex flex-col gap-1.5">
+          <div className="flex items-center gap-1.5 text-[11px] font-medium" style={{ color: 'var(--c-text-secondary)' }}>
+            <span style={{ width: 6, height: 6, borderRadius: 99, backgroundColor: 'var(--c-accent)', display: 'inline-block' }} /> Claude
+          </div>
+          <ThinkingBox steps={thinkingSteps} active={active} />
+        </div>
+      )}
+      {answer && (
+        <div className="flex flex-col gap-1.5">
+          {thinkingSteps.length === 0 && (
+            <div className="flex items-center gap-1.5 text-[11px] font-medium" style={{ color: 'var(--c-text-secondary)' }}>
+              <span style={{ width: 6, height: 6, borderRadius: 99, backgroundColor: 'var(--c-accent)', display: 'inline-block' }} /> Claude
+            </div>
+          )}
+          <Markdown>{answer.content}</Markdown>
+        </div>
+      )}
     </div>
   )
 }
