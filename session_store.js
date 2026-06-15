@@ -314,9 +314,13 @@ class SessionStore {
             if (text && text.trim()) msgs.push({ role: o.message?.role || o.type, content: text, ts: o.timestamp || null });
         }
 
-        // Only persist when the session row exists (messages.session_id is a FK).
-        // History/search still get the parsed messages via the return value.
-        if (this.getSession(rowId)) {
+        // ONLY persist for terminal sessions — their JSONL is the source of truth.
+        // Agent / --print sessions are already populated live by claude_manager with
+        // richer formatting; NEVER delete+overwrite those (it clobbers v1 chat
+        // history). For non-terminal sessions we just return the parsed messages so
+        // the history view can display them without touching the stored rows.
+        const row = this.getSession(rowId);
+        if (row && row.source === 'terminal') {
             const tx = this.db.transaction(() => {
                 this.db.prepare('DELETE FROM messages WHERE session_id = ?').run(rowId);
                 const ins = this.db.prepare('INSERT INTO messages (session_id, role, content, timestamp) VALUES (?, ?, ?, ?)');
