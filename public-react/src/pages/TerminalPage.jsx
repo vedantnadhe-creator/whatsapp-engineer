@@ -10,17 +10,21 @@ import {
   useCostStats, useAgents, useSprints, useIssues, useTeamMembers,
   runAgent, getSprintChangelog, requestIssueSummary, getIssueLastResponse, generateSprintChangelog,
   uploadFile,
+  useUsers, usePhones, useCron, useAccessRequests,
+  getClaudePrompt, saveClaudePrompt, getLearnings, saveLearnings, getAdminSettings, saveAdminSetting,
 } from '../hooks/useApi'
 import Login from './Login'
 import ShareSessionModal from '../components/ShareSessionModal'
 import CostView from '../components/CostView'
 import AgentsView from '../components/AgentsView'
 import SprintBoard from '../components/SprintBoard'
+import { AdminModal, UsersPanel, PhonesPanel, PromptsPanel, LearningsPanel, CronPanel, AccessRequestsPanel, SettingsPanel } from '../components/AdminPanels'
 import {
   ArrowLeft, Circle, RotateCw, TerminalSquare, PanelLeftClose, PanelLeft,
   Plus, Search, X, MoreVertical, GitFork, History, Share2, Pencil, Trash2, Star, Play,
   MessageSquare, SendHorizontal, Wrench, ChevronDown, LayoutGrid, Sparkles, DollarSign,
   ChevronRight, Loader2, Paperclip, CheckCircle2,
+  Settings, Users, Phone, FileText, BookOpen, Clock, User as UserIcon,
 } from 'lucide-react'
 
 // Interactive web terminal — /sessions/v2. Real human typing → subscription-billed.
@@ -66,6 +70,16 @@ export default function TerminalPage() {
   const { issues, refresh: refreshIssues, createIssue, updateIssue, deleteIssue } = useIssues()
   const { sprints, createSprint, updateSprint, deleteSprint } = useSprints()
   const { members } = useTeamMembers()
+  // Admin / settings data (mirrors V1's dashboard wiring).
+  const { users, refresh: refreshUsers, addUser, deleteUser, resetPassword, updateUser } = useUsers()
+  const { phones, refresh: refreshPhones, addPhone, removePhone } = usePhones()
+  const { jobs, refresh: refreshCron, saveJob, deleteJob } = useCron()
+  const { requests, refresh: refreshRequests, resolve } = useAccessRequests()
+  const [adminPanel, setAdminPanel] = useState(null) // users|phones|prompts|learnings|cron|requests|settings
+  const [claudePrompt, setClaudePrompt] = useState(''); const [promptLoading, setPromptLoading] = useState(false)
+  const [learningsContent, setLearningsContent] = useState(''); const [learningsLoading, setLearningsLoading] = useState(false)
+  const [adminSettings, setAdminSettings] = useState({})
+  const [sessionFilter, setSessionFilter] = useState('all') // all | mine | saved
   // Work mode follows role, matching V1 (designer → design, tester → tester, else dev).
   const workMode = user?.role === 'designer' ? 'design' : (user?.role === 'tester' ? 'tester' : 'developer')
 
@@ -87,6 +101,7 @@ export default function TerminalPage() {
   const [historyFor, setHistoryFor] = useState(null)
   const [shareFor, setShareFor] = useState(null)
   const [forkFor, setForkFor] = useState(null) // session being forked (opens the fork dialog)
+  const [creatingName, setCreatingName] = useState(null) // string while naming a new session inline
   // Connection request — bump .key to (re)spawn the terminal with these params.
   // sessionId = Claude session UUID passed to --resume; rowId = OliBot row id (for
   // sidebar highlight; null for brand-new sessions); cwd = the session's working dir
@@ -288,12 +303,24 @@ export default function TerminalPage() {
     return a.filter((_, idx) => idx !== i)
   })
 
-  const startNew = () => {
-    const name = window.prompt('Name this session (optional):', '')
-    if (name === null) return // cancelled
+  // New session: reveal an inline name field (no separate dialog). Enter creates.
+  const beginNewSession = () => setCreatingName('')
+  const confirmNewSession = () => {
+    const name = (creatingName || '').trim()
+    setCreatingName(null)
     setActiveId(null)
-    setConnReq(c => ({ key: c.key + 1, sessionId: null, rowId: null, resume: false, fork: false, cwd: null, name: name.trim() || null }))
+    setConnReq(c => ({ key: c.key + 1, sessionId: null, rowId: null, resume: false, fork: false, cwd: null, name: name || null }))
   }
+
+  // Admin: open a panel, lazy-loading its data first where needed.
+  const showAdmin = async (key) => {
+    if (key === 'prompts') { setPromptLoading(true); try { const r = await getClaudePrompt(); setClaudePrompt(r?.prompt || r?.content || '') } catch (_) {} setPromptLoading(false) }
+    if (key === 'learnings') { setLearningsLoading(true); try { const r = await getLearnings(); setLearningsContent(r?.content || '') } catch (_) {} setLearningsLoading(false) }
+    if (key === 'settings') { try { const r = await getAdminSettings(); setAdminSettings(r || {}) } catch (_) {} }
+    setAdminPanel(key)
+  }
+  const handleSavePrompt = async (text) => { setPromptLoading(true); try { await saveClaudePrompt(text); setClaudePrompt(text) } catch (_) {} setPromptLoading(false) }
+  const handleSaveLearnings = async (text) => { setLearningsLoading(true); try { await saveLearnings(text); setLearningsContent(text) } catch (_) {} setLearningsLoading(false) }
   // Resume uses the mapped Claude session UUID (claude_session_id), NOT the OliBot
   // row id, and runs in the session's own working dir so Claude finds the transcript.
   const openSession = (s) => {
@@ -339,12 +366,13 @@ export default function TerminalPage() {
   if (loading) return <div className="h-screen flex items-center justify-center bg-bg text-text-secondary font-mono text-sm">Loading…</div>
   if (!user) return <Login />
 
+  const activeSession = (sessions || []).find(s => s.id === activeId) || null
   const statusColor = status === 'live' ? '#7ee787' : status === 'connecting' ? '#f2cc60' : status === 'idle' ? '#6e7681' : '#ff6b6b'
   const statusLabel = status === 'live' ? 'Live · subscription' : status === 'connecting' ? 'Connecting…' : status === 'idle' ? 'No session' : status === 'exited' ? 'Exited' : 'Error'
 
   return (
     <div className="flex" style={{ height: '100dvh', backgroundColor: 'var(--c-bg)' }}>
-      <NavRail tab={tab} setTab={setTab} />
+      <NavRail tab={tab} setTab={setTab} isAdmin={user.isAdmin} onShowAdmin={showAdmin} pendingRequests={(requests || []).length} />
       <div className="flex flex-col flex-1 min-w-0">
       {/* Chat workspace stays mounted across tab switches so the live xterm + WS
           survive; it's just hidden when another feature tab is active. */}
@@ -360,10 +388,21 @@ export default function TerminalPage() {
           style={{ color: 'var(--c-text-secondary)', border: '1px solid var(--c-border)' }} title={showSidebar ? 'Hide sessions' : 'Show sessions'}>
           {showSidebar ? <PanelLeftClose size={14} /> : <PanelLeft size={14} />}
         </button>
-        <div className="flex items-center gap-2 font-bold" style={{ color: 'var(--c-text)' }}>
+        <div className="flex items-center gap-2 font-bold shrink-0" style={{ color: 'var(--c-text)' }}>
           <TerminalSquare size={16} style={{ color: 'var(--c-accent)' }} />
           Terminal <span className="text-[10px] font-mono px-1.5 py-0.5 rounded" style={{ backgroundColor: 'var(--c-surface-3)', color: 'var(--c-text-muted)' }}>v2</span>
         </div>
+        {activeSession && (
+          <div className="flex items-center gap-2 min-w-0 pl-2" style={{ borderLeft: '1px solid var(--c-border)' }}>
+            <span title={activeSession.status || ''} style={{ width: 7, height: 7, borderRadius: 99, backgroundColor: statusDot(activeSession.status), flexShrink: 0 }} />
+            <span className="truncate text-sm font-medium" style={{ color: 'var(--c-text)', maxWidth: 260 }}>{activeSession.name || activeSession.task || activeSession.id}</span>
+            {(activeSession.owner_name || activeSession.owner_email) && (
+              <span className="flex items-center gap-1 text-xs shrink-0 px-1.5 py-0.5 rounded" style={{ color: 'var(--c-text-secondary)', backgroundColor: 'var(--c-surface-2)' }} title={activeSession.owner_name || activeSession.owner_email}>
+                <UserIcon size={11} /> {activeSession.owner_name || activeSession.owner_email}
+              </span>
+            )}
+          </div>
+        )}
         <div className="ml-auto flex items-center gap-3">
           {/* View toggle — Chat (extracted conversation) vs raw Terminal */}
           <div className="flex items-center p-0.5 rounded-md" style={{ backgroundColor: 'var(--c-surface-2)', border: '1px solid var(--c-border)' }} role="tablist" aria-label="View mode">
@@ -390,10 +429,21 @@ export default function TerminalPage() {
         {showSidebar && (
           <div className="w-72 shrink-0 flex flex-col" style={{ borderRight: '1px solid var(--c-border)', backgroundColor: 'var(--c-bg)' }}>
             <div className="p-2 flex gap-2" style={{ borderBottom: '1px solid var(--c-border)' }}>
-              <button onClick={startNew} className="flex items-center justify-center gap-1.5 flex-1 text-xs font-medium text-white rounded px-2 py-1.5 cursor-pointer"
-                style={{ backgroundColor: 'var(--c-accent)' }}>
-                <Plus size={13} /> New session
-              </button>
+              {creatingName === null ? (
+                <button onClick={beginNewSession} className="flex items-center justify-center gap-1.5 flex-1 text-xs font-medium text-white rounded px-2 py-1.5 cursor-pointer"
+                  style={{ backgroundColor: 'var(--c-accent)' }}>
+                  <Plus size={13} /> New session
+                </button>
+              ) : (
+                <div className="flex items-center gap-1.5 flex-1 rounded px-2 py-1" style={{ backgroundColor: 'var(--c-surface)', border: '1px solid var(--c-accent)' }}>
+                  <input autoFocus value={creatingName} onChange={(e) => setCreatingName(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') confirmNewSession(); if (e.key === 'Escape') setCreatingName(null) }}
+                    onBlur={() => setCreatingName(null)}
+                    placeholder="Name this session, then Enter"
+                    className="flex-1 bg-transparent outline-none text-xs" style={{ color: 'var(--c-text)' }} />
+                  <button onMouseDown={(e) => { e.preventDefault(); confirmNewSession() }} title="Create" className="cursor-pointer" style={{ color: 'var(--c-accent)' }}><Plus size={14} /></button>
+                </div>
+              )}
             </div>
             <div className="px-2 py-2" style={{ borderBottom: '1px solid var(--c-border)' }}>
               <div className="relative flex items-center" style={{ backgroundColor: 'var(--c-surface)', border: '1px solid var(--c-border)', borderRadius: 6 }}>
@@ -403,8 +453,22 @@ export default function TerminalPage() {
                 {search && <button onClick={() => setSearch('')} className="mr-1 p-1 rounded cursor-pointer" style={{ color: 'var(--c-text-muted)' }}><X size={12} /></button>}
               </div>
             </div>
+            {/* Filters: All / Mine / Saved */}
+            <div className="px-2 py-1.5 flex gap-1" style={{ borderBottom: '1px solid var(--c-border)' }}>
+              {[
+                { key: 'all', label: `All (${(sessions || []).length})` },
+                { key: 'mine', label: `Mine (${(sessions || []).filter(s => s.is_mine).length})` },
+                { key: 'saved', label: `Saved (${(sessions || []).filter(s => s.bookmarked).length})` },
+              ].map(({ key, label }) => (
+                <button key={key} onClick={() => setSessionFilter(key)}
+                  className="flex-1 text-[11px] font-medium rounded px-1.5 py-1 cursor-pointer transition-colors"
+                  style={{ backgroundColor: sessionFilter === key ? 'var(--c-surface-2)' : 'transparent', color: sessionFilter === key ? 'var(--c-text)' : 'var(--c-text-secondary)' }}>
+                  {label}
+                </button>
+              ))}
+            </div>
             <div className="flex-1 overflow-y-auto">
-              {(sessions || []).map(s => (
+              {(sessionFilter === 'mine' ? (sessions || []).filter(s => s.is_mine) : sessionFilter === 'saved' ? (sessions || []).filter(s => s.bookmarked) : (sessions || [])).map(s => (
                 <div key={s.id} className="relative group" style={{ borderBottom: '1px solid var(--c-border)' }}>
                   <div onClick={() => openSession(s)}
                     className="px-3 py-2 text-xs cursor-pointer transition-colors"
@@ -421,7 +485,11 @@ export default function TerminalPage() {
                       </button>
                     </div>
                     <div className="flex items-center gap-1.5 mt-0.5 font-mono text-[10px]" style={{ color: 'var(--c-text-muted)' }}>
-                      {s.source === 'terminal' ? <span style={{ color: 'var(--c-accent)' }}>terminal</span> : <span>agent</span>}
+                      {(s.owner_name || s.owner_email) && (
+                        <span className="flex items-center gap-0.5 truncate max-w-[90px]" style={{ color: 'var(--c-text-secondary)' }} title={s.owner_name || s.owner_email}>
+                          <UserIcon size={9} /> {s.owner_name || s.owner_email}
+                        </span>
+                      )}
                       <span>· {s.status || '—'}</span>
                       {s.model && <span>· {s.model.replace('claude-', '')}</span>}
                     </div>
@@ -441,7 +509,11 @@ export default function TerminalPage() {
                   )}
                 </div>
               ))}
-              {!sessions?.length && <div className="px-3 py-4 text-xs text-center" style={{ color: 'var(--c-text-muted)' }}>No sessions.</div>}
+              {!(sessionFilter === 'mine' ? (sessions || []).filter(s => s.is_mine) : sessionFilter === 'saved' ? (sessions || []).filter(s => s.bookmarked) : (sessions || [])).length && (
+                <div className="px-3 py-4 text-xs text-center" style={{ color: 'var(--c-text-muted)' }}>
+                  {sessionFilter === 'mine' ? 'No sessions by you yet' : sessionFilter === 'saved' ? 'No saved sessions yet' : 'No sessions.'}
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -454,7 +526,7 @@ export default function TerminalPage() {
             <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 text-sm" style={{ color: 'var(--c-text-muted)', backgroundColor: 'var(--c-bg)' }}>
               <TerminalSquare size={28} style={{ color: 'var(--c-text-muted)' }} />
               <div>Pick a session on the left, or</div>
-              <button onClick={startNew} className="flex items-center gap-1.5 text-xs font-medium text-white rounded px-3 py-1.5 cursor-pointer" style={{ backgroundColor: 'var(--c-accent)' }}>
+              <button onClick={() => { setShowSidebar(true); beginNewSession() }} className="flex items-center gap-1.5 text-xs font-medium text-white rounded px-3 py-1.5 cursor-pointer" style={{ backgroundColor: 'var(--c-accent)' }}>
                 <Plus size={13} /> New session
               </button>
             </div>
@@ -541,18 +613,65 @@ export default function TerminalPage() {
       {historyFor && <HistoryModal session={historyFor} onClose={() => setHistoryFor(null)} />}
       {shareFor && <ShareSessionModal sessionId={shareFor.id} onClose={() => setShareFor(null)} />}
       {forkFor && <ForkModal session={forkFor} onClose={() => setForkFor(null)} onConfirm={(name, prompt) => doFork(forkFor, name, prompt)} />}
+
+      {/* Admin & settings panels (reused from V1's dashboard) */}
+      {adminPanel === 'users' && (
+        <AdminModal isOpen onClose={() => setAdminPanel(null)} title="Team Members">
+          <UsersPanel users={users} onAdd={async (data) => { await addUser(data); refreshUsers() }} onDelete={async (id) => { await deleteUser(id); refreshUsers() }} onResetPassword={async (id) => { await resetPassword(id) }} onUpdateUser={async (id, changes) => { await updateUser(id, changes) }} />
+        </AdminModal>
+      )}
+      {adminPanel === 'phones' && (
+        <AdminModal isOpen onClose={() => setAdminPanel(null)} title="Allowed Phones">
+          <PhonesPanel phones={phones} onAdd={async (phone, label) => { await addPhone(phone, label); refreshPhones() }} onRemove={async (phone) => { await removePhone(phone); refreshPhones() }} />
+        </AdminModal>
+      )}
+      {adminPanel === 'prompts' && (
+        <AdminModal isOpen onClose={() => setAdminPanel(null)} title="System Prompt (CLAUDE.md)">
+          <PromptsPanel prompt={claudePrompt} onSave={handleSavePrompt} loading={promptLoading} />
+        </AdminModal>
+      )}
+      {adminPanel === 'learnings' && (
+        <AdminModal isOpen onClose={() => setAdminPanel(null)} title="Learnings (Self-Improving Knowledge)">
+          <LearningsPanel content={learningsContent} onSave={handleSaveLearnings} loading={learningsLoading} />
+        </AdminModal>
+      )}
+      {adminPanel === 'cron' && (
+        <AdminModal isOpen onClose={() => setAdminPanel(null)} title="Cron Jobs">
+          <CronPanel jobs={jobs} onSave={async (job) => { await saveJob(job); refreshCron() }} onDelete={async (id) => { await deleteJob(id); refreshCron() }} />
+        </AdminModal>
+      )}
+      {adminPanel === 'requests' && (
+        <AdminModal isOpen onClose={() => setAdminPanel(null)} title="Access Requests">
+          <AccessRequestsPanel requests={requests} onResolve={async (id, approve) => { await resolve(id, approve); refreshRequests() }} />
+        </AdminModal>
+      )}
+      {adminPanel === 'settings' && (
+        <AdminModal isOpen onClose={() => setAdminPanel(null)} title="Settings">
+          <SettingsPanel settings={adminSettings} onSave={async (key, value) => { await saveAdminSetting(key, value); setAdminSettings(prev => ({ ...prev, [key]: value })); if (key === 'show_all_sessions') refreshSessions() }} />
+        </AdminModal>
+      )}
     </div>
   )
 }
 
 // Slim icon rail switching the top-level workspace tab. Chat is the terminal /
 // conversation; the rest mount V1's feature views (reused unchanged).
-function NavRail({ tab, setTab }) {
+function NavRail({ tab, setTab, isAdmin, onShowAdmin, pendingRequests = 0 }) {
+  const [adminOpen, setAdminOpen] = useState(false)
   const items = [
     { key: 'chat', icon: MessageSquare, label: 'Chat' },
     { key: 'sprint', icon: LayoutGrid, label: 'Sprints' },
     { key: 'agents', icon: Sparkles, label: 'Agents' },
     { key: 'cost', icon: DollarSign, label: 'Cost' },
+  ]
+  const adminItems = [
+    { key: 'users', label: 'Users', icon: Users },
+    { key: 'phones', label: 'Phones', icon: Phone },
+    { key: 'prompts', label: 'Prompts', icon: FileText },
+    { key: 'learnings', label: 'Learnings', icon: BookOpen },
+    { key: 'cron', label: 'Cron', icon: Clock },
+    { key: 'requests', label: 'Requests', icon: MessageSquare, badge: pendingRequests },
+    { key: 'settings', label: 'Settings', icon: Settings },
   ]
   const dashHref = window.location.pathname.startsWith('/sessions') ? '/sessions/' : '/'
   return (
@@ -573,8 +692,36 @@ function NavRail({ tab, setTab }) {
           </button>
         )
       })}
+      {isAdmin && (
+        <div className="mt-auto relative">
+          <button onClick={() => setAdminOpen(o => !o)} title="Admin & settings" aria-label="Admin"
+            className="relative flex items-center justify-center rounded-lg cursor-pointer transition-colors"
+            style={{ width: 44, height: 44, color: adminOpen ? 'var(--c-accent)' : 'var(--c-text-secondary)', backgroundColor: adminOpen ? 'color-mix(in srgb, var(--c-accent) 14%, transparent)' : 'transparent' }}
+            onMouseEnter={(e) => { if (!adminOpen) e.currentTarget.style.backgroundColor = 'var(--c-surface-2)' }}
+            onMouseLeave={(e) => { if (!adminOpen) e.currentTarget.style.backgroundColor = 'transparent' }}>
+            <Settings size={17} />
+            {pendingRequests > 0 && <span style={{ position: 'absolute', top: 6, right: 6, width: 7, height: 7, borderRadius: 99, backgroundColor: '#ff6b6b' }} />}
+          </button>
+          {adminOpen && (
+            <>
+              <div className="fixed inset-0 z-40" onClick={() => setAdminOpen(false)} />
+              <div className="absolute bottom-0 left-full ml-1 z-50 rounded-lg shadow-lg py-1" style={{ backgroundColor: 'var(--c-surface)', border: '1px solid var(--c-border)', minWidth: 160 }}>
+                {adminItems.map(({ key, label, icon: Icon, badge }) => (
+                  <button key={key} onClick={() => { setAdminOpen(false); onShowAdmin(key) }}
+                    className="flex items-center gap-2 w-full px-3 py-1.5 text-sm cursor-pointer text-left" style={{ color: 'var(--c-text)' }}
+                    onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'var(--c-surface-2)')}
+                    onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}>
+                    <Icon size={14} style={{ color: 'var(--c-text-secondary)' }} /> {label}
+                    {badge > 0 && <span className="ml-auto text-[10px] px-1.5 rounded-full text-white" style={{ backgroundColor: '#ff6b6b' }}>{badge}</span>}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      )}
       <a href={dashHref} title="Back to dashboard" aria-label="Back to dashboard"
-        className="mt-auto flex items-center justify-center rounded-lg cursor-pointer transition-colors"
+        className={`${isAdmin ? '' : 'mt-auto'} flex items-center justify-center rounded-lg cursor-pointer transition-colors`}
         style={{ width: 44, height: 44, color: 'var(--c-text-muted)' }}
         onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = 'var(--c-surface-2)'; e.currentTarget.style.color = 'var(--c-text)' }}
         onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; e.currentTarget.style.color = 'var(--c-text-muted)' }}>
