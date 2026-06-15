@@ -195,13 +195,16 @@ export function createExtractor({ cols = 80, rows = 24 } = {}) {
             if (MSG_GLYPH.test(t)) return false;                                            // committed line, never the spinner
             if (/esc to interrupt/i.test(t)) return true;                                  // some builds
             if (/·\s*thinking\b/i.test(t)) return true;                                     // live "· thinking"
-            // A spinner-glyph line that carries a live marker (ellipsis, an elapsed
-            // "Ns" timer, or a "running … hook" note). Robust across every transient
-            // phase of a turn — including the post-answer Stop hook, whose status line
-            // looks like "✽ Zesting… (running stop hook · 21s · ↓ 595 tokens)" and was
-            // previously missed (text after the …, a non-digit after the "("), letting
-            // `working` drop false mid-turn and fire a premature "Done".
-            if (SPINNER_RE.test(l) && /(…|\b\d+\s*s\b|running .*hook)/.test(t)) return true;
+            // A spinner-glyph line that carries a LIVE-action marker: an ellipsis
+            // ("Zesting…", "Working…") or a "running … hook" note. This catches the
+            // post-answer Stop hook — "✽ Zesting… (running stop hook · 21s · ↓ 595
+            // tokens)" — which the parenthetical/$-anchored rules below miss.
+            // CRITICAL: do NOT key on a bare elapsed "Ns" timer here. When a turn
+            // FINISHES, Claude leaves a past-tense idle line "✻ Crunched for 2s"
+            // (spinner glyph + "2s", but NO ellipsis, NO "esc to interrupt") — keying
+            // on "Ns" matched that done-line and latched `working` true forever, so the
+            // session status never flipped to 'stopped' (the "stuck in running" bug).
+            if (SPINNER_RE.test(l) && /(…|running\s+.*\bhook\b)/.test(t)) return true;
             if (/…\s*\(\s*\d+\s*s\b/.test(t)) return true;                                  // spinner "Verb… (2s …"
             if (/^\S\s+[A-Z][a-z]+…$/.test(t)) return true;                                 // bare "✽ Zesting…"
             return false;
