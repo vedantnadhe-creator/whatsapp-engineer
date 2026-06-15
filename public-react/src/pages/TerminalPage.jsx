@@ -4,6 +4,8 @@ import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
+import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { useAuth } from '../context/AuthContext'
 import {
   useModels, useSessions, renameSession, deleteSession, toggleBookmark, getTranscript,
@@ -917,33 +919,58 @@ function parseUserContent(content) {
   return { text, images: [...new Set(images)] }
 }
 
-// Markdown renderer tuned for the dark chat surface. Compact, readable, fenced
-// code in a monospace block, GFM tables/lists.
-const MD = {
-  p: ({ children }) => <p className="my-2 first:mt-0 last:mb-0" style={{ lineHeight: 1.65 }}>{children}</p>,
-  h1: ({ children }) => <h1 className="text-lg font-bold mt-4 mb-2" style={{ color: 'var(--c-text)' }}>{children}</h1>,
-  h2: ({ children }) => <h2 className="text-base font-bold mt-4 mb-2" style={{ color: 'var(--c-text)' }}>{children}</h2>,
-  h3: ({ children }) => <h3 className="text-sm font-bold mt-3 mb-1.5" style={{ color: 'var(--c-text)' }}>{children}</h3>,
-  ul: ({ children }) => <ul className="my-2 pl-5" style={{ listStyle: 'disc' }}>{children}</ul>,
-  ol: ({ children }) => <ol className="my-2 pl-5" style={{ listStyle: 'decimal' }}>{children}</ol>,
-  li: ({ children }) => <li className="my-0.5" style={{ lineHeight: 1.6 }}>{children}</li>,
-  a: ({ children, href }) => <a href={href} target="_blank" rel="noreferrer" style={{ color: 'var(--c-accent)', textDecoration: 'underline' }}>{children}</a>,
-  strong: ({ children }) => <strong style={{ color: 'var(--c-text)', fontWeight: 700 }}>{children}</strong>,
-  blockquote: ({ children }) => <blockquote className="my-2 pl-3" style={{ borderLeft: '2px solid var(--c-border)', color: 'var(--c-text-secondary)' }}>{children}</blockquote>,
-  hr: () => <hr className="my-3" style={{ border: 0, borderTop: '1px solid var(--c-border)' }} />,
-  table: ({ children }) => (
-    <div className="my-3 overflow-x-auto rounded-lg" style={{ border: '1px solid var(--c-border)' }}>
-      <table className="w-full text-xs" style={{ borderCollapse: 'collapse' }}>{children}</table>
+// Markdown renderer — ported verbatim from V1 (components/Workspace.jsx) so the
+// V2 chat renders identically to the original Dashboard: react-markdown +
+// remark-gfm, with react-syntax-highlighter (Prism / oneDark) for fenced code.
+const colors = {
+  bg: 'var(--c-bg)', surface: 'var(--c-surface)', surface2: 'var(--c-surface-2)',
+  surface3: 'var(--c-surface-3)', border: 'var(--c-border)', text: 'var(--c-text)',
+  textSecondary: 'var(--c-text-secondary)', accent: 'var(--c-accent)',
+}
+
+function CodeBlock({ language, children }) {
+  const [copied, setCopied] = useState(false)
+  const code = String(children).replace(/\n$/, '')
+  const handleCopy = () => { navigator.clipboard.writeText(code); setCopied(true); setTimeout(() => setCopied(false), 2000) }
+  return (
+    <div className="relative my-2 rounded-lg overflow-hidden" style={{ border: `1px solid ${colors.border}` }}>
+      <div className="flex items-center justify-between px-3 py-1.5" style={{ backgroundColor: colors.surface3 }}>
+        <span className="font-mono text-[10px] uppercase" style={{ color: colors.textSecondary }}>{language || 'code'}</span>
+        <button onClick={handleCopy} className="p-1 rounded hover:opacity-80 cursor-pointer" title="Copy code">
+          {copied ? <Check size={12} style={{ color: 'var(--c-status-running)' }} /> : <Copy size={12} style={{ color: colors.textSecondary }} />}
+        </button>
+      </div>
+      <SyntaxHighlighter language={language || 'text'} style={oneDark}
+        customStyle={{ margin: 0, padding: '12px', fontSize: '13px', background: colors.surface, borderRadius: 0 }} wrapLongLines>
+        {code}
+      </SyntaxHighlighter>
     </div>
-  ),
-  th: ({ children }) => <th className="px-3 py-2 text-left font-semibold whitespace-nowrap" style={{ borderBottom: '1px solid var(--c-border)', backgroundColor: 'var(--c-surface-2)', color: 'var(--c-text)' }}>{children}</th>,
-  td: ({ children }) => <td className="px-3 py-2 align-top" style={{ borderTop: '1px solid var(--c-border)' }}>{children}</td>,
-  code: ({ inline, children }) => inline
-    ? <code className="px-1 py-0.5 rounded text-[0.85em]" style={{ backgroundColor: 'var(--c-surface-2)', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>{children}</code>
-    : <pre className="my-2 p-3 rounded-lg overflow-x-auto text-xs" style={{ backgroundColor: 'var(--c-surface-2)', border: '1px solid var(--c-border)' }}><code style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', lineHeight: 1.5 }}>{children}</code></pre>,
+  )
+}
+
+const markdownComponents = {
+  code({ inline, className, children, ...props }) {
+    const match = /language-(\w+)/.exec(className || '')
+    if (!inline && (match || String(children).includes('\n'))) return <CodeBlock language={match?.[1]}>{children}</CodeBlock>
+    return <code className="px-1.5 py-0.5 rounded font-mono text-sm" style={{ backgroundColor: colors.surface3 }} {...props}>{children}</code>
+  },
+  p({ children }) { return <p className="mb-2 last:mb-0">{children}</p> },
+  ul({ children }) { return <ul className="list-disc pl-5 mb-2 space-y-1">{children}</ul> },
+  ol({ children }) { return <ol className="list-decimal pl-5 mb-2 space-y-1">{children}</ol> },
+  li({ children }) { return <li>{children}</li> },
+  h1({ children }) { return <h1 className="text-lg font-bold mb-2 mt-3 font-mono">{children}</h1> },
+  h2({ children }) { return <h2 className="text-base font-bold mb-2 mt-3 font-mono">{children}</h2> },
+  h3({ children }) { return <h3 className="text-sm font-bold mb-1 mt-2 font-mono">{children}</h3> },
+  blockquote({ children }) { return <blockquote className="pl-3 my-2 italic" style={{ borderLeft: `2px solid ${colors.accent}`, color: colors.textSecondary }}>{children}</blockquote> },
+  a({ href, children }) { return <a href={href} target="_blank" rel="noopener noreferrer" className="underline" style={{ color: colors.accent }}>{children}</a> },
+  table({ children }) { return <div className="overflow-x-auto my-2"><table className="w-full text-sm" style={{ borderCollapse: 'collapse' }}>{children}</table></div> },
+  th({ children }) { return <th className="text-left px-3 py-1.5 font-medium font-mono text-xs" style={{ borderBottom: `1px solid ${colors.border}`, color: colors.textSecondary }}>{children}</th> },
+  td({ children }) { return <td className="px-3 py-1.5 text-sm" style={{ borderBottom: `1px solid ${colors.border}` }}>{children}</td> },
+  hr() { return <hr className="my-3" style={{ borderColor: colors.border }} /> },
+  strong({ children }) { return <strong className="font-semibold">{children}</strong> },
 }
 function Markdown({ children }) {
-  return <div className="text-sm" style={{ color: 'var(--c-text)' }}><ReactMarkdown remarkPlugins={[remarkGfm]} components={MD}>{children || ''}</ReactMarkdown></div>
+  return <div className="text-sm" style={{ color: 'var(--c-text)' }}><ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{children || ''}</ReactMarkdown></div>
 }
 
 // A tool invocation + its output, shown as a quiet monospace block.
