@@ -138,6 +138,7 @@ export default function TerminalPage() {
   const workMode = user?.role === 'designer' ? 'design' : (user?.role === 'tester' ? 'tester' : 'developer')
 
   const [status, setStatus] = useState('idle') // idle | connecting | live | exited | error
+  const [viewOnly, setViewOnly] = useState(false) // read-only transcript view (no live PTY); show Resume to go live
   const [model, setModel] = useState('claude-opus-4-8')
   const isMobile = useIsMobile()
   const [showSidebar, setShowSidebar] = useState(typeof window !== 'undefined' ? window.innerWidth >= 768 : true)
@@ -207,6 +208,7 @@ export default function TerminalPage() {
     // sends start; later reconnects within this same session re-attach.
     assignedIdRef.current = null
     setMessages([]); setWorking(false) // clear chat for the newly-requested session
+    setViewOnly(!!connRef.current.view) // optimistic until the server confirms live/attached
 
     const connect = () => {
       if (disposed) return
@@ -220,11 +222,16 @@ export default function TerminalPage() {
           ws.send(JSON.stringify({ type: 'attach', terminalId: assignedIdRef.current, cols: term.cols, rows: term.rows }))
         } else {
           const c = connRef.current
-          ws.send(JSON.stringify({
-            type: 'start', cols: term.cols, rows: term.rows, model: modelRef.current,
-            sessionId: c.sessionId || undefined, resume: !!c.resume, fork: !!c.fork,
-            cwd: c.cwd || undefined, name: c.name || undefined,
-          }))
+          if (c.view) {
+            // Read-only open: attach if live, else server returns the transcript.
+            ws.send(JSON.stringify({ type: 'view', terminalId: c.sessionId, cwd: c.cwd || undefined, cols: term.cols, rows: term.rows }))
+          } else {
+            ws.send(JSON.stringify({
+              type: 'start', cols: term.cols, rows: term.rows, model: modelRef.current,
+              sessionId: c.sessionId || undefined, resume: !!c.resume, fork: !!c.fork,
+              cwd: c.cwd || undefined, name: c.name || undefined,
+            }))
+          }
         }
       }
       ws.onmessage = (ev) => {
@@ -232,6 +239,7 @@ export default function TerminalPage() {
         if (msg.type === 'output') term.write(msg.data)
         else if (msg.type === 'chat') {
           setMessages(Array.isArray(msg.messages) ? msg.messages : []); setWorking(!!msg.working)
+          if (msg.viewOnly) setStatus('idle') // read-only transcript: no live PTY behind it
           // The backend pulses `turnDone` exactly once when the whole turn ends
           // (one continuous working span). Chime + float-to-top off that single
           // pulse — never re-derive "done" from `working` here, or a turn with N
@@ -243,11 +251,11 @@ export default function TerminalPage() {
           noticeTimerRef.current = setTimeout(() => setNotice(null), 7000)
         }
         else if (msg.type === 'pong') { /* keepalive */ }
-        else if (msg.type === 'attached') { setStatus('live'); if (msg.terminalId) assignedIdRef.current = msg.terminalId }
+        else if (msg.type === 'attached') { setStatus('live'); setViewOnly(false); if (msg.terminalId) assignedIdRef.current = msg.terminalId }
         // For an existing-row resume, keep highlight on the OliBot row id; for a
         // brand-new session the server-created row id IS the Claude uuid.
         else if (msg.type === 'started') {
-          setStatus('live'); assignedIdRef.current = msg.terminalId || msg.sessionId; if (!connRef.current.rowId) setActiveId(msg.sessionId); setTimeout(refreshSessions, 400)
+          setStatus('live'); setViewOnly(false); assignedIdRef.current = msg.terminalId || msg.sessionId; if (!connRef.current.rowId) setActiveId(msg.sessionId); setTimeout(refreshSessions, 400)
           // Forked with an opening prompt → send it once the resumed session is ready.
           if (forkPromptRef.current) {
             const p = forkPromptRef.current; forkPromptRef.current = null
@@ -405,12 +413,21 @@ export default function TerminalPage() {
     if (isMobile) setShowSidebar(false) // collapse the drawer after picking on mobile
     setConnReq(c => ({ key: c.key + 1, sessionId: s.claude_session_id || s.id, rowId: s.id, resume: true, fork: false, cwd: s.working_dir || null, name: null }))
   }
-  // Feature views (sprint/agents) hand back a session id to open in the terminal.
+  // Feature views (sprint/agents) hand back a session id to OPEN — not resume. We
+  // attach if a live PTY is still up, else just show the saved transcript (no
+  // Claude spawn). The user clicks Resume in the composer to actually continue it.
   const goToSession = (sessionId) => {
     if (!sessionId) return
     const s = (sessions || []).find(x => x.id === sessionId || x.claude_session_id === sessionId)
     setTab('chat'); setActiveId(s?.id || sessionId)
-    setConnReq(c => ({ key: c.key + 1, sessionId: s?.claude_session_id || sessionId, rowId: s?.id || null, resume: true, fork: false, cwd: s?.working_dir || null, name: null }))
+    setConnReq(c => ({ key: c.key + 1, sessionId: s?.claude_session_id || sessionId, rowId: s?.id || null, resume: false, fork: false, view: true, cwd: s?.working_dir || null, name: null }))
+  }
+  // Go live on the session currently being viewed read-only (the Resume button).
+  const resumeActive = () => {
+    const c = connRef.current
+    if (!c.sessionId) return
+    setViewOnly(false)
+    setConnReq(p => ({ key: p.key + 1, sessionId: c.sessionId, rowId: c.rowId, resume: true, fork: false, view: false, cwd: c.cwd, name: null }))
   }
   // Fork a session with a chosen name and an optional opening prompt. The prompt
   // is auto-sent to the forked PTY once it boots (see the 'started' handler), so
@@ -653,8 +670,8 @@ export default function TerminalPage() {
                   {messages.length === 0 ? (
                     <div className="flex flex-col items-center justify-center gap-2 text-center py-20" style={{ color: 'var(--c-text-muted)' }}>
                       <MessageSquare size={26} />
-                      <div className="text-sm">{status === 'live' ? 'Listening for the conversation…' : 'Connecting to the session…'}</div>
-                      <div className="text-xs" style={{ color: 'var(--c-text-muted)' }}>Messages are read live from the running Claude session.</div>
+                      <div className="text-sm">{viewOnly ? 'No saved messages for this session.' : status === 'live' ? 'Listening for the conversation…' : 'Connecting to the session…'}</div>
+                      <div className="text-xs" style={{ color: 'var(--c-text-muted)' }}>{viewOnly ? 'Click Resume to start a live session.' : 'Messages are read live from the running Claude session.'}</div>
                     </div>
                   ) : groupTurns(messages).map((turn, i, arr) => (
                     <ChatTurn key={i} turn={turn} active={i === arr.length - 1 && working}
@@ -669,12 +686,25 @@ export default function TerminalPage() {
                   <ChevronDown size={13} /> Latest
                 </button>
               )}
-              <ChatComposer
-                draft={draft} setDraft={setDraft} onKeyDown={onDraftKey} onSend={sendChat}
-                disabled={status !== 'live'} inputRef={draftRef} status={status}
-                attachments={attachments} onAddFiles={addFiles} onRemoveAttachment={removeAttachment} uploading={uploading}
-                working={working} onStop={stopChat}
-              />
+              {viewOnly ? (
+                <div className="flex items-center justify-between gap-3 px-3 sm:px-5 py-3 border-t" style={{ borderColor: 'var(--c-border)', backgroundColor: 'var(--c-surface)' }}>
+                  <span className="text-xs flex items-center gap-1.5" style={{ color: 'var(--c-text-muted)' }}>
+                    <History size={13} /> Viewing saved chat — not live.
+                  </span>
+                  <button onClick={resumeActive}
+                    className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg cursor-pointer"
+                    style={{ backgroundColor: 'var(--c-accent)', color: '#fff' }}>
+                    <Play size={13} /> Resume to continue
+                  </button>
+                </div>
+              ) : (
+                <ChatComposer
+                  draft={draft} setDraft={setDraft} onKeyDown={onDraftKey} onSend={sendChat}
+                  disabled={status !== 'live'} inputRef={draftRef} status={status}
+                  attachments={attachments} onAddFiles={addFiles} onRemoveAttachment={removeAttachment} uploading={uploading}
+                  working={working} onStop={stopChat}
+                />
+              )}
             </div>
           )}
         </div>

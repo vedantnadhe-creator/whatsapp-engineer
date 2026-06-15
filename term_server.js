@@ -436,6 +436,21 @@ export function attachTerminalServer(store) {
                     }
                     break;
                 }
+                case 'view': {
+                    // Read-only open (e.g. clicking a session from the sprint board):
+                    // attach IF a live PTY exists, otherwise serve the saved transcript
+                    // and do NOT spawn a Claude process. The client shows a Resume button
+                    // to actually go live (which then sends a normal 'start' resume).
+                    const entry = msg.terminalId && terminals.get(msg.terminalId);
+                    if (entry && entry.proc) {
+                        attachClient(ws, entry, msg.cols, msg.rows);
+                        try { ws.send(JSON.stringify({ type: 'attached', terminalId: entry.claudeId })); } catch (_) {}
+                    } else {
+                        const clean = readCleanMessages(store, { claudeId: msg.terminalId, cwd: msg.cwd });
+                        try { ws.send(JSON.stringify({ type: 'chat', messages: clean || [], text: '', working: false, viewOnly: true })); } catch (_) {}
+                    }
+                    break;
+                }
                 case 'start': {
                     // If resuming a session that already has a live PTY, just attach.
                     if (msg.resume && !msg.fork && msg.sessionId && terminals.has(msg.sessionId)) {
