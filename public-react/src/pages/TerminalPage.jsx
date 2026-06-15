@@ -58,6 +58,9 @@ export default function TerminalPage() {
   connRef.current = connReq
   const modelRef = useRef(model)
   modelRef.current = model
+  // The live PTY's terminal id (Claude uuid). Once set, reconnects RE-ATTACH to
+  // the running process instead of spawning a new session (fixes repeat trust prompt).
+  const assignedIdRef = useRef(null)
 
   // (Re)create the terminal + WS whenever the connection request changes.
   useEffect(() => {
@@ -76,7 +79,10 @@ export default function TerminalPage() {
     termRef.current = term
     fitRef.current = fit
 
-    let ws, reconnectTimer, disposed = false
+    let ws, reconnectTimer, pingTimer, disposed = false
+    // Fresh connection request → forget any previous PTY id so the first open
+    // sends start; later reconnects within this same session re-attach.
+    assignedIdRef.current = null
 
     const connect = () => {
       if (disposed) return
@@ -85,26 +91,36 @@ export default function TerminalPage() {
       wsRef.current = ws
       ws.onopen = () => {
         fit.fit()
-        const c = connRef.current
-        ws.send(JSON.stringify({
-          type: 'start', cols: term.cols, rows: term.rows, model: modelRef.current,
-          sessionId: c.sessionId || undefined, resume: !!c.resume, fork: !!c.fork,
-          cwd: c.cwd || undefined, name: c.name || undefined,
-        }))
+        if (assignedIdRef.current) {
+          // Reconnect → re-attach to the still-running PTY.
+          ws.send(JSON.stringify({ type: 'attach', terminalId: assignedIdRef.current, cols: term.cols, rows: term.rows }))
+        } else {
+          const c = connRef.current
+          ws.send(JSON.stringify({
+            type: 'start', cols: term.cols, rows: term.rows, model: modelRef.current,
+            sessionId: c.sessionId || undefined, resume: !!c.resume, fork: !!c.fork,
+            cwd: c.cwd || undefined, name: c.name || undefined,
+          }))
+        }
       }
       ws.onmessage = (ev) => {
         let msg; try { msg = JSON.parse(ev.data) } catch { return }
         if (msg.type === 'output') term.write(msg.data)
+        else if (msg.type === 'pong') { /* keepalive */ }
+        else if (msg.type === 'attached') { setStatus('live'); if (msg.terminalId) assignedIdRef.current = msg.terminalId }
         // For an existing-row resume, keep highlight on the OliBot row id; for a
         // brand-new session the server-created row id IS the Claude uuid.
-        else if (msg.type === 'started') { setStatus('live'); if (!connRef.current.rowId) setActiveId(msg.sessionId); setTimeout(refreshSessions, 400) }
-        else if (msg.type === 'forked') { setActiveId(msg.sessionId); setTimeout(refreshSessions, 400) }
-        else if (msg.type === 'exit') { setStatus('exited'); term.write(`\r\n\x1b[90m── exited (code ${msg.code}). ↻ to start new. ──\x1b[0m\r\n`); setTimeout(refreshSessions, 400) }
+        else if (msg.type === 'started') { setStatus('live'); assignedIdRef.current = msg.terminalId || msg.sessionId; if (!connRef.current.rowId) setActiveId(msg.sessionId); setTimeout(refreshSessions, 400) }
+        else if (msg.type === 'forked') { assignedIdRef.current = msg.terminalId || msg.sessionId; setActiveId(msg.sessionId); setTimeout(refreshSessions, 400) }
+        else if (msg.type === 'exit') { setStatus('exited'); assignedIdRef.current = null; term.write(`\r\n\x1b[90m── exited (code ${msg.code}). ↻ to start new. ──\x1b[0m\r\n`); setTimeout(refreshSessions, 400) }
         else if (msg.type === 'error') { setStatus('error'); term.write(`\r\n\x1b[31m${msg.message}\x1b[0m\r\n`) }
       }
-      ws.onclose = () => { if (disposed) return; setStatus((s) => s === 'exited' ? s : 'connecting'); reconnectTimer = setTimeout(connect, 2500) }
+      ws.onclose = () => { if (disposed) return; setStatus((s) => s === 'exited' ? s : 'connecting'); reconnectTimer = setTimeout(connect, 2000) }
       ws.onerror = () => { try { ws.close() } catch {} }
     }
+
+    // Keepalive — app-level ping keeps the proxy from closing an idle WS.
+    pingTimer = setInterval(() => { if (wsRef.current?.readyState === 1) wsRef.current.send(JSON.stringify({ type: 'ping' })) }, 25000)
 
     const onData = term.onData((data) => {
       if (wsRef.current?.readyState === 1) wsRef.current.send(JSON.stringify({ type: 'input', data }))
@@ -122,6 +138,7 @@ export default function TerminalPage() {
     return () => {
       disposed = true
       clearTimeout(reconnectTimer)
+      clearInterval(pingTimer)
       window.removeEventListener('resize', doFit)
       ro.disconnect(); onData.dispose()
       try { ws?.close() } catch {}
