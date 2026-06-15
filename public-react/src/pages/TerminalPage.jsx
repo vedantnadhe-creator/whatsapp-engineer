@@ -444,7 +444,7 @@ export default function TerminalPage() {
                       <div className="text-xs" style={{ color: 'var(--c-text-muted)' }}>Messages are read live from the running Claude session.</div>
                     </div>
                   ) : groupTurns(messages).map((turn, i, arr) => (
-                    <ChatTurn key={i} turn={turn} active={i === arr.length - 1 && working} isLast={i === arr.length - 1} />
+                    <ChatTurn key={i} turn={turn} active={i === arr.length - 1 && working} />
                   ))}
                 </div>
               </div>
@@ -642,9 +642,9 @@ function ToolBlock({ content }) {
 
 // Collapsible "working" box holding the intermediate steps of a turn. Live while
 // the turn is still running (active); a quiet, collapsed summary once finished.
-function ThinkingBox({ steps, active, isLast }) {
+function ThinkingBox({ steps, active, done }) {
   const [open, setOpen] = useState(false)
-  if (!steps.length && !active && !isLast) return null
+  if (!steps.length && !active && !done) return null
   const toolCount = steps.filter(s => s.tool).length
   const DONE_GREEN = '#7ee787'
   const label = active ? 'Working…' : `Done${toolCount ? ` · ${toolCount} tool${toolCount > 1 ? 's' : ''}` : ''}`
@@ -674,7 +674,7 @@ function ThinkingBox({ steps, active, isLast }) {
 // One full turn: the user bubble, a thinking box for intermediate work, and the
 // final answer in markdown. While `active`, all steps stay in the live box and
 // no answer is split out yet.
-function ChatTurn({ turn, active, isLast }) {
+function ChatTurn({ turn, active }) {
   const steps = turn.steps
   let thinkingSteps = steps, answer = null
   if (!active) {
@@ -707,14 +707,13 @@ function ChatTurn({ turn, active, isLast }) {
           </div>
         </div>
       )}
-      {(thinkingSteps.length > 0 || active || isLast || answer) && (
+      {(steps.length > 0 || active) && (
         <div className="flex flex-col gap-1.5">
           <div className="flex items-center gap-1.5 text-[11px] font-medium" style={{ color: 'var(--c-text-secondary)' }}>
             <span style={{ width: 6, height: 6, borderRadius: 99, backgroundColor: 'var(--c-accent)', display: 'inline-block' }} /> Claude
           </div>
-          {(thinkingSteps.length > 0 || active || isLast) && (
-            <ThinkingBox steps={thinkingSteps} active={active} isLast={isLast} />
-          )}
+          {/* Every completed response shows the green ✓ Done; the live one shows Working…. */}
+          <ThinkingBox steps={thinkingSteps} active={active} done={!active && steps.length > 0} />
           {answer && <Markdown>{answer.content}</Markdown>}
         </div>
       )}
