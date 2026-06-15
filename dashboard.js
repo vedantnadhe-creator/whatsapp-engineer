@@ -2051,10 +2051,25 @@ Steps:
 
     // ── WebSocket Server ────────────────────────────────────────
     const server = http.createServer(app);
-    const wss = new WebSocketServer({ server, path: '/ws' });
+    // Two WS endpoints share one HTTP server. ws 8.x aborts (400) any upgrade
+    // whose path doesn't match a {server,path} server, so multiple {server,path}
+    // servers kill each other's upgrades. Use noServer + a single upgrade router.
+    const wss = new WebSocketServer({ noServer: true });
 
-    // Interactive human-driven web terminal (/sessions/v2) on a separate WS path.
-    attachTerminalServer(server);
+    // Interactive human-driven web terminal (/sessions/v2).
+    const termWss = attachTerminalServer();
+
+    server.on('upgrade', (req, socket, head) => {
+        let pathname = '/';
+        try { pathname = new URL(req.url, 'http://localhost').pathname; } catch (_) {}
+        if (pathname === '/ws') {
+            wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
+        } else if (pathname === '/term') {
+            termWss.handleUpgrade(req, socket, head, (ws) => termWss.emit('connection', ws, req));
+        } else {
+            socket.destroy();
+        }
+    });
 
     // Track connected clients
     const wsClients = new Set();

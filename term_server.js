@@ -32,8 +32,11 @@ function parseCookies(header = '') {
     return out;
 }
 
-export function attachTerminalServer(server) {
-    const wss = new WebSocketServer({ server, path: '/term' });
+// Returns a noServer WebSocketServer. The caller routes /term upgrades to it via
+// a single server 'upgrade' handler (see dashboard.js) — two {server,path}
+// servers on one HTTP server abort each other's upgrades in ws 8.x.
+export function attachTerminalServer() {
+    const wss = new WebSocketServer({ noServer: true });
 
     wss.on('connection', (ws, req) => {
         // Same auth as the dashboard: signed wa_token cookie (or bearer header).
