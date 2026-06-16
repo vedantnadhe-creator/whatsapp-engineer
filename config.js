@@ -52,6 +52,18 @@ const config = {
     SMTP_USER: process.env.SMTP_USER || '',
     SMTP_PASS: process.env.SMTP_PASS || '',
 
+    // ── Google Sheets (Sprint Board: Open in Sheet / Template / Upload) ──
+    // Service-account auth. Provide ONE of:
+    //   GOOGLE_SERVICE_ACCOUNT_FILE — path to the service-account JSON key, or
+    //   GOOGLE_SERVICE_ACCOUNT_JSON — the JSON key contents inline.
+    // Enable the Google Sheets API + Drive API on that service account's project.
+    GOOGLE_SERVICE_ACCOUNT_FILE: process.env.GOOGLE_SERVICE_ACCOUNT_FILE || '',
+    GOOGLE_SERVICE_ACCOUNT_JSON: process.env.GOOGLE_SERVICE_ACCOUNT_JSON || '',
+    // Optional: share new sheets with this email/domain (e.g. your workspace) and/or
+    // create them inside this Drive folder.
+    GOOGLE_SHEETS_SHARE_WITH: process.env.GOOGLE_SHEETS_SHARE_WITH || '',
+    GOOGLE_DRIVE_FOLDER_ID: process.env.GOOGLE_DRIVE_FOLDER_ID || '',
+
     // Base path when served under a sub-path (e.g., /sessions)
     // Leave empty '' when served at root /
     BASE_PATH: (process.env.BASE_PATH || '').replace(/\/$/, ''),

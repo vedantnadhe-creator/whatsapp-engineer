@@ -15,6 +15,11 @@ import {
     signJwt, requireAuth, optionalAuth, requireAdmin,
     sendWelcomeEmail, sendAccessRequestEmail, generatePassword
 } from './auth.js';
+import {
+    buildSprintGrids, buildTemplateGrids, gridsToXlsxBuffer,
+    parseWorkbookBuffer, importSprintData,
+} from './sprint_sheet.js';
+import * as sheetsService from './sheets_service.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1133,6 +1138,98 @@ Do NOT ask for confirmation — proceed through each step automatically. If any 
             store.deleteSprint(req.params.id);
             wsBroadcast('sprint_deleted', { sprintId: req.params.id });
             res.json({ success: true });
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    // ── Sprint Board ⇄ Spreadsheet (Open in Sheet / Template / Upload) ──
+    // These are additive: the in-app board editing stays exactly as-is.
+    const safeParse = (s) => { try { return JSON.parse(s); } catch (_) { return null; } };
+
+    // Open in Sheet — return a live link to this sprint's sheet, refreshed with
+    // current board data. Reuses one Google Sheet per sprint; falls back to .xlsx.
+    app.get('/api/sprints/:id/sheet', requireAuth, async (req, res) => {
+        try {
+            const sprint = store.getSprint(req.params.id);
+            if (!sprint) return res.status(404).json({ error: 'Sprint not found' });
+            const grids = buildSprintGrids(store, sprint.id);
+
+            if (sheetsService.isConfigured()) {
+                const saved = safeParse(store.getSetting(`sprint_sheet:${sprint.id}`));
+                if (saved?.spreadsheetId) {
+                    try {
+                        const url = await sheetsService.updateSpreadsheetFromGrids(saved.spreadsheetId, grids);
+                        return res.json({ url, mode: 'gsheet' });
+                    } catch (_) { /* sheet was deleted — fall through and recreate */ }
+                }
+                const created = await sheetsService.createSpreadsheetFromGrids(`${sprint.name} — Sprint Board`, grids);
+                store.setSetting(`sprint_sheet:${sprint.id}`, JSON.stringify({ spreadsheetId: created.spreadsheetId, url: created.url }));
+                return res.json({ url: created.url, mode: 'gsheet' });
+            }
+
+            const buf = gridsToXlsxBuffer(grids);
+            const fileName = `sprint-${sprint.id}-${Date.now()}.xlsx`;
+            fs.writeFileSync(path.join(uploadsDir, fileName), buf);
+            return res.json({ url: `/api/uploads/${fileName}`, mode: 'xlsx' });
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    // Blank template (headers + Legend) to fill from scratch.
+    app.get('/api/sprints/:id/template', requireAuth, async (req, res) => {
+        try {
+            const grids = buildTemplateGrids();
+            if (sheetsService.isConfigured()) {
+                const created = await sheetsService.createSpreadsheetFromGrids('Sprint Board — Template', grids);
+                return res.json({ url: created.url, mode: 'gsheet' });
+            }
+            const buf = gridsToXlsxBuffer(grids);
+            const fileName = `sprint-template-${Date.now()}.xlsx`;
+            fs.writeFileSync(path.join(uploadsDir, fileName), buf);
+            return res.json({ url: `/api/uploads/${fileName}`, mode: 'xlsx' });
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    // Upload a filled sheet (.xlsx/.csv body, or JSON { sheetUrl }) → upsert into
+    // the sprint, then optionally spin up a Claude agent to review the import.
+    app.post('/api/sprints/:id/import', requireAuth, uploadHandler, async (req, res) => {
+        try {
+            const sprint = store.getSprint(req.params.id);
+            if (!sprint) return res.status(404).json({ error: 'Sprint not found' });
+
+            let parsed = null;
+            const ct = String(req.headers['content-type'] || '');
+            if (ct.includes('application/json')) {
+                const body = safeParse(Buffer.isBuffer(req.body) ? req.body.toString('utf8') : '') || {};
+                if (!body.sheetUrl) return res.status(400).json({ error: 'sheetUrl is required' });
+                if (!sheetsService.isConfigured()) return res.status(400).json({ error: 'Google Sheets is not configured — upload an .xlsx/.csv file instead.' });
+                parsed = await sheetsService.readSpreadsheetRecords(sheetsService.extractSpreadsheetId(body.sheetUrl));
+            } else {
+                if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: 'No file uploaded' });
+                parsed = parseWorkbookBuffer(req.body);
+            }
+
+            const summary = importSprintData(store, sprint.id, parsed, req.user.id);
+            wsBroadcast('issues_imported', { sprintId: sprint.id, summary });
+
+            // Best-effort agent review. Deterministic import above is authoritative.
+            // Testers may edit the board but not spawn dev sessions, so skip for them.
+            let sessionId = null;
+            const wantAgent = req.query.agent !== '0' && req.user.role !== 'tester';
+            if (wantAgent) {
+                try {
+                    const phone = req.user.phone || req.user.email || req.user.id;
+                    const c = summary;
+                    const warn = c.warnings.length ? `\nWarnings:\n- ${c.warnings.slice(0, 20).join('\n- ')}` : '';
+                    const text = `A sprint sheet was uploaded for "${sprint.name}" and imported into the Sprint Board.\n` +
+                        `Imported — features +${c.features.created}/~${c.features.updated}, subtasks +${c.subtasks.created}/~${c.subtasks.updated}, bugs +${c.bugs.created}/~${c.bugs.updated}, test cases +${c.testCases.created}/~${c.testCases.updated}.${warn}\n\n` +
+                        `The sprint data lives in the SQLite DB at ./sessions.db (tables: issues, bugs, test_cases) where issues.sprint_id = '${sprint.id}'. ` +
+                        `If any rows look mismatched (owners, statuses, parent links), fix them there, then reply with a short 2-3 line summary of what was imported and anything that needs attention. Do NOT deploy.`;
+                    const result = await messageHandler({ isWeb: true, phone: String(phone), text, pushName: req.user.displayName || 'Dashboard', ownerId: req.user.id, model: 'claude-opus-4-8', mode: 'developer' });
+                    sessionId = result?.sessionId || null;
+                    if (sessionId) store.updateSession(sessionId, { sprint_id: sprint.id, name: `Sheet import — ${sprint.name}`.slice(0, 120) });
+                } catch (err) { console.error('[sheet-import] agent spawn failed:', err?.message || err); }
+            }
+
+            res.json({ success: true, summary, sessionId });
         } catch (err) { res.status(500).json({ error: err.message }); }
     });
 

@@ -561,6 +561,35 @@ export async function uploadFile(file) {
   });
 }
 
+// ── Sprint Board ⇄ Spreadsheet ──────────────────────────────────────────
+// Open in Sheet — returns { url, mode: 'gsheet' | 'xlsx' }.
+export async function openSprintSheet(sprintId) {
+  return apiFetch(`/api/sprints/${sprintId}/sheet`);
+}
+
+// Blank template — returns { url, mode }.
+export async function getSprintTemplate(sprintId) {
+  return apiFetch(`/api/sprints/${sprintId}/template`);
+}
+
+// Upload a filled .xlsx/.csv (File) or a Google Sheet link (string) to upsert
+// into the sprint. Returns { summary, sessionId }.
+export async function importSprintSheet(sprintId, fileOrUrl, { withAgent = true } = {}) {
+  const q = withAgent ? '' : '?agent=0';
+  if (typeof fileOrUrl === 'string') {
+    return apiFetch(`/api/sprints/${sprintId}/import${q}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sheetUrl: fileOrUrl }),
+    });
+  }
+  return apiFetch(`/api/sprints/${sprintId}/import${q}`, {
+    method: 'POST',
+    headers: { 'Content-Type': fileOrUrl.type || 'application/octet-stream' },
+    body: fileOrUrl,
+  });
+}
+
 export async function requestAccess(sessionId, note) {
   return apiFetch(`/api/sessions/${sessionId}/request-access`, {
     method: 'POST',

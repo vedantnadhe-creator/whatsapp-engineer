@@ -2,12 +2,13 @@ import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import {
   Plus, Play, MessageSquare, Bug, FlaskConical, Trash2, ChevronDown, ChevronRight,
   GitFork, Check, X, Loader2, FileText, RefreshCw, CornerDownRight, ArrowLeft, Archive, ArchiveRestore,
-  Paperclip, ListTree,
+  Paperclip, ListTree, FileSpreadsheet, Download, Upload, ExternalLink,
 } from 'lucide-react'
 import {
   startFeatureSession, getBugs, createBug, updateBug, deleteBug, forkBug,
   getTestCases, createTestCase, updateTestCase, deleteTestCase, generateTestCases,
   getSubtasks, uploadFile,
+  openSprintSheet, getSprintTemplate, importSprintSheet,
 } from '../hooks/useApi'
 
 // ── Option sets ────────────────────────────────────────────────────────────
@@ -130,6 +131,10 @@ export default function SprintBoard({
   const [startText, setStartText] = useState('')
   const [startFiles, setStartFiles] = useState([]) // [{ token, name }]
   const [uploadingFile, setUploadingFile] = useState(false)
+  // Spreadsheet (Open in Sheet / Template / Upload)
+  const [sheetBusy, setSheetBusy] = useState(null) // 'open' | 'template' | 'upload' | null
+  const [sheetMsg, setSheetMsg] = useState(null)    // { kind: 'info'|'error', text, sessionId? }
+  const sheetFileRef = useRef(null)
 
   const isTester = user?.role === 'tester'
 
@@ -204,6 +209,57 @@ export default function SprintBoard({
     } finally { setBusyStart(null) }
   }
 
+  // ── Spreadsheet actions (additive — manual board editing is unchanged) ──
+  const isRealSprint = activeSprintId && activeSprintId !== '__all__' && activeSprintId !== '__backlog__'
+
+  const handleOpenSheet = async () => {
+    if (!isRealSprint) return
+    setSheetBusy('open'); setSheetMsg(null)
+    try {
+      const r = await openSprintSheet(activeSprintId)
+      if (r?.url) window.open(r.url, '_blank', 'noopener')
+      if (r?.mode === 'xlsx') setSheetMsg({ kind: 'info', text: 'Google Sheets not configured yet — downloaded an .xlsx instead.' })
+    } catch (e) {
+      setSheetMsg({ kind: 'error', text: e.message || 'Could not open sheet.' })
+    } finally { setSheetBusy(null) }
+  }
+
+  const handleTemplate = async () => {
+    if (!isRealSprint) return
+    setSheetBusy('template'); setSheetMsg(null)
+    try {
+      const r = await getSprintTemplate(activeSprintId)
+      if (r?.url) window.open(r.url, '_blank', 'noopener')
+    } catch (e) {
+      setSheetMsg({ kind: 'error', text: e.message || 'Could not create template.' })
+    } finally { setSheetBusy(null) }
+  }
+
+  const handleSheetUpload = async (fileList) => {
+    const file = Array.from(fileList || [])[0]
+    if (!file || !isRealSprint) return
+    setSheetBusy('upload'); setSheetMsg(null)
+    try {
+      // Testers don't spawn agents; everyone gets the deterministic import.
+      const r = await importSprintSheet(activeSprintId, file, { withAgent: !isTester })
+      const c = r?.summary
+      const parts = c ? [
+        `features +${c.features.created}/~${c.features.updated}`,
+        `subtasks +${c.subtasks.created}/~${c.subtasks.updated}`,
+        `bugs +${c.bugs.created}/~${c.bugs.updated}`,
+        `tests +${c.testCases.created}/~${c.testCases.updated}`,
+      ] : []
+      const warn = c?.warnings?.length ? ` · ${c.warnings.length} warning(s)` : ''
+      setSheetMsg({ kind: 'info', text: `Imported: ${parts.join(' · ')}${warn}`, sessionId: r?.sessionId })
+      refreshIssues()
+    } catch (e) {
+      setSheetMsg({ kind: 'error', text: e.message || 'Import failed.' })
+    } finally {
+      setSheetBusy(null)
+      if (sheetFileRef.current) sheetFileRef.current.value = ''
+    }
+  }
+
   return (
     <div className="h-full flex flex-col" style={{ backgroundColor: 'var(--c-bg)', color: 'var(--c-text)' }}>
       {/* Header */}
@@ -248,6 +304,41 @@ export default function SprintBoard({
             className="text-[11px] px-2 py-1 rounded cursor-pointer flex items-center gap-1 disabled:opacity-40"
             style={{ backgroundColor: 'var(--c-surface)', color: 'var(--c-text-secondary)', border: '1px solid var(--c-border)' }}
           ><Plus size={12} /> New Sprint</button>
+
+          {/* Spreadsheet actions — testers love the sheet view; available for any real sprint */}
+          {isRealSprint && (
+            <div className="flex items-center gap-1">
+              <button
+                onClick={handleOpenSheet}
+                disabled={sheetBusy === 'open'}
+                title="Open this sprint in a spreadsheet (live link)"
+                className="text-[11px] px-2 py-1 rounded cursor-pointer flex items-center gap-1 disabled:opacity-50"
+                style={{ backgroundColor: 'var(--c-surface)', color: 'var(--c-text-secondary)', border: '1px solid var(--c-border)' }}
+              >{sheetBusy === 'open' ? <Loader2 size={12} className="animate-spin" /> : <ExternalLink size={12} />} Open in Sheet</button>
+              <button
+                onClick={handleTemplate}
+                disabled={sheetBusy === 'template'}
+                title="Open a blank template to fill and upload"
+                className="text-[11px] px-2 py-1 rounded cursor-pointer flex items-center gap-1 disabled:opacity-50"
+                style={{ backgroundColor: 'var(--c-surface)', color: 'var(--c-text-secondary)', border: '1px solid var(--c-border)' }}
+              >{sheetBusy === 'template' ? <Loader2 size={12} className="animate-spin" /> : <FileSpreadsheet size={12} />} Template</button>
+              <button
+                onClick={() => sheetFileRef.current?.click()}
+                disabled={sheetBusy === 'upload'}
+                title="Upload a filled .xlsx/.csv to fill this sprint"
+                className="text-[11px] px-2 py-1 rounded cursor-pointer flex items-center gap-1 disabled:opacity-50"
+                style={{ backgroundColor: 'var(--c-surface)', color: 'var(--c-text-secondary)', border: '1px solid var(--c-border)' }}
+              >{sheetBusy === 'upload' ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />} Upload Sheet</button>
+              <input
+                ref={sheetFileRef}
+                type="file"
+                accept=".xlsx,.xls,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv"
+                className="hidden"
+                onChange={(e) => handleSheetUpload(e.target.files)}
+              />
+            </div>
+          )}
+
           <div className="flex-1" />
           {activeSprint && (
             <>
@@ -290,6 +381,24 @@ export default function SprintBoard({
             <span className="text-[11px] font-mono" style={{ color: 'var(--c-text-secondary)' }}>{progress.percent}% · {progress.done}/{progress.total} done</span>
             {progress.openBugs > 0 && <span className="text-[11px] font-mono" style={{ color: '#f59e0b' }}>{progress.openBugs} open bug{progress.openBugs > 1 ? 's' : ''}</span>}
             {progress.criticalBugs > 0 && <span className="text-[11px] font-mono" style={{ color: '#ef4444' }}>{progress.criticalBugs} critical</span>}
+          </div>
+        )}
+
+        {sheetMsg && (
+          <div
+            className="flex items-center gap-2 text-[11px] px-2.5 py-1.5 rounded"
+            style={{
+              backgroundColor: sheetMsg.kind === 'error' ? '#ef444415' : 'var(--c-surface-2)',
+              color: sheetMsg.kind === 'error' ? '#ef4444' : 'var(--c-text-secondary)',
+              border: '1px solid var(--c-border)',
+            }}
+          >
+            {sheetMsg.kind === 'error' ? <X size={12} /> : <Check size={12} />}
+            <span className="flex-1">{sheetMsg.text}</span>
+            {sheetMsg.sessionId && (
+              <button onClick={() => onGoToSession(sheetMsg.sessionId)} className="underline cursor-pointer" style={{ color: 'var(--c-accent)' }}>View agent</button>
+            )}
+            <button onClick={() => setSheetMsg(null)} className="cursor-pointer" style={{ color: 'var(--c-text-muted)' }}><X size={12} /></button>
           </div>
         )}
       </div>
