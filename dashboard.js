@@ -180,7 +180,18 @@ a{color:#60a5fa;text-decoration:none}</style></head>
     });
 
     app.get('/api/sessions/:id/messages', requireAuth, (req, res) => {
-        try { res.json(store.getMessages(req.params.id, 100)); }
+        try {
+            // V2 (interactive terminal) sessions store their conversation only in
+            // Claude Code's native JSONL — the messages table stays empty, so they
+            // show up blank in V1. Parse the JSONL into the messages table first so
+            // V1 renders the full V2 transcript. (No-op for non-terminal sessions.)
+            const session = store.getSession(req.params.id);
+            if (session && session.source === 'terminal' && typeof store.syncTranscript === 'function') {
+                try { store.syncTranscript(session.id, session.working_dir, session.claude_session_id || session.id); }
+                catch (_) { /* fall back to whatever is already stored */ }
+            }
+            res.json(store.getMessages(req.params.id, 200));
+        }
         catch (err) { res.status(500).json({ error: err.message }); }
     });
 

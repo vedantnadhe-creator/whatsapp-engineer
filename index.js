@@ -264,11 +264,13 @@ export async function handleIncomingMessage({ isWeb: explicitIsWeb, phone, text,
 
         if (isWeb) {
             // Dashboard messages have explicit intent from the route — skip orchestrator
-            const resumeMatch = text.match(/^\[resume (WA-[a-z0-9\-]+)\]\s*/i);
+            // Accept both WA- ids (agent/--print sessions) AND raw UUID ids
+            // (V2 interactive-terminal sessions) so V1 can resume either kind.
+            const resumeMatch = text.match(/^\[resume ([A-Za-z0-9][A-Za-z0-9\-]+)\]\s*/i);
             const isStartFresh = /^\[start fresh\]/i.test(text);
             if (resumeMatch) {
                 const sessionId = resumeMatch[1];
-                const cleanText = text.replace(/^\[resume WA-[a-z0-9\-]+\]\s*/i, '').trim();
+                const cleanText = text.replace(/^\[resume [A-Za-z0-9][A-Za-z0-9\-]+\]\s*/i, '').trim();
                 intent = { action: 'RESUME_SESSION', session_ref: sessionId, task: cleanText };
             } else if (isStartFresh) {
                 const cleanText = text.replace(/^\[start fresh\]\s*/i, '').trim();
