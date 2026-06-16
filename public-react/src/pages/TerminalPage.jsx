@@ -114,7 +114,9 @@ export default function TerminalPage() {
   const { models } = useModels()
 
   const [search, setSearch] = useState('')
-  const { sessions, refresh: refreshSessions } = useSessions(1, search)
+  const [page, setPage] = useState(1)
+  const { sessions, totalPages, refresh: refreshSessions } = useSessions(page, search)
+  const hasMore = page < (totalPages || 1)
 
   // Top-level workspace tab. 'chat' is the terminal/conversation; the others mount
   // the same feature views V1's dashboard uses (reused as-is, no fork).
@@ -281,6 +283,34 @@ export default function TerminalPage() {
     const onData = term.onData((data) => {
       if (wsRef.current?.readyState === 1) wsRef.current.send(JSON.stringify({ type: 'input', data }))
     })
+    // Paste into the raw terminal: xterm only pastes on Ctrl+Shift+V (Ctrl+V/Cmd+V
+    // otherwise sends a literal ^V to the shell), and can't take images at all.
+    // Intercept the paste in the capture phase so it works with any paste shortcut:
+    // images upload → their absolute path is typed in; plain text is sent verbatim.
+    const onTermPaste = async (e) => {
+      if (disposed || !e.clipboardData) return
+      const items = Array.from(e.clipboardData.items || [])
+      const imgFiles = items.filter((it) => it.kind === 'file' && it.type?.startsWith('image/'))
+        .map((it) => it.getAsFile()).filter(Boolean)
+      if (imgFiles.length) {
+        e.preventDefault(); e.stopPropagation()
+        for (const f of imgFiles) {
+          try {
+            const r = await uploadFile(f)
+            if (r?.success && r.path && wsRef.current?.readyState === 1)
+              wsRef.current.send(JSON.stringify({ type: 'input', data: r.path + ' ' }))
+          } catch (_) {}
+        }
+        return
+      }
+      const text = e.clipboardData.getData('text/plain')
+      if (text) {
+        e.preventDefault(); e.stopPropagation()
+        if (wsRef.current?.readyState === 1) wsRef.current.send(JSON.stringify({ type: 'input', data: text }))
+      }
+    }
+    const hostEl = hostRef.current
+    hostEl.addEventListener('paste', onTermPaste, true)
     const doFit = () => {
       try { fit.fit(); if (wsRef.current?.readyState === 1) wsRef.current.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows })) } catch {}
     }
@@ -296,6 +326,7 @@ export default function TerminalPage() {
       clearTimeout(reconnectTimer)
       clearInterval(pingTimer)
       window.removeEventListener('resize', doFit)
+      try { hostEl.removeEventListener('paste', onTermPaste, true) } catch {}
       ro.disconnect(); onData.dispose()
       try { ws?.close() } catch {}
       term.dispose()
@@ -487,7 +518,7 @@ export default function TerminalPage() {
         </button>
         <div className="hidden md:flex items-center gap-2 font-bold shrink-0" style={{ color: 'var(--c-text)' }}>
           <TerminalSquare size={16} style={{ color: 'var(--c-accent)' }} />
-          Terminal <span className="text-[10px] font-mono px-1.5 py-0.5 rounded" style={{ backgroundColor: 'var(--c-surface-3)', color: 'var(--c-text-muted)' }}>v2</span>
+          OliBot <span className="text-[10px] font-mono px-1.5 py-0.5 rounded" style={{ backgroundColor: 'var(--c-surface-3)', color: 'var(--c-text-muted)' }}>v2</span>
         </div>
         {activeSession && (
           <div className="flex items-center gap-2 min-w-0 md:pl-2" style={{ borderLeft: '1px solid var(--c-border)' }}>
@@ -560,9 +591,9 @@ export default function TerminalPage() {
             <div className="px-2 py-2" style={{ borderBottom: '1px solid var(--c-border)' }}>
               <div className="relative flex items-center" style={{ backgroundColor: 'var(--c-surface)', border: '1px solid var(--c-border)', borderRadius: 6 }}>
                 <Search size={13} className="ml-2 shrink-0" style={{ color: 'var(--c-text-muted)' }} />
-                <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search sessions…"
+                <input value={search} onChange={(e) => { setSearch(e.target.value); setPage(1) }} placeholder="Search sessions…"
                   className="w-full bg-transparent outline-none px-2 py-1.5 text-sm" style={{ color: 'var(--c-text)' }} />
-                {search && <button onClick={() => setSearch('')} className="mr-1 p-1 rounded cursor-pointer" style={{ color: 'var(--c-text-muted)' }}><X size={12} /></button>}
+                {search && <button onClick={() => { setSearch(''); setPage(1) }} className="mr-1 p-1 rounded cursor-pointer" style={{ color: 'var(--c-text-muted)' }}><X size={12} /></button>}
               </div>
             </div>
             {/* Filters: All / Mine / Saved */}
@@ -626,6 +657,15 @@ export default function TerminalPage() {
                 <div className="px-3 py-4 text-xs text-center" style={{ color: 'var(--c-text-muted)' }}>
                   {sessionFilter === 'mine' ? 'No sessions by you yet' : sessionFilter === 'saved' ? 'No saved sessions yet' : 'No sessions.'}
                 </div>
+              )}
+              {hasMore && (
+                <button onClick={() => setPage(p => p + 1)}
+                  className="w-full text-[11px] font-medium py-2 cursor-pointer transition-colors"
+                  style={{ color: 'var(--c-accent)' }}
+                  onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'var(--c-surface)')}
+                  onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}>
+                  Load more sessions
+                </button>
               )}
             </div>
           </div>
@@ -1129,7 +1169,17 @@ function ChatComposer({ draft, setDraft, onKeyDown, onSend, disabled, inputRef, 
   const locked = disabled || working
   const canSend = !locked && (draft.trim() || attachments.length > 0)
   const onPaste = (e) => {
-    const files = Array.from(e.clipboardData?.files || []).filter(f => f.type?.startsWith('image/'))
+    // Screenshots land in clipboardData.files in some browsers and only in
+    // .items in others — check both so pasting an image always stages it.
+    // Plain text falls through to the textarea's native paste.
+    const cd = e.clipboardData
+    if (!cd) return
+    let files = Array.from(cd.files || []).filter(f => f.type?.startsWith('image/'))
+    if (!files.length) {
+      files = Array.from(cd.items || [])
+        .filter(it => it.kind === 'file' && it.type?.startsWith('image/'))
+        .map(it => it.getAsFile()).filter(Boolean)
+    }
     if (files.length) { e.preventDefault(); onAddFiles(files) }
   }
   const onDrop = (e) => {
