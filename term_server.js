@@ -356,7 +356,7 @@ export function attachTerminalServer(store) {
         const extractor = createExtractor({ cols, rows });
 
         // For a non-fork session we know the key up-front; forks get keyed once detected.
-        const entry = { proc, extractor, chatTimer: null, claudeId: claudeId || `pending-${crypto.randomUUID()}`, rowId, cwd: workingDir, buffer: '', clients: new Set(), idleTimer: null, mode };
+        const entry = { proc, extractor, chatTimer: null, claudeId: claudeId || `pending-${crypto.randomUUID()}`, rowId, cwd: workingDir, buffer: '', clients: new Set(), idleTimer: null, mode, model: (model && model !== 'default') ? model : 'default' };
         terminals.set(entry.claudeId, entry);
 
         // Register / refresh the DB row.
@@ -402,8 +402,13 @@ export function attachTerminalServer(store) {
             try { broadcastChat(entry); } catch (_) {}      // final clean snapshot
             try { entry.extractor?.dispose(); } catch (_) {}
             finalize(entry, exitCode);
-            for (const c of entry.clients) { if (c.readyState === 1) c.send(JSON.stringify({ type: 'exit', code: exitCode })); }
-            terminals.delete(entry.claudeId);
+            // If we deliberately killed this PTY to switch models, a fresh entry
+            // for the same session id may already have replaced it — don't notify
+            // viewers of an "exit" and don't delete the replacement.
+            if (!entry.replaced) {
+                for (const c of entry.clients) { if (c.readyState === 1) c.send(JSON.stringify({ type: 'exit', code: exitCode })); }
+            }
+            if (terminals.get(entry.claudeId) === entry) terminals.delete(entry.claudeId);
         });
 
         return entry;
@@ -452,12 +457,23 @@ export function attachTerminalServer(store) {
                     break;
                 }
                 case 'start': {
-                    // If resuming a session that already has a live PTY, just attach.
+                    // If resuming a session that already has a live PTY, just attach —
+                    // UNLESS the requested model differs from what that PTY is running.
+                    // Changing the model must change the ACTUAL model, so in that case we
+                    // kill the old PTY and respawn the resumed session with --model.
                     if (msg.resume && !msg.fork && msg.sessionId && terminals.has(msg.sessionId)) {
                         const entry = terminals.get(msg.sessionId);
-                        attachClient(ws, entry, msg.cols, msg.rows);
-                        try { ws.send(JSON.stringify({ type: 'started', sessionId: entry.rowId, terminalId: entry.claudeId, cwd: entry.cwd, mode: 'resume' })); } catch (_) {}
-                        break;
+                        const wantModel = (msg.model && msg.model !== 'default') ? msg.model : null;
+                        const modelChanged = wantModel && entry.model !== wantModel;
+                        if (!modelChanged) {
+                            attachClient(ws, entry, msg.cols, msg.rows);
+                            try { ws.send(JSON.stringify({ type: 'started', sessionId: entry.rowId, terminalId: entry.claudeId, cwd: entry.cwd, model: entry.model, mode: 'resume' })); } catch (_) {}
+                            break;
+                        }
+                        // Model switch: tear down the running PTY, then respawn below.
+                        try { entry.replaced = true; entry.proc?.kill(); } catch (_) {}
+                        terminals.delete(msg.sessionId);
+                        if (store && entry.rowId) { try { store.updateSession(entry.rowId, { model: wantModel }); } catch (_) {} }
                     }
                     const entry = spawnTerminal(user, msg);
                     attachClient(ws, entry, msg.cols, msg.rows);

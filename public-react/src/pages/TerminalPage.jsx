@@ -447,6 +447,9 @@ export default function TerminalPage() {
   const openSession = (s) => {
     setMenuFor(null); setActiveId(s.id); setTab('chat')
     if (isMobile) setShowSidebar(false) // collapse the drawer after picking on mobile
+    // Sync the model picker to this session's actual model so opening it doesn't
+    // trigger a needless model-switch respawn (and the dropdown reflects reality).
+    if (s.model) setModel(s.model)
     setConnReq(c => ({ key: c.key + 1, sessionId: s.claude_session_id || s.id, rowId: s.id, resume: true, fork: false, cwd: s.working_dir || null, name: null }))
   }
   // Feature views (sprint/agents) hand back a session id to OPEN — not resume. We
@@ -476,7 +479,10 @@ export default function TerminalPage() {
   }
   const restart = (nextModel) => {
     if (nextModel) setModel(nextModel)
-    setConnReq(c => ({ ...c, key: c.key + 1 }))
+    // A model change (or ↻) on an existing session must go live as a real resume
+    // so the new --model takes effect — not a read-only re-attach to the old PTY.
+    if (nextModel) setViewOnly(false)
+    setConnReq(c => ({ ...c, key: c.key + 1, view: nextModel ? false : c.view, resume: c.sessionId ? true : c.resume }))
   }
 
   const doRename = async (s) => {
