@@ -289,12 +289,14 @@ export default function TerminalPage() {
     // images upload → their absolute path is typed in; plain text is sent verbatim.
     const onTermPaste = async (e) => {
       if (disposed || !e.clipboardData) return
-      const items = Array.from(e.clipboardData.items || [])
-      const imgFiles = items.filter((it) => it.kind === 'file' && it.type?.startsWith('image/'))
-        .map((it) => it.getAsFile()).filter(Boolean)
-      if (imgFiles.length) {
+      let files = Array.from(e.clipboardData.files || [])
+      if (!files.length) {
+        files = Array.from(e.clipboardData.items || [])
+          .filter((it) => it.kind === 'file').map((it) => it.getAsFile()).filter(Boolean)
+      }
+      if (files.length) {
         e.preventDefault(); e.stopPropagation()
-        for (const f of imgFiles) {
+        for (const f of files) {
           try {
             const r = await uploadFile(f)
             if (r?.success && r.path && wsRef.current?.readyState === 1)
@@ -376,7 +378,7 @@ export default function TerminalPage() {
     // /uploads/<file> reference into a thumbnail and hides the raw path text.
     let toSend = text
     const paths = attachments.map(a => a.path).filter(Boolean)
-    if (paths.length) toSend = `${text || 'Please review the attached image(s).'} ${paths.join(' ')}`
+    if (paths.length) toSend = `${text || 'Please review the attached file(s).'} ${paths.join(' ')}`
     wsRef.current.send(JSON.stringify({ type: 'input', data: toSend }))
     // Small gap so the TUI commits the (bracket-pasted) input before the submit.
     setTimeout(() => { try { wsRef.current?.send(JSON.stringify({ type: 'input', data: '\r' })) } catch {} }, 60)
@@ -397,20 +399,23 @@ export default function TerminalPage() {
     wsRef.current.send(JSON.stringify({ type: 'input', data: text }))
     setTimeout(() => { try { wsRef.current?.send(JSON.stringify({ type: 'input', data: '\r' })) } catch {} }, 60)
   }
-  // Upload one or more image files and stage them as attachments.
+  // Upload one or more files of any type (images, md, doc, xlsx, pdf, …) and
+  // stage them as attachments. Images get a blob thumbnail; everything else
+  // shows a file chip. All are handed to Claude by absolute path on send.
   const addFiles = async (files) => {
-    const imgs = Array.from(files || []).filter(f => f.type?.startsWith('image/'))
-    if (!imgs.length) return
+    const list = Array.from(files || [])
+    if (!list.length) return
     setUploading(true)
-    for (const f of imgs) {
+    for (const f of list) {
+      const isImage = f.type?.startsWith('image/')
       // Local blob preview renders instantly and reliably (V1 does the same);
       // the server url/path are kept for sending + history thumbnails.
-      const previewUrl = URL.createObjectURL(f)
+      const previewUrl = isImage ? URL.createObjectURL(f) : null
       try {
         const r = await uploadFile(f)
-        if (r?.success) setAttachments(a => [...a, { previewUrl, url: r.url, fileName: r.fileName, path: r.path, name: f.name }])
-        else URL.revokeObjectURL(previewUrl)
-      } catch (_) { URL.revokeObjectURL(previewUrl) }
+        if (r?.success) setAttachments(a => [...a, { previewUrl, url: r.url, fileName: r.fileName, path: r.path, name: f.name, isImage }])
+        else if (previewUrl) URL.revokeObjectURL(previewUrl)
+      } catch (_) { if (previewUrl) URL.revokeObjectURL(previewUrl) }
     }
     setUploading(false)
   }
@@ -1169,15 +1174,15 @@ function ChatComposer({ draft, setDraft, onKeyDown, onSend, disabled, inputRef, 
   const locked = disabled || working
   const canSend = !locked && (draft.trim() || attachments.length > 0)
   const onPaste = (e) => {
-    // Screenshots land in clipboardData.files in some browsers and only in
-    // .items in others — check both so pasting an image always stages it.
+    // Files land in clipboardData.files in some browsers and only in .items in
+    // others — check both so pasting any file (image, doc, xlsx, …) stages it.
     // Plain text falls through to the textarea's native paste.
     const cd = e.clipboardData
     if (!cd) return
-    let files = Array.from(cd.files || []).filter(f => f.type?.startsWith('image/'))
+    let files = Array.from(cd.files || [])
     if (!files.length) {
       files = Array.from(cd.items || [])
-        .filter(it => it.kind === 'file' && it.type?.startsWith('image/'))
+        .filter(it => it.kind === 'file')
         .map(it => it.getAsFile()).filter(Boolean)
     }
     if (files.length) { e.preventDefault(); onAddFiles(files) }
@@ -1192,16 +1197,27 @@ function ChatComposer({ draft, setDraft, onKeyDown, onSend, disabled, inputRef, 
         {/* Staged image attachments */}
         {(attachments.length > 0 || uploading) && (
           <div className="flex flex-wrap gap-2 mb-2">
-            {attachments.map((a, i) => (
-              <div key={i} className="relative group rounded-lg overflow-hidden" style={{ width: 56, height: 56, border: '1px solid var(--c-border)', backgroundColor: 'var(--c-surface-2)' }}>
-                <img src={a.previewUrl || a.url} alt={a.name || 'image'} className="w-full h-full" style={{ objectFit: 'cover' }} />
-                <button onClick={() => onRemoveAttachment(i)} title="Remove"
-                  className="absolute top-0.5 right-0.5 flex items-center justify-center rounded-full cursor-pointer"
-                  style={{ width: 16, height: 16, backgroundColor: 'rgba(0,0,0,0.65)', color: '#fff' }}>
-                  <X size={10} />
-                </button>
-              </div>
-            ))}
+            {attachments.map((a, i) => {
+              const isImage = a.isImage ?? (a.previewUrl != null)
+              return (
+                <div key={i} className="relative group rounded-lg overflow-hidden flex items-center"
+                  style={{ height: 56, width: isImage ? 56 : 'auto', maxWidth: 180, border: '1px solid var(--c-border)', backgroundColor: 'var(--c-surface-2)' }}>
+                  {isImage ? (
+                    <img src={a.previewUrl || a.url} alt={a.name || 'image'} className="w-full h-full" style={{ objectFit: 'cover' }} />
+                  ) : (
+                    <div className="flex items-center gap-1.5 px-2.5 py-1 min-w-0" title={a.name || a.fileName}>
+                      <FileText size={16} className="shrink-0" style={{ color: 'var(--c-text-secondary)' }} />
+                      <span className="truncate text-[11px]" style={{ color: 'var(--c-text)', maxWidth: 120 }}>{a.name || a.fileName}</span>
+                    </div>
+                  )}
+                  <button onClick={() => onRemoveAttachment(i)} title="Remove"
+                    className="absolute top-0.5 right-0.5 flex items-center justify-center rounded-full cursor-pointer"
+                    style={{ width: 16, height: 16, backgroundColor: 'rgba(0,0,0,0.65)', color: '#fff' }}>
+                    <X size={10} />
+                  </button>
+                </div>
+              )
+            })}
             {uploading && (
               <div className="flex items-center justify-center rounded-lg" style={{ width: 56, height: 56, border: '1px dashed var(--c-border)', color: 'var(--c-text-muted)' }}>
                 <Loader2 size={16} className="animate-spin" />
@@ -1213,9 +1229,9 @@ function ChatComposer({ draft, setDraft, onKeyDown, onSend, disabled, inputRef, 
           onDragOver={(e) => { e.preventDefault(); if (!locked) setDragOver(true) }}
           onDragLeave={() => setDragOver(false)} onDrop={locked ? undefined : onDrop}
           style={{ backgroundColor: 'var(--c-surface)', border: `1px solid ${dragOver ? 'var(--c-accent)' : 'var(--c-border)'}` }}>
-          <input ref={fileRef} type="file" accept="image/*" multiple hidden
+          <input ref={fileRef} type="file" multiple hidden
             onChange={(e) => { onAddFiles(e.target.files); e.target.value = '' }} />
-          <button onClick={() => fileRef.current?.click()} disabled={locked} title="Attach images"
+          <button onClick={() => fileRef.current?.click()} disabled={locked} title="Attach files"
             className="flex items-center justify-center rounded-lg cursor-pointer shrink-0 transition-colors"
             style={{ width: 32, height: 32, color: 'var(--c-text-secondary)', opacity: locked ? 0.4 : 1 }}
             onMouseEnter={(e) => { if (!locked) e.currentTarget.style.backgroundColor = 'var(--c-surface-2)' }}
@@ -1225,7 +1241,7 @@ function ChatComposer({ draft, setDraft, onKeyDown, onSend, disabled, inputRef, 
           <textarea
             ref={inputRef} value={draft} rows={1} onKeyDown={onKeyDown} onPaste={onPaste}
             onChange={(e) => { setDraft(e.target.value); const t = e.target; t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 160) + 'px' }}
-            placeholder={disabled ? 'Session not live — switch to a running session to chat' : working ? 'Claude is working… press Stop to interrupt' : 'Message Claude…  (Enter to send, paste or drop images)'}
+            placeholder={disabled ? 'Session not live — switch to a running session to chat' : working ? 'Claude is working… press Stop to interrupt' : 'Message Claude…  (Enter to send, paste or drop files)'}
             disabled={locked}
             className="flex-1 bg-transparent outline-none resize-none text-sm py-1.5"
             style={{ color: 'var(--c-text)', maxHeight: 160, lineHeight: 1.5 }}

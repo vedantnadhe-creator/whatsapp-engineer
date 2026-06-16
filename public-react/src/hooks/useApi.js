@@ -552,8 +552,10 @@ export async function uploadFile(file) {
   return apiFetch('/api/upload-file', {
     method: 'POST',
     headers: {
-      'x-file-name': file.name,
-      'x-mime-type': file.type,
+      // Encode: arbitrary file names (docs/xlsx) often have spaces/unicode that
+      // break raw HTTP headers. The server decodeURIComponent()s this back.
+      'x-file-name': encodeURIComponent(file.name),
+      'x-mime-type': file.type || 'application/octet-stream',
     },
     body: file,
   });
