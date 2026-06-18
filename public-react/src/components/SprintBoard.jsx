@@ -2,8 +2,9 @@ import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import {
   Plus, Play, MessageSquare, Bug, FlaskConical, Trash2, ChevronDown, ChevronRight,
   GitFork, Check, X, Loader2, FileText, RefreshCw, CornerDownRight, ArrowLeft, Archive, ArchiveRestore,
-  Paperclip, ListTree, FileSpreadsheet, Download, Upload, ExternalLink,
+  Paperclip, ListTree, FileSpreadsheet, Download, Upload, ExternalLink, Sun, Moon,
 } from 'lucide-react'
+import { useTheme } from '../context/ThemeContext'
 import {
   startFeatureSession, getBugs, createBug, updateBug, deleteBug, forkBug,
   getTestCases, createTestCase, updateTestCase, deleteTestCase, generateTestCases,
@@ -139,6 +140,10 @@ export default function SprintBoard({
   // Sprint board is fully open to every role (testers included) per product decision:
   // anyone can create sprints/tickets/subtasks, edit, archive, delete and start sessions.
   const isTester = false
+
+  // Full-screen Sprint view hides the sidebar (where the global theme toggle lives),
+  // so expose a light/dark switch on the board itself.
+  const { theme, toggle: toggleTheme } = useTheme()
 
   // Default to the first active sprint on first load.
   useEffect(() => {
@@ -342,6 +347,13 @@ export default function SprintBoard({
           )}
 
           <div className="flex-1" />
+          <button
+            onClick={toggleTheme}
+            title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+            aria-label="Toggle light/dark mode"
+            className="text-[11px] px-2 py-1 rounded cursor-pointer flex items-center gap-1"
+            style={{ backgroundColor: 'var(--c-surface)', color: 'var(--c-text-secondary)', border: '1px solid var(--c-border)' }}
+          >{theme === 'dark' ? <Sun size={13} /> : <Moon size={13} />}</button>
           {activeSprint && (
             <>
               <button
