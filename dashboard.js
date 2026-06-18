@@ -1147,6 +1147,16 @@ Do NOT ask for confirmation — proceed through each step automatically. If any 
 
     // Open in Sheet — return a live link to this sprint's sheet, refreshed with
     // current board data. Reuses one Google Sheet per sprint; falls back to .xlsx.
+    // Write grids to an .xlsx in /uploads and return its link (graceful fallback
+    // when Google Sheets is not configured, or a Google call fails — e.g. the SA
+    // has no Drive storage and no Shared Drive is set).
+    const xlsxFallback = (res, grids, namePrefix) => {
+        const buf = gridsToXlsxBuffer(grids);
+        const fileName = `${namePrefix}-${Date.now()}.xlsx`;
+        fs.writeFileSync(path.join(uploadsDir, fileName), buf);
+        return res.json({ url: `/api/uploads/${fileName}`, mode: 'xlsx' });
+    };
+
     app.get('/api/sprints/:id/sheet', requireAuth, async (req, res) => {
         try {
             const sprint = store.getSprint(req.params.id);
@@ -1154,22 +1164,22 @@ Do NOT ask for confirmation — proceed through each step automatically. If any 
             const grids = buildSprintGrids(store, sprint.id);
 
             if (sheetsService.isConfigured()) {
-                const saved = safeParse(store.getSetting(`sprint_sheet:${sprint.id}`));
-                if (saved?.spreadsheetId) {
-                    try {
-                        const url = await sheetsService.updateSpreadsheetFromGrids(saved.spreadsheetId, grids);
-                        return res.json({ url, mode: 'gsheet' });
-                    } catch (_) { /* sheet was deleted — fall through and recreate */ }
+                try {
+                    const saved = safeParse(store.getSetting(`sprint_sheet:${sprint.id}`));
+                    if (saved?.spreadsheetId) {
+                        try {
+                            const url = await sheetsService.updateSpreadsheetFromGrids(saved.spreadsheetId, grids);
+                            return res.json({ url, mode: 'gsheet' });
+                        } catch (_) { /* sheet was deleted — fall through and recreate */ }
+                    }
+                    const created = await sheetsService.createSpreadsheetFromGrids(`${sprint.name} — Sprint Board`, grids);
+                    store.setSetting(`sprint_sheet:${sprint.id}`, JSON.stringify({ spreadsheetId: created.spreadsheetId, url: created.url }));
+                    return res.json({ url: created.url, mode: 'gsheet' });
+                } catch (err) {
+                    console.error('[sheets] open-in-sheet failed, falling back to xlsx:', err?.message || err);
                 }
-                const created = await sheetsService.createSpreadsheetFromGrids(`${sprint.name} — Sprint Board`, grids);
-                store.setSetting(`sprint_sheet:${sprint.id}`, JSON.stringify({ spreadsheetId: created.spreadsheetId, url: created.url }));
-                return res.json({ url: created.url, mode: 'gsheet' });
             }
-
-            const buf = gridsToXlsxBuffer(grids);
-            const fileName = `sprint-${sprint.id}-${Date.now()}.xlsx`;
-            fs.writeFileSync(path.join(uploadsDir, fileName), buf);
-            return res.json({ url: `/api/uploads/${fileName}`, mode: 'xlsx' });
+            return xlsxFallback(res, grids, `sprint-${sprint.id}`);
         } catch (err) { res.status(500).json({ error: err.message }); }
     });
 
@@ -1178,13 +1188,14 @@ Do NOT ask for confirmation — proceed through each step automatically. If any 
         try {
             const grids = buildTemplateGrids();
             if (sheetsService.isConfigured()) {
-                const created = await sheetsService.createSpreadsheetFromGrids('Sprint Board — Template', grids);
-                return res.json({ url: created.url, mode: 'gsheet' });
+                try {
+                    const created = await sheetsService.createSpreadsheetFromGrids('Sprint Board — Template', grids);
+                    return res.json({ url: created.url, mode: 'gsheet' });
+                } catch (err) {
+                    console.error('[sheets] template failed, falling back to xlsx:', err?.message || err);
+                }
             }
-            const buf = gridsToXlsxBuffer(grids);
-            const fileName = `sprint-template-${Date.now()}.xlsx`;
-            fs.writeFileSync(path.join(uploadsDir, fileName), buf);
-            return res.json({ url: `/api/uploads/${fileName}`, mode: 'xlsx' });
+            return xlsxFallback(res, grids, 'sprint-template');
         } catch (err) { res.status(500).json({ error: err.message }); }
     });
 
