@@ -17,6 +17,8 @@ node_modules/
 # Google service-account credentials (never commit secrets)
 google-sa.json
 *service-account*.json
+*service_account*.json
+service_account_live.json
 *-sa.json
 *.credentials.json
 gcp-*.json
