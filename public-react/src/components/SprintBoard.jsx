@@ -8,7 +8,7 @@ import {
   startFeatureSession, getBugs, createBug, updateBug, deleteBug, forkBug,
   getTestCases, createTestCase, updateTestCase, deleteTestCase, generateTestCases,
   getSubtasks, uploadFile,
-  openSprintSheet, getSprintTemplate, importSprintSheet,
+  openSprintSheet, getSprintTemplate, importSprintSheet, apiUrl,
 } from '../hooks/useApi'
 
 // ── Option sets ────────────────────────────────────────────────────────────
@@ -217,7 +217,7 @@ export default function SprintBoard({
     setSheetBusy('open'); setSheetMsg(null)
     try {
       const r = await openSprintSheet(activeSprintId)
-      if (r?.url) window.open(r.url, '_blank', 'noopener')
+      if (r?.url) window.open(apiUrl(r.url), '_blank', 'noopener')
       if (r?.mode === 'xlsx') setSheetMsg({ kind: 'info', text: 'Google Sheets not configured yet — downloaded an .xlsx instead.' })
     } catch (e) {
       setSheetMsg({ kind: 'error', text: e.message || 'Could not open sheet.' })
@@ -229,7 +229,7 @@ export default function SprintBoard({
     setSheetBusy('template'); setSheetMsg(null)
     try {
       const r = await getSprintTemplate(activeSprintId)
-      if (r?.url) window.open(r.url, '_blank', 'noopener')
+      if (r?.url) window.open(apiUrl(r.url), '_blank', 'noopener')
     } catch (e) {
       setSheetMsg({ kind: 'error', text: e.message || 'Could not create template.' })
     } finally { setSheetBusy(null) }

@@ -4,7 +4,11 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-const API_BASE = window.location.pathname.startsWith('/sessions') ? '/sessions' : '';
+export const API_BASE = window.location.pathname.startsWith('/sessions') ? '/sessions' : '';
+
+// Resolve a server-relative path (e.g. /api/uploads/x.xlsx) to a full URL that
+// respects the base path. Absolute URLs (http…) are returned untouched.
+export const apiUrl = (p) => (typeof p === 'string' && p.startsWith('http')) ? p : API_BASE + p;
 
 // Dedup: reject duplicate in-flight POST/PUT/DELETE requests to the same URL
 const inflightMutations = new Map();
