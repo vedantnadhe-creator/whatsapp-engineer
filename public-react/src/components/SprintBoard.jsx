@@ -109,6 +109,29 @@ function EditText({ value, onCommit, placeholder, className = '', mono = false, 
   )
 }
 
+// Like EditText but wraps long titles across lines and grows to fit (Feature / Story cell).
+function EditTitle({ value, onCommit, placeholder }) {
+  const [v, setV] = useState(value ?? '')
+  const ref = useRef(null)
+  useEffect(() => { setV(value ?? '') }, [value])
+  const autosize = () => { const el = ref.current; if (el) { el.style.height = 'auto'; el.style.height = `${el.scrollHeight}px` } }
+  useEffect(() => { autosize() }, [v])
+  const commit = () => { const t = (v ?? '').trim(); if (t && t !== (value ?? '')) onCommit(t); else setV(value ?? '') }
+  return (
+    <textarea
+      ref={ref}
+      rows={1}
+      value={v}
+      placeholder={placeholder}
+      onChange={(e) => setV(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); ref.current?.blur() } if (e.key === 'Escape') { setV(value ?? ''); ref.current?.blur() } }}
+      className="bg-transparent outline-none w-full text-xs px-1 py-0.5 rounded resize-none leading-relaxed whitespace-pre-wrap break-words focus:bg-[var(--c-surface-2)]"
+      style={{ color: 'var(--c-text)', overflow: 'hidden' }}
+    />
+  )
+}
+
 function StatusSelect({ value, options, onChange }) {
   const meta = options.find(o => o.v === (value || '')) || options[0]
   const tinted = meta.color.startsWith('#')
@@ -556,7 +579,7 @@ function FeatureRow({ f, idx, members, isTester, expanded, isBacklogView, onTogg
           </div>
         </td>
         <td className="px-2 py-2" style={cellBorder}><EditText value={f.platform} list="platform-suggestions" onCommit={(v) => upd({ platform: v })} placeholder="—" /></td>
-        <td className="px-2 py-2 min-w-[280px]" style={cellBorder}><EditText value={f.title} onCommit={(v) => v.trim() && upd({ title: v.trim() })} placeholder="Feature title" /></td>
+        <td className="px-2 py-2 min-w-[280px] max-w-[420px] align-top" style={cellBorder}><EditTitle value={f.title} onCommit={(v) => upd({ title: v })} placeholder="Feature title" /></td>
         <td className="px-2 py-2" style={cellBorder}>
           <PillSelect value={f.type || 'feature'} onChange={(v) => upd({ type: v })} options={TYPES} fg={TYPE_PILL[f.type || 'feature'] || TYPE_PILL.feature} />
         </td>
