@@ -594,6 +594,26 @@ export async function importSprintSheet(sprintId, fileOrUrl, { withAgent = true 
   });
 }
 
+// Standalone issue delete (used for subtasks, which don't get the useIssues hook).
+export async function deleteIssue(id) {
+  return apiFetch(`/api/issues/${id}`, { method: 'DELETE' });
+}
+
+// Upload a bug attachment to S3 → { name, key, contentType }.
+export async function uploadAttachment(file) {
+  return apiFetch('/api/attachments', {
+    method: 'POST',
+    headers: {
+      'x-file-name': encodeURIComponent(file.name),
+      'x-mime-type': file.type || 'application/octet-stream',
+    },
+    body: file,
+  });
+}
+
+// Resolve a stored attachment key to a viewable URL (base-path aware).
+export const attachmentUrl = (key) => apiUrl(`/api/attachments?key=${encodeURIComponent(key)}`);
+
 export async function requestAccess(sessionId, note) {
   return apiFetch(`/api/sessions/${sessionId}/request-access`, {
     method: 'POST',

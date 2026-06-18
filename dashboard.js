@@ -7,7 +7,7 @@ import { fileURLToPath } from 'url';
 import fs from 'fs';
 import http from 'http';
 import { WebSocketServer } from 'ws';
-import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
 import config from './config.js';
 import { attachTerminalServer } from './term_server.js';
 // orchestrator import removed — Claude prompt is now file-based (CLAUDE.md)
@@ -1575,12 +1575,41 @@ The user may ask follow-up questions about the changelog — answer based on the
 
     app.post('/api/issues/:id/bugs', requireAuth, (req, res) => {
         try {
-            const { title, description, severity } = req.body;
+            const { title, description, severity, attachments } = req.body;
             if (!title) return res.status(400).json({ error: 'title is required' });
-            const bug = store.createBug({ issueId: req.params.id, title, description: description || '', severity: severity === 'critical' ? 'critical' : 'normal', createdBy: req.user.id });
+            const bug = store.createBug({ issueId: req.params.id, title, description: description || '', severity: severity === 'critical' ? 'critical' : 'normal', createdBy: req.user.id, attachments: Array.isArray(attachments) ? attachments : [] });
             wsBroadcast('issue_updated', { issue: store.getIssue(req.params.id) });
             res.json(bug);
         } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    // Upload a bug-report attachment to the shared S3 bucket. Returns a descriptor
+    // { name, key, contentType } stored on the bug; served back via GET /api/attachments.
+    app.post('/api/attachments', requireAuth, uploadHandler, async (req, res) => {
+        try {
+            if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: 'No file uploaded' });
+            const rawName = req.headers['x-file-name'] ? decodeURIComponent(req.headers['x-file-name']) : 'attachment';
+            const contentType = req.headers['x-mime-type'] || 'application/octet-stream';
+            const safe = rawName.replace(/[^\w.\- ]+/g, '_').slice(0, 120);
+            const key = `bug-attachments/${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}-${safe}`;
+            await s3.send(new PutObjectCommand({ Bucket: S3_BUCKET, Key: key, Body: req.body, ContentType: contentType }));
+            res.json({ name: rawName, key, contentType });
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    // Stream an attachment back from S3 (auth-protected; keys are opaque).
+    app.get('/api/attachments', requireAuth, async (req, res) => {
+        try {
+            const key = String(req.query.key || '');
+            if (!key.startsWith('bug-attachments/')) return res.status(400).json({ error: 'Invalid key' });
+            const resp = await s3.send(new GetObjectCommand({ Bucket: S3_BUCKET, Key: key }));
+            if (resp.ContentType) res.setHeader('Content-Type', resp.ContentType);
+            res.setHeader('Content-Disposition', `inline; filename="${key.split('-').slice(-1)[0]}"`);
+            resp.Body.pipe(res);
+        } catch (err) {
+            if (err.name === 'NoSuchKey' || err.$metadata?.httpStatusCode === 404) return res.status(404).json({ error: 'Not found' });
+            res.status(500).json({ error: err.message });
+        }
     });
 
     app.put('/api/bugs/:id', requireAuth, (req, res) => {

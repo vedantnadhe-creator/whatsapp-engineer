@@ -10,7 +10,12 @@ import {
   getTestCases, createTestCase, updateTestCase, deleteTestCase, generateTestCases,
   getSubtasks, uploadFile,
   openSprintSheet, getSprintTemplate, importSprintSheet, apiUrl,
+  deleteIssue, uploadAttachment, attachmentUrl,
 } from '../hooks/useApi'
+
+// Prefer a person's display name; fall back to the email's local part, never the raw email.
+// (/api/users returns camelCase `displayName`; other shapes use `display_name`.)
+const memberName = (m) => m?.display_name || m?.displayName || (m?.email ? m.email.split('@')[0] : '') || m?.id || ''
 
 // ── Option sets ────────────────────────────────────────────────────────────
 const DEV_STATUS = [
@@ -42,10 +47,16 @@ const qaStatusMeta = (v) => QA_STATUS.find(s => s.v === (v || '')) || QA_STATUS[
 //   To Do / In Progress → 0
 function featureCompletion(f) {
   if (!f) return 0
+  const open = f.open_bugs || 0
   const qa = String(f.qa_status || '').toLowerCase()
+  // Open bugs cap completion — a feature with live bugs can never read "done".
+  if (open > 0) {
+    if (f.dev_status === 'todo') return 0
+    return (f.critical_bugs || 0) > 0 ? 40 : 50
+  }
   if (qa === 'pass' || qa === 'passed' || qa === 'tested') return 100
   if (f.dev_status === 'done') return 100
-  if (f.dev_status === 'dev_completed') return (f.open_bugs || 0) > 0 ? 50 : 70
+  if (f.dev_status === 'dev_completed') return 70
   return 0
 }
 const completionColor = (pct) => pct >= 100 ? '#4ade80' : pct >= 70 ? '#60a5fa' : pct >= 50 ? '#fbbf24' : 'var(--c-text-muted)'
@@ -69,10 +80,10 @@ function PillSelect({ value, onChange, options, fg, placeholder = '—', disable
       onChange={(e) => onChange(e.target.value)}
       disabled={disabled}
       className="text-[11px] font-medium rounded-full px-2 py-0.5 cursor-pointer outline-none border-0 appearance-none text-center disabled:opacity-60"
-      style={{ backgroundColor: value ? fg + '22' : 'var(--c-surface-2)', color: value ? fg : 'var(--c-text-muted)', maxWidth: 130 }}
+      style={{ backgroundColor: value ? fg + '22' : 'var(--c-surface-2)', color: value ? fg : 'var(--c-text-muted)', maxWidth: 200 }}
     >
       {!value && <option value="" style={{ color: 'var(--c-text)', backgroundColor: 'var(--c-surface)' }}>{placeholder}</option>}
-      {options.map(o => <option key={o.v ?? o.id} value={o.v ?? o.id} style={{ color: 'var(--c-text)', backgroundColor: 'var(--c-surface)' }}>{o.label ?? o.display_name ?? o.email}</option>)}
+      {options.map(o => <option key={o.v ?? o.id} value={o.v ?? o.id} style={{ color: 'var(--c-text)', backgroundColor: 'var(--c-surface)' }}>{o.label ?? memberName(o)}</option>)}
     </select>
   )
 }
@@ -356,6 +367,16 @@ export default function SprintBoard({
           >{theme === 'dark' ? <Sun size={13} /> : <Moon size={13} />}</button>
           {activeSprint && (
             <>
+              <label className="flex items-center gap-1 text-[11px] px-2 py-1 rounded" style={{ backgroundColor: 'var(--c-surface)', border: '1px solid var(--c-border)', color: 'var(--c-text-secondary)' }} title="Sprint deadline">
+                <span className="font-medium">Deadline</span>
+                <input
+                  type="date"
+                  value={(activeSprint.end_date || '').slice(0, 10)}
+                  onChange={(e) => onUpdateSprint(activeSprint.id, { end_date: e.target.value || null })}
+                  className="bg-transparent outline-none cursor-pointer"
+                  style={{ color: activeSprint.end_date ? 'var(--c-text)' : 'var(--c-text-muted)' }}
+                />
+              </label>
               <button
                 onClick={() => onUpdateSprint(activeSprint.id, { status: activeSprint.status === 'active' ? 'completed' : 'active' })}
                 disabled={isTester}
@@ -422,7 +443,7 @@ export default function SprintBoard({
         <table className="w-full border-collapse" style={{ minWidth: 1500, borderTop: '1px solid var(--c-border)', borderLeft: '1px solid var(--c-border)' }}>
           <thead className="sticky top-0 z-10">
             <tr className="text-left" style={{ color: 'var(--c-text-secondary)', backgroundColor: 'var(--c-surface)' }}>
-              {['S.NO', 'Platform', 'Feature / Story', 'Type', 'Dev', 'QA Owner', 'Dev Status', 'Deadline', 'TC', 'TC Done', 'QA Status', 'Bugs', 'Crit', 'Done %', 'QA Comments', ''].map((h, i) => (
+              {['S.NO', 'Platform', 'Feature / Story', 'Type', 'Dev', 'QA Owner', 'Dev Status', 'Deadline', 'TC', 'Testing Deadline', 'QA Status', 'Bugs', 'Crit', 'Done %', 'QA Comments', ''].map((h, i) => (
                 <th key={i} className="px-2.5 py-2 font-semibold whitespace-nowrap text-[11px]" style={{ borderBottom: '1px solid var(--c-border)', borderRight: '1px solid var(--c-border)' }}>{h}</th>
               ))}
             </tr>
@@ -559,7 +580,7 @@ function FeatureRow({ f, idx, members, isTester, expanded, isBacklogView, onTogg
         <td className="px-2 py-2 text-center font-mono text-[12px]" style={{ ...cellBorder, color: (f.critical_bugs || 0) > 0 ? '#f87171' : 'var(--c-text-muted)' }}>{f.critical_bugs || 0}</td>
         <td className="px-2 py-2" style={cellBorder}>
           {(() => { const pct = featureCompletion(f); const c = completionColor(pct); return (
-            <div className="flex items-center gap-2 min-w-[78px]" title="Auto: QA Pass 100% · Dev Done 70% · open bug 50%">
+            <div className="flex items-center gap-2 min-w-[78px]" title="Auto: QA Pass / Dev Done 100% · Dev Completed 70% · open bug 50% (40% if critical)">
               <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ backgroundColor: 'var(--c-surface-2)' }}>
                 <div className="h-full rounded-full transition-all" style={{ width: `${pct}%`, backgroundColor: c }} />
               </div>
@@ -582,7 +603,7 @@ function FeatureRow({ f, idx, members, isTester, expanded, isBacklogView, onTogg
       {expanded && (
         <tr>
           <td colSpan={17} style={{ borderBottom: '2px solid var(--c-border)', borderRight: '1px solid var(--c-border)', backgroundColor: 'var(--c-surface)' }}>
-            <FeatureDetail f={f} isTester={isTester} members={members} onCreateIssue={onCreateIssue} onGoToSession={onGoToSession} model={model} refreshIssues={refreshIssues} />
+            <FeatureDetail f={f} isTester={isTester} members={members} onUpdate={upd} onCreateIssue={onCreateIssue} onGoToSession={onGoToSession} model={model} refreshIssues={refreshIssues} />
           </td>
         </tr>
       )}
@@ -602,10 +623,39 @@ function DateCell({ value, onChange }) {
   )
 }
 
+// Full, wrapping, editable description — the row only has room for a snippet, so the
+// complete text lives (and stays readable across lines) here in the drawer.
+function DescriptionBlock({ f, onUpdate }) {
+  const [v, setV] = useState(f.description || '')
+  const ref = useRef(null)
+  useEffect(() => { setV(f.description || '') }, [f.description, f.id])
+  const autosize = () => { const el = ref.current; if (el) { el.style.height = 'auto'; el.style.height = `${el.scrollHeight}px` } }
+  useEffect(() => { autosize() }, [v])
+  const commit = () => { if ((v ?? '') !== (f.description ?? '')) onUpdate({ description: v }) }
+  return (
+    <div>
+      <div className="flex items-center gap-2 mb-2">
+        <FileText size={14} style={{ color: 'var(--c-accent)' }} />
+        <span className="text-xs font-semibold" style={{ color: 'var(--c-text)' }}>Description</span>
+      </div>
+      <textarea
+        ref={ref}
+        value={v}
+        onChange={(e) => setV(e.target.value)}
+        onBlur={commit}
+        placeholder="Add a description… (wraps across lines, grows to fit)"
+        className="w-full text-xs px-3 py-2 rounded outline-none resize-none leading-relaxed whitespace-pre-wrap break-words"
+        style={{ backgroundColor: 'var(--c-bg)', color: 'var(--c-text)', border: '1px solid var(--c-border)', minHeight: 60 }}
+      />
+    </div>
+  )
+}
+
 // ── Detail drawer: subtasks + bugs + test cases ─────────────────────────────
-function FeatureDetail({ f, isTester, members, onCreateIssue, onGoToSession, model, refreshIssues }) {
+function FeatureDetail({ f, isTester, members, onUpdate, onCreateIssue, onGoToSession, model, refreshIssues }) {
   return (
     <div className="px-6 py-4 flex flex-col gap-6">
+      <DescriptionBlock f={f} onUpdate={onUpdate} />
       <SubtasksPanel f={f} isTester={isTester} members={members} onCreateIssue={onCreateIssue} onGoToSession={onGoToSession} model={model} refreshIssues={refreshIssues} />
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <BugsPanel f={f} isTester={isTester} onGoToSession={onGoToSession} model={model} refreshIssues={refreshIssues} />
@@ -634,6 +684,10 @@ function SubtasksPanel({ f, isTester, members, onCreateIssue, onGoToSession, mod
     try { const r = await startFeatureSession(sub.id, model); load(); refreshIssues(); if (r?.sessionId) onGoToSession(r.sessionId) }
     finally { setBusy(null) }
   }
+  const remove = async (sub) => {
+    if (!confirm('Delete this subtask?')) return
+    await deleteIssue(sub.id); load(); refreshIssues()
+  }
 
   return (
     <div>
@@ -661,6 +715,7 @@ function SubtasksPanel({ f, isTester, members, onCreateIssue, onGoToSession, mod
               ) : (
                 <button onClick={() => start(s)} disabled={busy === s.id} title="Start session for this subtask" className="p-1 rounded cursor-pointer disabled:opacity-40" style={{ color: '#4ade80' }}>{busy === s.id ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />}</button>
               )}
+              <button onClick={() => remove(s)} title="Delete subtask" className="p-1 rounded cursor-pointer" style={{ color: 'var(--c-text-muted)' }}><Trash2 size={12} /></button>
             </div>
           ))}
         </div>
@@ -669,23 +724,54 @@ function SubtasksPanel({ f, isTester, members, onCreateIssue, onGoToSession, mod
   )
 }
 
+const parseAttachments = (b) => { try { const a = JSON.parse(b.attachments || '[]'); return Array.isArray(a) ? a : [] } catch { return [] } }
+
 function BugsPanel({ f, isTester, onGoToSession, model, refreshIssues }) {
   const [bugs, setBugs] = useState([])
   const [loading, setLoading] = useState(true)
   const [title, setTitle] = useState('')
   const [critical, setCritical] = useState(false)
   const [forking, setForking] = useState(null)
+  const [pendingAtt, setPendingAtt] = useState([]) // attachments staged for the new bug
+  const [attaching, setAttaching] = useState(false)
+  const fileRef = useRef(null)
+  const attachTarget = useRef('new') // 'new' (add row) or a bug id
 
   const load = useCallback(async () => { setLoading(true); try { setBugs(await getBugs(f.id) || []) } finally { setLoading(false) } }, [f.id])
   useEffect(() => { load() }, [load])
 
   const add = async () => {
     if (!title.trim()) return
-    await createBug(f.id, { title: title.trim(), severity: critical ? 'critical' : 'normal' })
-    setTitle(''); setCritical(false); load(); refreshIssues()
+    await createBug(f.id, { title: title.trim(), severity: critical ? 'critical' : 'normal', attachments: pendingAtt })
+    setTitle(''); setCritical(false); setPendingAtt([]); load(); refreshIssues()
   }
   const setStatus = async (b, status) => { await updateBug(b.id, { status }); load(); refreshIssues() }
   const remove = async (b) => { await deleteBug(b.id); load(); refreshIssues() }
+
+  const pickFiles = (target) => { attachTarget.current = target; fileRef.current?.click() }
+  const onFiles = async (fileList) => {
+    const files = Array.from(fileList || [])
+    if (!files.length) return
+    setAttaching(true)
+    try {
+      const uploaded = []
+      for (const file of files) {
+        const d = await uploadAttachment(file)
+        if (d?.key) uploaded.push(d)
+      }
+      const target = attachTarget.current
+      if (target === 'new') {
+        setPendingAtt(prev => [...prev, ...uploaded])
+      } else {
+        const bug = bugs.find(b => b.id === target)
+        const next = [...parseAttachments(bug || {}), ...uploaded]
+        await updateBug(target, { attachments: next }); load()
+      }
+    } finally {
+      setAttaching(false)
+      if (fileRef.current) fileRef.current.value = ''
+    }
+  }
   // action: 'fork' → new session off the dev session · 'send' → add to the current dev session
   const sendToFix = async (b, action) => {
     setForking(b.id)
@@ -700,41 +786,68 @@ function BugsPanel({ f, isTester, onGoToSession, model, refreshIssues }) {
         <span className="text-xs font-semibold" style={{ color: 'var(--c-text)' }}>QA Bugs</span>
         <span className="text-[10px] font-mono" style={{ color: 'var(--c-text-muted)' }}>{bugs.filter(b => b.status !== 'fixed' && b.status !== 'wont_fix').length} open</span>
       </div>
-      <div className="flex items-center gap-2 mb-2">
-        <input value={title} onChange={e => setTitle(e.target.value)} onKeyDown={e => e.key === 'Enter' && add()} placeholder="Describe a bug QA found…" className="flex-1 text-xs px-2 py-1.5 rounded outline-none" style={{ backgroundColor: 'var(--c-bg)', color: 'var(--c-text)', border: '1px solid var(--c-border)' }} />
-        <label className="flex items-center gap-1 text-[10px] cursor-pointer" style={{ color: critical ? '#ef4444' : 'var(--c-text-muted)' }}>
-          <input type="checkbox" checked={critical} onChange={e => setCritical(e.target.checked)} /> Critical
-        </label>
-        <button onClick={add} className="text-xs px-2 py-1.5 rounded cursor-pointer" style={{ backgroundColor: 'var(--c-accent)', color: '#fff' }}><Plus size={12} /></button>
+      <div className="flex flex-col gap-1.5 mb-2">
+        <div className="flex items-center gap-2">
+          <input value={title} onChange={e => setTitle(e.target.value)} onKeyDown={e => e.key === 'Enter' && add()} placeholder="Describe a bug QA found…" className="flex-1 text-xs px-2 py-1.5 rounded outline-none" style={{ backgroundColor: 'var(--c-bg)', color: 'var(--c-text)', border: '1px solid var(--c-border)' }} />
+          <label className="flex items-center gap-1 text-[10px] cursor-pointer" style={{ color: critical ? '#ef4444' : 'var(--c-text-muted)' }}>
+            <input type="checkbox" checked={critical} onChange={e => setCritical(e.target.checked)} /> Critical
+          </label>
+          <button onClick={() => pickFiles('new')} disabled={attaching} title="Attach screenshots / files" className="text-xs px-2 py-1.5 rounded cursor-pointer disabled:opacity-50" style={{ backgroundColor: 'var(--c-surface)', color: 'var(--c-text-secondary)', border: '1px solid var(--c-border)' }}>{attaching ? <Loader2 size={12} className="animate-spin" /> : <Paperclip size={12} />}</button>
+          <button onClick={add} className="text-xs px-2 py-1.5 rounded cursor-pointer" style={{ backgroundColor: 'var(--c-accent)', color: '#fff' }}><Plus size={12} /></button>
+        </div>
+        {pendingAtt.length > 0 && (
+          <div className="flex flex-wrap gap-1">
+            {pendingAtt.map((a, i) => (
+              <span key={i} className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full" style={{ backgroundColor: 'var(--c-surface-2)', color: 'var(--c-text-secondary)' }}>
+                <Paperclip size={10} />{a.name}
+                <X size={10} className="cursor-pointer" onClick={() => setPendingAtt(prev => prev.filter((_, j) => j !== i))} />
+              </span>
+            ))}
+          </div>
+        )}
       </div>
+      <input ref={fileRef} type="file" multiple className="hidden" onChange={e => onFiles(e.target.files)} />
       {loading ? <div className="text-[11px]" style={{ color: 'var(--c-text-muted)' }}>Loading…</div> : (
         <div className="flex flex-col gap-1">
           {bugs.length === 0 && <div className="text-[11px]" style={{ color: 'var(--c-text-muted)' }}>No bugs logged.</div>}
           {bugs.map(b => {
             const fixed = b.status === 'fixed' || b.status === 'wont_fix'
+            const atts = parseAttachments(b)
             return (
-              <div key={b.id} className="flex items-center gap-2 px-2 py-1.5 rounded" style={{ backgroundColor: 'var(--c-bg)', border: '1px solid var(--c-border)' }}>
-                {b.severity === 'critical' && <span className="text-[9px] px-1 rounded font-bold" style={{ backgroundColor: '#ef444422', color: '#ef4444' }}>CRIT</span>}
-                <span className="flex-1 text-xs" style={{ color: 'var(--c-text)', textDecoration: fixed ? 'line-through' : 'none', opacity: fixed ? 0.5 : 1 }}>{b.title}</span>
-                <select value={b.status} onChange={e => setStatus(b, e.target.value)} className="text-[10px] rounded px-1 py-0.5 outline-none cursor-pointer" style={{ backgroundColor: 'var(--c-surface)', color: 'var(--c-text-secondary)', border: '1px solid var(--c-border)' }}>
-                  <option value="open">Open</option>
-                  <option value="fixing">Fixing</option>
-                  <option value="fixed">Fixed</option>
-                  <option value="wont_fix">Won't fix</option>
-                </select>
-                {b.fix_session_id ? (
-                  <button onClick={() => onGoToSession(b.fix_session_id)} title="Open fix session" className="p-1 rounded cursor-pointer" style={{ color: 'var(--c-accent)' }}><MessageSquare size={12} /></button>
-                ) : forking === b.id ? (
-                  <span className="p-1"><Loader2 size={12} className="animate-spin" style={{ color: 'var(--c-text-secondary)' }} /></span>
-                ) : (
-                  <>
-                    {f.session_id && (
-                      <button onClick={() => sendToFix(b, 'send')} title="Add to the current dev session (keep one session)" className="p-1 rounded cursor-pointer" style={{ color: 'var(--c-accent)' }}><CornerDownRight size={12} /></button>
-                    )}
-                    <button onClick={() => sendToFix(b, 'fork')} title="Fork a new session to fix this bug" className="p-1 rounded cursor-pointer" style={{ color: 'var(--c-text-secondary)' }}><GitFork size={12} /></button>
-                  </>
+              <div key={b.id} className="flex flex-col gap-1 px-2 py-1.5 rounded" style={{ backgroundColor: 'var(--c-bg)', border: '1px solid var(--c-border)' }}>
+                <div className="flex items-center gap-2">
+                  {b.severity === 'critical' && <span className="text-[9px] px-1 rounded font-bold" style={{ backgroundColor: '#ef444422', color: '#ef4444' }}>CRIT</span>}
+                  <span className="flex-1 text-xs" style={{ color: 'var(--c-text)', textDecoration: fixed ? 'line-through' : 'none', opacity: fixed ? 0.5 : 1 }}>{b.title}</span>
+                  <select value={b.status} onChange={e => setStatus(b, e.target.value)} className="text-[10px] rounded px-1 py-0.5 outline-none cursor-pointer" style={{ backgroundColor: 'var(--c-surface)', color: 'var(--c-text-secondary)', border: '1px solid var(--c-border)' }}>
+                    <option value="open">Open</option>
+                    <option value="fixing">Fixing</option>
+                    <option value="fixed">Fixed</option>
+                    <option value="wont_fix">Won't fix</option>
+                  </select>
+                  <button onClick={() => pickFiles(b.id)} disabled={attaching} title="Attach files to this bug" className="p-1 rounded cursor-pointer disabled:opacity-50" style={{ color: 'var(--c-text-muted)' }}><Paperclip size={12} /></button>
+                  {b.fix_session_id ? (
+                    <button onClick={() => onGoToSession(b.fix_session_id)} title="Open fix session" className="p-1 rounded cursor-pointer" style={{ color: 'var(--c-accent)' }}><MessageSquare size={12} /></button>
+                  ) : forking === b.id ? (
+                    <span className="p-1"><Loader2 size={12} className="animate-spin" style={{ color: 'var(--c-text-secondary)' }} /></span>
+                  ) : (
+                    <>
+                      {f.session_id && (
+                        <button onClick={() => sendToFix(b, 'send')} title="Add to the current dev session (keep one session)" className="p-1 rounded cursor-pointer" style={{ color: 'var(--c-accent)' }}><CornerDownRight size={12} /></button>
+                      )}
+                      <button onClick={() => sendToFix(b, 'fork')} title="Fork a new session to fix this bug" className="p-1 rounded cursor-pointer" style={{ color: 'var(--c-text-secondary)' }}><GitFork size={12} /></button>
+                    </>
+                  )}
+                  <button onClick={() => remove(b)} title="Delete" className="p-1 rounded cursor-pointer" style={{ color: 'var(--c-text-muted)' }}><X size={12} /></button>
+                </div>
+                {atts.length > 0 && (
+                  <div className="flex flex-wrap gap-1 pl-1">
+                    {atts.map((a, i) => (
+                      <a key={i} href={attachmentUrl(a.key)} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full hover:underline" style={{ backgroundColor: 'var(--c-surface-2)', color: 'var(--c-accent)' }}>
+                        <Paperclip size={10} />{a.name}
+                      </a>
+                    ))}
+                  </div>
                 )}
-                <button onClick={() => remove(b)} title="Delete" className="p-1 rounded cursor-pointer" style={{ color: 'var(--c-text-muted)' }}><X size={12} /></button>
               </div>
             )
           })}
@@ -828,16 +941,19 @@ function QuickAddFeature({ sprintId, members, onCreate }) {
       <input value={platform} onChange={e => setPlatform(e.target.value)} list="platform-suggestions" placeholder="Platform" className="text-xs px-2 py-1.5 rounded outline-none w-28" style={{ backgroundColor: 'var(--c-surface)', color: 'var(--c-text)', border: '1px solid var(--c-border)' }} />
       <div className="flex-1 min-w-[220px] flex flex-col gap-1.5">
         <input value={title} onChange={e => setTitle(e.target.value)} onKeyDown={e => e.key === 'Enter' && submit()} placeholder="Title — new feature / story…" className="w-full text-xs px-2 py-1.5 rounded outline-none" style={{ backgroundColor: 'var(--c-surface)', color: 'var(--c-text)', border: '1px solid var(--c-border)' }} />
-        <input value={description} onChange={e => setDescription(e.target.value)} onKeyDown={e => e.key === 'Enter' && submit()} placeholder="Description (optional)…" className="w-full text-xs px-2 py-1.5 rounded outline-none" style={{ backgroundColor: 'var(--c-surface)', color: 'var(--c-text-secondary)', border: '1px solid var(--c-border)' }} />
+        <textarea value={description} onChange={e => setDescription(e.target.value)} placeholder="Description (optional)… (Shift+Enter for newline)" rows={2} className="w-full text-xs px-2 py-1.5 rounded outline-none resize-y leading-relaxed" style={{ backgroundColor: 'var(--c-surface)', color: 'var(--c-text-secondary)', border: '1px solid var(--c-border)', minHeight: 56 }} />
       </div>
       <select value={type} onChange={e => setType(e.target.value)} className="text-xs px-2 py-1.5 rounded outline-none cursor-pointer" style={{ backgroundColor: 'var(--c-surface)', color: 'var(--c-text)', border: '1px solid var(--c-border)' }}>
         {TYPES.map(t => <option key={t.v} value={t.v}>{t.label}</option>)}
       </select>
-      <select value={assignedTo} onChange={e => setAssignedTo(e.target.value)} className="text-xs px-2 py-1.5 rounded outline-none cursor-pointer max-w-[120px]" style={{ backgroundColor: 'var(--c-surface)', color: 'var(--c-text)', border: '1px solid var(--c-border)' }}>
+      <select value={assignedTo} onChange={e => setAssignedTo(e.target.value)} title="Dev" className="text-xs px-2 py-1.5 rounded outline-none cursor-pointer max-w-[160px]" style={{ backgroundColor: 'var(--c-surface)', color: 'var(--c-text)', border: '1px solid var(--c-border)' }}>
         <option value="">Dev…</option>
-        {(members || []).map(m => <option key={m.id} value={m.id}>{m.display_name || m.email}</option>)}
+        {(members || []).filter(m => m.role !== 'tester').map(m => <option key={m.id} value={m.id}>{memberName(m)}</option>)}
       </select>
-      <input value={qaOwner} onChange={e => setQaOwner(e.target.value)} placeholder="QA Owner" className="text-xs px-2 py-1.5 rounded outline-none w-28" style={{ backgroundColor: 'var(--c-surface)', color: 'var(--c-text)', border: '1px solid var(--c-border)' }} />
+      <select value={qaOwner} onChange={e => setQaOwner(e.target.value)} title="QA Owner" className="text-xs px-2 py-1.5 rounded outline-none cursor-pointer max-w-[160px]" style={{ backgroundColor: 'var(--c-surface)', color: 'var(--c-text)', border: '1px solid var(--c-border)' }}>
+        <option value="">QA Owner…</option>
+        {(members || []).filter(m => m.role === 'tester').map(m => <option key={m.id} value={m.id}>{memberName(m)}</option>)}
+      </select>
       <input type="date" value={deadline} onChange={e => setDeadline(e.target.value)} title="Deadline" className="text-xs px-2 py-1.5 rounded outline-none w-36" style={{ backgroundColor: 'var(--c-surface)', color: deadline ? 'var(--c-text)' : 'var(--c-text-muted)', border: '1px solid var(--c-border)' }} />
       <button onClick={submit} className="text-xs px-3 py-1.5 rounded cursor-pointer font-medium" style={{ backgroundColor: 'var(--c-accent)', color: '#fff' }}>Add</button>
       <datalist id="platform-suggestions">{PLATFORM_SUGGESTIONS.map(p => <option key={p} value={p} />)}</datalist>

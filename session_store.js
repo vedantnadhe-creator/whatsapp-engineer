@@ -239,6 +239,8 @@ class SessionStore {
             "ALTER TABLE sessions ADD COLUMN source TEXT DEFAULT 'agent'",
             "ALTER TABLE sessions ADD COLUMN bookmarked INTEGER DEFAULT 0",
             "ALTER TABLE sessions ADD COLUMN parent_session_id TEXT",
+            // Bug report attachments: JSON array of { name, key, contentType } stored in S3.
+            "ALTER TABLE bugs ADD COLUMN attachments TEXT DEFAULT '[]'",
         ];
         for (const sql of safeMigrations) {
             try { this.db.exec(sql); } catch (_) { /* column already exists */ }
@@ -777,10 +779,16 @@ class SessionStore {
     // instant display; keep the two in sync.
     featureCompletion(issue) {
         if (!issue) return 0;
+        const open = issue.open_bugs || 0;
         const qa = String(issue.qa_status || '').toLowerCase();
+        // Open bugs cap completion — a feature with live bugs can never read "done".
+        if (open > 0) {
+            if (issue.dev_status === 'todo') return 0;
+            return (issue.critical_bugs || 0) > 0 ? 40 : 50;
+        }
         if (qa === 'pass' || qa === 'passed' || qa === 'tested') return 100;
         if (issue.dev_status === 'done') return 100;
-        if (issue.dev_status === 'dev_completed') return (issue.open_bugs || 0) > 0 ? 50 : 70;
+        if (issue.dev_status === 'dev_completed') return 70;
         return 0; // todo / in_progress
     }
 
@@ -866,13 +874,32 @@ class SessionStore {
     }
 
     // ── Bugs (per feature) ───────────────────────────────────────
-    createBug({ issueId, title, description = '', severity = 'normal', createdBy = null }) {
+    createBug({ issueId, title, description = '', severity = 'normal', createdBy = null, attachments = [] }) {
         const id = `BUG-${Date.now().toString(36)}${Math.floor(Math.random() * 1000)}`;
         this.db.prepare(
-            `INSERT INTO bugs (id, issue_id, title, description, severity, created_by) VALUES (?, ?, ?, ?, ?, ?)`
-        ).run(id, issueId, title, description, severity, createdBy);
+            `INSERT INTO bugs (id, issue_id, title, description, severity, created_by, attachments) VALUES (?, ?, ?, ?, ?, ?, ?)`
+        ).run(id, issueId, title, description, severity, createdBy, JSON.stringify(Array.isArray(attachments) ? attachments : []));
         this.recountBugs(issueId);
+        // A new (open) bug regresses a feature that QA had already passed / dev marked done:
+        // QA fails it and dev work reverts to "dev completed" so it leaves 100% and is re-queued.
+        this.regressFeatureForOpenBugs(issueId);
         return this.getBug(id);
+    }
+
+    // If a feature has open bugs but was marked QA-pass / Dev-done, pull it back so its
+    // completion drops and the status reflects the regression (item: bugs lower completion).
+    regressFeatureForOpenBugs(issueId) {
+        const issue = this.getIssue(issueId);
+        if (!issue || (issue.open_bugs || 0) === 0) return;
+        const wasPassed = ['pass', 'passed', 'tested'].includes(String(issue.qa_status || '').toLowerCase());
+        const wasDone = issue.dev_status === 'done';
+        if (!wasPassed && !wasDone) return;
+        this.db.prepare(
+            `UPDATE issues SET qa_status = 'fail',
+                    dev_status = CASE WHEN dev_status = 'done' THEN 'dev_completed' ELSE dev_status END,
+                    status = 'in_progress', completed_at = NULL, updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?`
+        ).run(issueId);
     }
 
     getBug(id) { return this.db.prepare('SELECT * FROM bugs WHERE id = ?').get(id); }
@@ -886,17 +913,17 @@ class SessionStore {
     }
 
     updateBug(id, updates) {
-        const allowed = ['title', 'description', 'severity', 'status', 'fix_session_id'];
+        const allowed = ['title', 'description', 'severity', 'status', 'fix_session_id', 'attachments'];
         const sets = [], vals = [];
         for (const [k, v] of Object.entries(updates)) {
-            if (allowed.includes(k)) { sets.push(`${k} = ?`); vals.push(v); }
+            if (allowed.includes(k)) { sets.push(`${k} = ?`); vals.push(k === 'attachments' ? JSON.stringify(Array.isArray(v) ? v : []) : v); }
         }
         if (sets.length === 0) return this.getBug(id);
         sets.push('updated_at = CURRENT_TIMESTAMP');
         vals.push(id);
         this.db.prepare(`UPDATE bugs SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
         const bug = this.getBug(id);
-        if (bug) this.recountBugs(bug.issue_id);
+        if (bug) { this.recountBugs(bug.issue_id); this.regressFeatureForOpenBugs(bug.issue_id); }
         return bug;
     }
 
