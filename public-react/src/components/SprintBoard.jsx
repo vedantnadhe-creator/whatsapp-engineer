@@ -136,7 +136,9 @@ export default function SprintBoard({
   const [sheetMsg, setSheetMsg] = useState(null)    // { kind: 'info'|'error', text, sessionId? }
   const sheetFileRef = useRef(null)
 
-  const isTester = user?.role === 'tester'
+  // Sprint board is fully open to every role (testers included) per product decision:
+  // anyone can create sprints/tickets/subtasks, edit, archive, delete and start sessions.
+  const isTester = false
 
   // Default to the first active sprint on first load.
   useEffect(() => {

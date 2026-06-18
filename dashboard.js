@@ -1224,7 +1224,7 @@ Do NOT ask for confirmation — proceed through each step automatically. If any 
             // Best-effort agent review. Deterministic import above is authoritative.
             // Testers may edit the board but not spawn dev sessions, so skip for them.
             let sessionId = null;
-            const wantAgent = req.query.agent !== '0' && req.user.role !== 'tester';
+            const wantAgent = req.query.agent !== '0';
             if (wantAgent) {
                 try {
                     const phone = req.user.phone || req.user.email || req.user.id;
@@ -1482,7 +1482,6 @@ The user may ask follow-up questions about the changelog — answer based on the
 
     app.delete('/api/issues/:id', requireAuth, (req, res) => {
         try {
-            if (req.user.role === 'tester') return res.status(403).json({ error: 'Testers cannot delete issues' });
             store.deleteIssue(req.params.id);
             wsBroadcast('issue_deleted', { issueId: req.params.id });
             res.json({ success: true });
@@ -1512,8 +1511,6 @@ The user may ask follow-up questions about the changelog — answer based on the
 
     app.post('/api/issues/:id/start-session', requireAuth, async (req, res) => {
         try {
-            // Testers can edit the sprint board but may not spawn dev sessions on its issues.
-            if (req.user.role === 'tester') return res.status(403).json({ error: 'Testers cannot start sessions on sprint issues.' });
             const issue = store.getIssue(req.params.id);
             if (!issue) return res.status(404).json({ error: 'Feature not found' });
             // If a dev session already exists for this feature, just return it.
@@ -1786,7 +1783,6 @@ Steps:
 
     app.post('/api/issues/:id/advance-stage', requireAuth, async (req, res) => {
         try {
-            if (req.user.role === 'tester') return res.status(403).json({ error: 'Testers cannot advance stages' });
             const issue = store.getIssue(req.params.id);
             if (!issue) return res.status(404).json({ error: 'Issue not found' });
 
@@ -1945,7 +1941,6 @@ Steps:
 
     app.post('/api/sessions/:id/advance-stage', requireAuth, async (req, res) => {
         try {
-            if (req.user.role === 'tester') return res.status(403).json({ error: 'Testers cannot advance stages' });
             const s = store.getSession(req.params.id);
             if (!s) return res.status(404).json({ error: 'Session not found' });
 
@@ -2042,7 +2037,6 @@ Steps:
 
     app.post('/api/autonomous/start', requireAuth, async (req, res) => {
         try {
-            if (req.user.role === 'tester') return res.status(403).json({ error: 'Testers cannot run issues' });
             if (autonomousState.running) return res.status(400).json({ error: 'Autonomous runner is already active' });
             autonomousState.running = true;
 
@@ -2099,7 +2093,6 @@ Steps:
 
     app.post('/api/autonomous/stop', requireAuth, (req, res) => {
         try {
-            if (req.user.role === 'tester') return res.status(403).json({ error: 'Testers cannot stop runs' });
             if (autonomousState.sessionId && executionEngine) {
                 try { executionEngine.stopSession(autonomousState.sessionId); } catch (_) { }
             }
