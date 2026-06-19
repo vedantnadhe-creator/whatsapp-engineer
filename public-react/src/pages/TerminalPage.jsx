@@ -349,6 +349,18 @@ export default function TerminalPage() {
     if (nearBottom) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
   }, [messages, view])
 
+  // Scroll to bottom when a session is opened (messages first load)
+  useEffect(() => {
+    if (view !== 'chat') return
+    const el = scrollRef.current
+    if (!el || messages.length === 0) return
+    // Use a small timeout to ensure DOM has updated with new messages
+    const id = setTimeout(() => {
+      el.scrollTo({ top: el.scrollHeight, behavior: 'auto' })
+    }, 0)
+    return () => clearTimeout(id)
+  }, [connReq.key, view])
+
   // xterm can't size while hidden — refit when the chat tab/terminal becomes
   // visible again (returning from a feature tab, or toggling chat↔terminal).
   useEffect(() => {
