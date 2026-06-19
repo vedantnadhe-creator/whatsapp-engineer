@@ -1495,17 +1495,16 @@ The user may ask follow-up questions about the changelog — answer based on the
     });
 
     // ── Sprint Board: start a dev session from a feature ──────────────
-    // The linked dev session auto-flips the feature to "Dev Completed" ONLY after a real UAT deploy.
+    // The linked dev session auto-flips the feature to "Dev Completed" ONLY after a real UAT deploy
+    // (the agent prints [[UAT_DEPLOYED]] per CLAUDE.md; the watcher below catches it).
     // Everything else (general "I think it's done") stays manual — the dev sets the status themselves.
-    const UAT_DEPLOY_MARKER = '[[UAT_DEPLOYED]]';
-
     function buildFeatureDevPrompt(issue, devTask) {
         const task = (devTask || '').trim();
         const lines = [`Title: ${issue.title}`];
         if (issue.description) lines.push(`Description: ${issue.description}`);
         lines.push('', task || '(No specific instruction typed — work from the title and description above.)');
-        // Keep the auto "Dev Completed" hook working without bloating the prompt: one line.
-        lines.push('', `Only on a real, successful UAT deploy: update the knowledge base, then print ${UAT_DEPLOY_MARKER} on its own line. Never print it otherwise.`);
+        // The [[UAT_DEPLOYED]] marker that auto-flips the feature to "Dev Completed" is
+        // instructed once in CLAUDE.md (UAT-push section) — no need to repeat it per session.
         return lines.join('\n');
     }
 
