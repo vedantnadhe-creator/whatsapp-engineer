@@ -358,12 +358,27 @@ export function SettingsPanel({ settings = {}, onSave }) {
   const [ollamaModels, setOllamaModels] = useState(parseModelList(settings.ollama_custom_models))
   const [newModel, setNewModel] = useState('')
   const [savingModels, setSavingModels] = useState(false)
+  const [headroomOn, setHeadroomOn] = useState(settings.headroom_enabled === 'true')
+  const [headroomStatus, setHeadroomStatus] = useState(null) // { reachable } | null
 
   useEffect(() => {
     setShowAll(settings.show_all_sessions === 'true')
     setBillingMode(settings.claude_billing_mode || 'api')
     setOllamaModels(parseModelList(settings.ollama_custom_models))
-  }, [settings.show_all_sessions, settings.claude_billing_mode, settings.ollama_custom_models])
+    setHeadroomOn(settings.headroom_enabled === 'true')
+  }, [settings.show_all_sessions, settings.claude_billing_mode, settings.ollama_custom_models, settings.headroom_enabled])
+
+  const refreshHeadroomStatus = useCallback(async () => {
+    try { const r = await apiFetch('/api/admin/headroom/status'); setHeadroomStatus(r) } catch { setHeadroomStatus(null) }
+  }, [])
+  useEffect(() => { refreshHeadroomStatus() }, [refreshHeadroomStatus])
+
+  const handleHeadroom = async () => {
+    const newVal = !headroomOn
+    setHeadroomOn(newVal)
+    await onSave('headroom_enabled', String(newVal))
+    refreshHeadroomStatus()
+  }
 
   const handleToggle = async () => {
     const newVal = !showAll
@@ -421,6 +436,24 @@ export function SettingsPanel({ settings = {}, onSave }) {
             CLI Auth (show tokens)
           </button>
         </div>
+      </div>
+
+      <div className="flex items-center justify-between py-3 px-1" style={{ borderTop: '1px solid var(--c-border)' }}>
+        <div className="pr-4">
+          <p className="text-sm font-medium text-text-primary flex items-center gap-2">
+            Headroom compression
+            {headroomStatus && (
+              <span className="inline-flex items-center gap-1 text-xs" style={{ color: headroomStatus.reachable ? 'var(--c-success, #22c55e)' : 'var(--c-text-muted)' }}>
+                <span style={{ width: 7, height: 7, borderRadius: '50%', backgroundColor: headroomStatus.reachable ? '#22c55e' : '#9ca3af', display: 'inline-block' }} />
+                {headroomStatus.reachable ? 'proxy online' : 'proxy offline'}
+              </span>
+            )}
+          </p>
+          <p className="text-xs text-text-muted mt-0.5">Routes Claude sessions through the local Headroom proxy to compress context (fewer tokens, same answers). Doesn't affect Ollama sessions. If the proxy is offline, sessions run normally — the switch is ignored.</p>
+        </div>
+        <button onClick={handleHeadroom} className="shrink-0 ml-4 cursor-pointer transition-colors" style={{ color: headroomOn ? 'var(--c-accent)' : 'var(--c-text-muted)' }}>
+          {headroomOn ? <ToggleRight size={28} /> : <ToggleLeft size={28} />}
+        </button>
       </div>
 
       <div className="py-3 px-1" style={{ borderTop: '1px solid var(--c-border)' }}>

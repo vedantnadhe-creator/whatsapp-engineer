@@ -21,6 +21,7 @@ import {
 } from './sprint_sheet.js';
 import * as sheetsService from './sheets_service.js';
 import { listOllamaModels } from './ollama_models.js';
+import { probeHeadroom } from './headroom.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1027,6 +1028,15 @@ Do NOT ask for confirmation — proceed through each step automatically. If any 
             if (!key) return res.status(400).json({ error: 'key is required' });
             store.setSetting(key, String(value));
             res.json({ success: true });
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    // Headroom proxy health — powers the Settings toggle's live status dot.
+    app.get('/api/admin/headroom/status', requireAuth, requireAdmin, async (req, res) => {
+        try {
+            const enabled = store.getSetting('headroom_enabled') === 'true';
+            const reachable = await probeHeadroom();
+            res.json({ enabled, reachable, url: config.HEADROOM_BASE_URL });
         } catch (err) { res.status(500).json({ error: err.message }); }
     });
 

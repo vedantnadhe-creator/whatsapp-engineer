@@ -11,6 +11,10 @@ const config = {
     OLLAMA_BASE_URL: process.env.OLLAMA_BASE_URL || 'http://localhost:11434',
     OLLAMA_AUTH_TOKEN: process.env.OLLAMA_AUTH_TOKEN || 'ollama',
 
+    // Headroom context-compression proxy. When the admin toggle is ON and the
+    // proxy is reachable, Claude sessions route through it (compress → Anthropic).
+    HEADROOM_BASE_URL: process.env.HEADROOM_BASE_URL || 'http://localhost:8787',
+
     // Gemini API
     GEMINI_API_KEY: process.env.GEMINI_API_KEY || '',
     GEMINI_MODEL: process.env.GEMINI_MODEL || 'gemini-3-flash-preview',

@@ -33,6 +33,7 @@ import config from './config.js';
 import { verifyJwt } from './auth.js';
 import { createExtractor } from './term_extract.js';
 import { isOllamaModel, ollamaModelName, ollamaEnv } from './ollama_models.js';
+import { isHeadroomEnabled, headroomEnv, probeHeadroom } from './headroom.js';
 
 // Claude Code persists per-folder trust in ~/.claude.json. We pre-accept it for
 // any working dir before spawning, so the interactive "Do you trust this folder?"
@@ -178,6 +179,16 @@ export function attachTerminalServer(store) {
 
     // key (claude session uuid) → { proc, claudeId, rowId, cwd, buffer, clients:Set<ws>, idleTimer }
     const terminals = new Map();
+
+    // Headroom: cache the proxy's reachability so a down/disabled proxy never
+    // breaks session spawning. Only probe while the admin toggle is ON.
+    let headroomReachable = false;
+    const refreshHeadroom = async () => {
+        if (!isHeadroomEnabled(store)) { headroomReachable = false; return; }
+        headroomReachable = await probeHeadroom();
+    };
+    refreshHeadroom();
+    setInterval(refreshHeadroom, 30000).unref?.();
 
     const appendBuffer = (entry, data) => {
         entry.buffer += data;
@@ -348,12 +359,20 @@ export function attachTerminalServer(store) {
 
         ensureTrusted(workingDir); // pre-accept folder trust so no dialog blocks the session
 
+        // Headroom: route Claude (non-Ollama) sessions through the compression proxy
+        // when the admin toggle is on AND the proxy is reachable (else leave direct).
+        const useHeadroom = !useOllama && isHeadroomEnabled(store) && headroomReachable;
+
         const proc = pty.spawn(bin, args, {
             name: 'xterm-256color',
             cols: Math.max(20, cols | 0),
             rows: Math.max(5, rows | 0),
             cwd: workingDir,
-            env: { ...process.env, TERM: 'xterm-256color', ...(useOllama ? ollamaEnv() : {}) },
+            env: {
+                ...process.env, TERM: 'xterm-256color',
+                ...(useOllama ? ollamaEnv() : {}),
+                ...(useHeadroom ? headroomEnv() : {}),
+            },
         });
 
         // Headless emulator mirror — same bytes as the PTY, read back as clean text.
