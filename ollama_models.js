@@ -32,6 +32,14 @@ export function ollamaModelName(id) {
     return isOllamaModel(id) ? id.slice(OLLAMA_PREFIX.length) : id;
 }
 
+// Build a dropdown entry from a raw model name (e.g. "kimi-k2:1t-cloud"). Accepts
+// names with or without the `ollama:` prefix. Used for admin-added custom models.
+export function ollamaModelEntry(name, description = 'Ollama (custom)') {
+    const clean = String(name || '').trim();
+    const id = clean.startsWith(OLLAMA_PREFIX) ? clean : `${OLLAMA_PREFIX}${clean}`;
+    return { id, name: `Ollama · ${ollamaModelName(id)}`, description };
+}
+
 // Anthropic-override env that points `claude` at Ollama. Empty API key is REQUIRED
 // — a non-empty ANTHROPIC_API_KEY would override the auth token and break routing.
 export function ollamaEnv() {
@@ -42,11 +50,17 @@ export function ollamaEnv() {
     };
 }
 
-// Dynamic list: ask the running Ollama what models it actually has, tag them, and
-// merge with the curated fallbacks (deduped). Never throws — if Ollama is down or
-// slow we just return the static list so the endpoint stays fast and healthy.
-export async function listOllamaModels() {
+// Dynamic list: curated fallbacks + admin-added custom names + whatever the running
+// Ollama actually has (deduped by id). Never throws — if Ollama is down or slow we
+// still return the static + custom entries so the endpoint stays fast and healthy.
+export async function listOllamaModels(customNames = []) {
     const byId = new Map(STATIC_OLLAMA_MODELS.map((m) => [m.id, m]));
+    // Admin-added models (from Settings) — take priority over static labels.
+    for (const name of customNames) {
+        if (!name || !String(name).trim()) continue;
+        const entry = ollamaModelEntry(name);
+        byId.set(entry.id, entry);
+    }
     try {
         const ctrl = new AbortController();
         const t = setTimeout(() => ctrl.abort(), 1500);

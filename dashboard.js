@@ -213,7 +213,11 @@ a{color:#60a5fa;text-decoration:none}</style></head>
             { id: 'haiku', name: 'Haiku 4.5', description: 'Fastest for quick answers' },
         ];
         let ollamaModels = [];
-        try { ollamaModels = await listOllamaModels(); } catch (_) { /* keep Claude list only */ }
+        try {
+            let customNames = [];
+            try { customNames = JSON.parse(store.getSetting('ollama_custom_models') || '[]'); } catch (_) { customNames = []; }
+            ollamaModels = await listOllamaModels(Array.isArray(customNames) ? customNames : []);
+        } catch (_) { /* keep Claude list only */ }
         res.json([...claudeModels, ...ollamaModels]);
     });
 

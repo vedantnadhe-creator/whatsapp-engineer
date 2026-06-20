@@ -111,7 +111,7 @@ function StatusDot({ status, size = 8 }) {
 
 export default function TerminalPage() {
   const { user, loading } = useAuth()
-  const { models } = useModels()
+  const { models, refresh: refreshModels } = useModels()
 
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
@@ -845,7 +845,7 @@ export default function TerminalPage() {
       )}
       {adminPanel === 'settings' && (
         <AdminModal isOpen onClose={() => setAdminPanel(null)} title="Settings">
-          <SettingsPanel settings={adminSettings} onSave={async (key, value) => { await saveAdminSetting(key, value); setAdminSettings(prev => ({ ...prev, [key]: value })); if (key === 'show_all_sessions') refreshSessions() }} />
+          <SettingsPanel settings={adminSettings} onSave={async (key, value) => { await saveAdminSetting(key, value); setAdminSettings(prev => ({ ...prev, [key]: value })); if (key === 'show_all_sessions') refreshSessions(); if (key === 'ollama_custom_models') refreshModels() }} />
         </AdminModal>
       )}
     </div>

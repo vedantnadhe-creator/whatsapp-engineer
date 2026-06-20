@@ -348,14 +348,22 @@ function ClaudeAuthSection() {
   )
 }
 
+function parseModelList(raw) {
+  try { const a = JSON.parse(raw || '[]'); return Array.isArray(a) ? a : [] } catch { return [] }
+}
+
 export function SettingsPanel({ settings = {}, onSave }) {
   const [showAll, setShowAll] = useState(settings.show_all_sessions === 'true')
   const [billingMode, setBillingMode] = useState(settings.claude_billing_mode || 'api')
+  const [ollamaModels, setOllamaModels] = useState(parseModelList(settings.ollama_custom_models))
+  const [newModel, setNewModel] = useState('')
+  const [savingModels, setSavingModels] = useState(false)
 
   useEffect(() => {
     setShowAll(settings.show_all_sessions === 'true')
     setBillingMode(settings.claude_billing_mode || 'api')
-  }, [settings.show_all_sessions, settings.claude_billing_mode])
+    setOllamaModels(parseModelList(settings.ollama_custom_models))
+  }, [settings.show_all_sessions, settings.claude_billing_mode, settings.ollama_custom_models])
 
   const handleToggle = async () => {
     const newVal = !showAll
@@ -366,6 +374,24 @@ export function SettingsPanel({ settings = {}, onSave }) {
   const handleBillingMode = async (mode) => {
     setBillingMode(mode)
     await onSave('claude_billing_mode', mode)
+  }
+
+  const persistModels = async (list) => {
+    setOllamaModels(list)
+    setSavingModels(true)
+    try { await onSave('ollama_custom_models', JSON.stringify(list)) } finally { setSavingModels(false) }
+  }
+
+  const addModel = async () => {
+    const name = newModel.trim()
+    if (!name) return
+    if (ollamaModels.includes(name)) { setNewModel(''); return }
+    await persistModels([...ollamaModels, name])
+    setNewModel('')
+  }
+
+  const removeModel = async (name) => {
+    await persistModels(ollamaModels.filter(m => m !== name))
   }
 
   return (
@@ -395,6 +421,41 @@ export function SettingsPanel({ settings = {}, onSave }) {
             CLI Auth (show tokens)
           </button>
         </div>
+      </div>
+
+      <div className="py-3 px-1" style={{ borderTop: '1px solid var(--c-border)' }}>
+        <p className="text-sm font-medium text-text-primary mb-1">Ollama models {savingModels && <Loader2 size={12} className="inline animate-spin ml-1" />}</p>
+        <p className="text-xs text-text-muted mb-3">Add an Ollama model tag (e.g. <code>kimi-k2:1t-cloud</code>, <code>gpt-oss:20b-cloud</code>). It appears in the model selector as <b>Ollama · …</b> and routes that session through Ollama. Pull/sign-in to the model in Ollama first.</p>
+        <div className="flex gap-2 mb-3">
+          <input
+            value={newModel}
+            onChange={(e) => setNewModel(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addModel() } }}
+            placeholder="model tag, e.g. qwen3-coder:480b-cloud"
+            className="flex-1 text-sm rounded-md px-3 py-1.5"
+            style={{ backgroundColor: 'var(--c-surface-2)', color: 'var(--c-text-primary)', border: '1px solid var(--c-border)' }}
+          />
+          <button onClick={addModel}
+            className="text-xs px-3 py-1.5 rounded-md font-medium cursor-pointer transition-colors flex items-center gap-1"
+            style={{ backgroundColor: 'var(--c-accent)', color: '#fff', border: '1px solid var(--c-accent)' }}>
+            <Save size={12} /> Add
+          </button>
+        </div>
+        {ollamaModels.length === 0 ? (
+          <p className="text-xs text-text-muted italic">No custom models added. Built-in fallbacks still show in the selector.</p>
+        ) : (
+          <div className="flex flex-col gap-1.5">
+            {ollamaModels.map(m => (
+              <div key={m} className="flex items-center justify-between rounded-md px-3 py-1.5"
+                style={{ backgroundColor: 'var(--c-surface-2)', border: '1px solid var(--c-border)' }}>
+                <span className="text-sm font-mono text-text-secondary">{m}</span>
+                <button onClick={() => removeModel(m)} className="cursor-pointer text-text-muted hover:text-danger transition-colors" title="Remove">
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       <ClaudeAuthSection />
