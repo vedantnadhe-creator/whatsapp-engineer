@@ -20,6 +20,7 @@ import {
     parseWorkbookBuffer, importSprintData,
 } from './sprint_sheet.js';
 import * as sheetsService from './sheets_service.js';
+import { listOllamaModels } from './ollama_models.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -200,16 +201,20 @@ a{color:#60a5fa;text-decoration:none}</style></head>
         catch (err) { res.status(500).json({ error: err.message }); }
     });
 
-    // Available Claude models
-    app.get('/api/models', requireAuth, (req, res) => {
-        res.json([
+    // Available models — Claude (default) + Ollama fallback (limit hit / other providers).
+    // Selecting an `ollama:` model routes that session through the local Ollama server.
+    app.get('/api/models', requireAuth, async (req, res) => {
+        const claudeModels = [
             { id: 'claude-opus-4-8', name: 'Opus 4.8', description: 'Latest — most capable for complex work', default: true },
             { id: 'fable', name: 'Fable 5', description: 'Most capable for hardest, long-running tasks · ~2× faster than Opus but uses ~2× the tokens' },
             { id: 'claude-opus-4-7', name: 'Opus 4.7', description: 'Previous Opus generation' },
             { id: 'opus', name: 'Opus 4.6', description: 'Older Opus generation' },
             { id: 'sonnet', name: 'Sonnet 4.6', description: 'Best for everyday tasks' },
             { id: 'haiku', name: 'Haiku 4.5', description: 'Fastest for quick answers' },
-        ]);
+        ];
+        let ollamaModels = [];
+        try { ollamaModels = await listOllamaModels(); } catch (_) { /* keep Claude list only */ }
+        res.json([...claudeModels, ...ollamaModels]);
     });
 
     // Terminal-session transcript — parse Claude Code's native JSONL into the

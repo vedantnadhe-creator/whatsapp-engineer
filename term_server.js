@@ -32,6 +32,7 @@ import path from 'path';
 import config from './config.js';
 import { verifyJwt } from './auth.js';
 import { createExtractor } from './term_extract.js';
+import { isOllamaModel, ollamaModelName, ollamaEnv } from './ollama_models.js';
 
 // Claude Code persists per-folder trust in ~/.claude.json. We pre-accept it for
 // any working dir before spawning, so the interactive "Do you trust this folder?"
@@ -340,7 +341,10 @@ export function attachTerminalServer(store) {
             args.push('--session-id', claudeId);
             mode = 'new';
         }
-        if (model && model !== 'default') args.push('--model', model);
+        // Ollama fallback: an `ollama:` model routes this session through the local
+        // Ollama server (strip the tag for --model, inject the Anthropic-override env).
+        const useOllama = isOllamaModel(model);
+        if (model && model !== 'default') args.push('--model', useOllama ? ollamaModelName(model) : model);
 
         ensureTrusted(workingDir); // pre-accept folder trust so no dialog blocks the session
 
@@ -349,7 +353,7 @@ export function attachTerminalServer(store) {
             cols: Math.max(20, cols | 0),
             rows: Math.max(5, rows | 0),
             cwd: workingDir,
-            env: { ...process.env, TERM: 'xterm-256color' },
+            env: { ...process.env, TERM: 'xterm-256color', ...(useOllama ? ollamaEnv() : {}) },
         });
 
         // Headless emulator mirror — same bytes as the PTY, read back as clean text.

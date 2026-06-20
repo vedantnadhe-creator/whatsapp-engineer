@@ -6,6 +6,11 @@ const config = {
     // Path to Claude Code binary
     CLAUDE_BIN: process.env.CLAUDE_BIN || '/home/ubuntu/.local/bin/claude',
 
+    // Ollama fallback (per-session model switch). Ollama exposes an
+    // Anthropic-compatible API; selecting an `ollama:` model routes that session here.
+    OLLAMA_BASE_URL: process.env.OLLAMA_BASE_URL || 'http://localhost:11434',
+    OLLAMA_AUTH_TOKEN: process.env.OLLAMA_AUTH_TOKEN || 'ollama',
+
     // Gemini API
     GEMINI_API_KEY: process.env.GEMINI_API_KEY || '',
     GEMINI_MODEL: process.env.GEMINI_MODEL || 'gemini-3-flash-preview',
