@@ -255,6 +255,9 @@ class SessionStore {
             "ALTER TABLE sessions ADD COLUMN parent_session_id TEXT",
             // Bug report attachments: JSON array of { name, key, contentType } stored in S3.
             "ALTER TABLE bugs ADD COLUMN attachments TEXT DEFAULT '[]'",
+            // Per-bug ownership: dev who fixes it, QA who raised/verifies it.
+            "ALTER TABLE bugs ADD COLUMN assigned_to TEXT",
+            "ALTER TABLE bugs ADD COLUMN qa_owner TEXT",
         ];
         for (const sql of safeMigrations) {
             try { this.db.exec(sql); } catch (_) { /* column already exists */ }
@@ -889,11 +892,11 @@ class SessionStore {
     }
 
     // ── Bugs (per feature) ───────────────────────────────────────
-    createBug({ issueId, title, description = '', severity = 'normal', createdBy = null, attachments = [] }) {
+    createBug({ issueId, title, description = '', severity = 'normal', createdBy = null, attachments = [], assignedTo = null, qaOwner = null }) {
         const id = `BUG-${Date.now().toString(36)}${Math.floor(Math.random() * 1000)}`;
         this.db.prepare(
-            `INSERT INTO bugs (id, issue_id, title, description, severity, created_by, attachments) VALUES (?, ?, ?, ?, ?, ?, ?)`
-        ).run(id, issueId, title, description, severity, createdBy, JSON.stringify(Array.isArray(attachments) ? attachments : []));
+            `INSERT INTO bugs (id, issue_id, title, description, severity, created_by, attachments, assigned_to, qa_owner) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ).run(id, issueId, title, description, severity, createdBy, JSON.stringify(Array.isArray(attachments) ? attachments : []), assignedTo || null, qaOwner || null);
         this.recountBugs(issueId);
         // A new (open) bug regresses a feature that QA had already passed / dev marked done:
         // QA fails it and dev work reverts to "dev completed" so it leaves 100% and is re-queued.
@@ -928,7 +931,7 @@ class SessionStore {
     }
 
     updateBug(id, updates) {
-        const allowed = ['title', 'description', 'severity', 'status', 'fix_session_id', 'attachments'];
+        const allowed = ['title', 'description', 'severity', 'status', 'fix_session_id', 'attachments', 'assigned_to', 'qa_owner'];
         const sets = [], vals = [];
         for (const [k, v] of Object.entries(updates)) {
             if (allowed.includes(k)) { sets.push(`${k} = ?`); vals.push(k === 'attachments' ? JSON.stringify(Array.isArray(v) ? v : []) : v); }

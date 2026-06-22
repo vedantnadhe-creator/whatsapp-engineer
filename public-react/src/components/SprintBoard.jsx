@@ -732,16 +732,16 @@ function FeatureDetail({ f, isTester, members, onUpdate, onCreateIssue, onGoToSe
   return (
     <div className="px-6 py-4 flex flex-col gap-6">
       <DescriptionBlock f={f} onUpdate={onUpdate} />
-      <SubtasksPanel f={f} isTester={isTester} members={members} onCreateIssue={onCreateIssue} onGoToSession={onGoToSession} model={model} refreshIssues={refreshIssues} />
+      <SubtasksPanel f={f} isTester={isTester} members={members} devMembers={devMembers} testerMembers={testerMembers} onUpdate={onUpdate} onCreateIssue={onCreateIssue} onGoToSession={onGoToSession} model={model} refreshIssues={refreshIssues} />
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <BugsPanel f={f} isTester={isTester} onGoToSession={onGoToSession} model={model} refreshIssues={refreshIssues} />
+        <BugsPanel f={f} isTester={isTester} devMembers={devMembers} testerMembers={testerMembers} onGoToSession={onGoToSession} model={model} refreshIssues={refreshIssues} />
         <TestCasesPanel f={f} isTester={isTester} onGoToSession={onGoToSession} model={model} refreshIssues={refreshIssues} />
       </div>
     </div>
   )
 }
 
-function SubtasksPanel({ f, isTester, members, onCreateIssue, onGoToSession, model, refreshIssues }) {
+function SubtasksPanel({ f, isTester, members, devMembers = [], testerMembers = [], onUpdate, onCreateIssue, onGoToSession, model, refreshIssues }) {
   const [subs, setSubs] = useState([])
   const [loading, setLoading] = useState(true)
   const [title, setTitle] = useState('')
@@ -749,6 +749,8 @@ function SubtasksPanel({ f, isTester, members, onCreateIssue, onGoToSession, mod
 
   const load = useCallback(async () => { setLoading(true); try { setSubs(await getSubtasks(f.id) || []) } finally { setLoading(false) } }, [f.id])
   useEffect(() => { load() }, [load])
+  // Subtasks are issues, so the issue updater sets their dev/QA owner directly.
+  const setOwner = async (sub, patch) => { if (onUpdate) { await onUpdate(sub.id, patch); load(); refreshIssues() } }
 
   const add = async () => {
     if (!title.trim() || !onCreateIssue) return
@@ -784,6 +786,8 @@ function SubtasksPanel({ f, isTester, members, onCreateIssue, onGoToSession, mod
           {subs.map(s => (
             <div key={s.id} className="flex items-center gap-2 px-2 py-1.5 rounded" style={{ backgroundColor: 'var(--c-bg)', border: '1px solid var(--c-border)' }}>
               <span className="flex-1 text-xs" style={{ color: 'var(--c-text)' }}>{s.title}</span>
+              <PillSelect value={s.assigned_to || ''} onChange={(v) => setOwner(s, { assigned_to: v || null })} options={devMembers} fg={ASSIGNEE_PILL} placeholder="Dev" disabled={isTester} />
+              <PillSelect value={s.qa_owner || ''} onChange={(v) => setOwner(s, { qa_owner: v || '' })} options={testerMembers} fg={QA_OWNER_PILL} placeholder="QA" />
               <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full" style={{ backgroundColor: devStatusMeta(s.dev_status).color + '22', color: devStatusMeta(s.dev_status).color }}>{devStatusMeta(s.dev_status).label}</span>
               <span className="text-[10px] font-mono tabular-nums" style={{ color: completionColor(featureCompletion(s)) }}>{featureCompletion(s)}%</span>
               {isTester ? null : s.session_id ? (
@@ -802,7 +806,7 @@ function SubtasksPanel({ f, isTester, members, onCreateIssue, onGoToSession, mod
 
 const parseAttachments = (b) => { try { const a = JSON.parse(b.attachments || '[]'); return Array.isArray(a) ? a : [] } catch { return [] } }
 
-function BugsPanel({ f, isTester, onGoToSession, model, refreshIssues }) {
+function BugsPanel({ f, isTester, devMembers = [], testerMembers = [], onGoToSession, model, refreshIssues }) {
   const [bugs, setBugs] = useState([])
   const [loading, setLoading] = useState(true)
   const [title, setTitle] = useState('')
@@ -822,6 +826,7 @@ function BugsPanel({ f, isTester, onGoToSession, model, refreshIssues }) {
     setTitle(''); setCritical(false); setPendingAtt([]); load(); refreshIssues()
   }
   const setStatus = async (b, status) => { await updateBug(b.id, { status }); load(); refreshIssues() }
+  const setOwner = async (b, patch) => { await updateBug(b.id, patch); load() }
   const remove = async (b) => { await deleteBug(b.id); load(); refreshIssues() }
 
   const pickFiles = (target) => { attachTarget.current = target; fileRef.current?.click() }
@@ -914,6 +919,12 @@ function BugsPanel({ f, isTester, onGoToSession, model, refreshIssues }) {
                     </>
                   )}
                   <button onClick={() => remove(b)} title="Delete" className="p-1 rounded cursor-pointer" style={{ color: 'var(--c-text-muted)' }}><X size={12} /></button>
+                </div>
+                <div className="flex items-center gap-2 pl-1">
+                  <span className="text-[10px]" style={{ color: 'var(--c-text-muted)' }}>Dev</span>
+                  <PillSelect value={b.assigned_to || ''} onChange={(v) => setOwner(b, { assigned_to: v || null })} options={devMembers} fg={ASSIGNEE_PILL} placeholder="—" />
+                  <span className="text-[10px] ml-1" style={{ color: 'var(--c-text-muted)' }}>QA</span>
+                  <PillSelect value={b.qa_owner || ''} onChange={(v) => setOwner(b, { qa_owner: v || '' })} options={testerMembers} fg={QA_OWNER_PILL} placeholder="—" />
                 </div>
                 {atts.length > 0 && (
                   <div className="flex flex-wrap gap-1 pl-1">

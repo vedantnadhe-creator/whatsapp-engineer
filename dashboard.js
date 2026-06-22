@@ -1639,9 +1639,9 @@ The user may ask follow-up questions about the changelog — answer based on the
 
     app.post('/api/issues/:id/bugs', requireAuth, (req, res) => {
         try {
-            const { title, description, severity, attachments } = req.body;
+            const { title, description, severity, attachments, assignedTo, qaOwner } = req.body;
             if (!title) return res.status(400).json({ error: 'title is required' });
-            const bug = store.createBug({ issueId: req.params.id, title, description: description || '', severity: severity === 'critical' ? 'critical' : 'normal', createdBy: req.user.id, attachments: Array.isArray(attachments) ? attachments : [] });
+            const bug = store.createBug({ issueId: req.params.id, title, description: description || '', severity: severity === 'critical' ? 'critical' : 'normal', createdBy: req.user.id, attachments: Array.isArray(attachments) ? attachments : [], assignedTo: assignedTo || null, qaOwner: qaOwner || null });
             wsBroadcast('issue_updated', { issue: store.getIssue(req.params.id) });
             res.json(bug);
         } catch (err) { res.status(500).json({ error: err.message }); }
