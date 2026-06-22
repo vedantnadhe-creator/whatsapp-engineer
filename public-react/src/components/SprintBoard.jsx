@@ -88,6 +88,21 @@ function PillSelect({ value, onChange, options, fg, placeholder = '—', disable
   )
 }
 
+// Compact dropdown for the filter bar — shows the placeholder until a value is picked.
+function FilterSelect({ value, onChange, placeholder, options }) {
+  return (
+    <select
+      value={value || ''}
+      onChange={(e) => onChange(e.target.value)}
+      className="text-[11px] rounded px-2 py-1 cursor-pointer outline-none appearance-none"
+      style={{ backgroundColor: value ? 'var(--c-accent)' : 'var(--c-surface-2)', color: value ? '#fff' : 'var(--c-text-secondary)', border: '1px solid var(--c-border)', maxWidth: 160 }}
+    >
+      <option value="" style={{ color: 'var(--c-text)', backgroundColor: 'var(--c-surface)' }}>{placeholder}</option>
+      {options.map(o => <option key={o.v} value={o.v} style={{ color: 'var(--c-text)', backgroundColor: 'var(--c-surface)' }}>{o.label}</option>)}
+    </select>
+  )
+}
+
 // ── Small editable cell helpers ─────────────────────────────────────────────
 function EditText({ value, onCommit, placeholder, className = '', mono = false, list }) {
   const [v, setV] = useState(value ?? '')
@@ -199,6 +214,21 @@ export default function SprintBoard({
       .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0))
   }, [issues, activeSprintId])
   const backlogCount = useMemo(() => (issues || []).filter(i => i.category !== 'chat' && i.is_backlog).length, [issues])
+
+  // Filters — view-only narrowing of the rows (sprint progress stays full-sprint).
+  const [filters, setFilters] = useState({ dev: '', qa: '', dev_assignee: '', qa_owner: '', platform: '', type: '' })
+  const setFilter = (k, v) => setFilters(prev => ({ ...prev, [k]: v }))
+  const clearFilters = () => setFilters({ dev: '', qa: '', dev_assignee: '', qa_owner: '', platform: '', type: '' })
+  const activeFilterCount = Object.values(filters).filter(Boolean).length
+  const platforms = useMemo(() => [...new Set((features || []).map(f => f.platform).filter(Boolean))].sort(), [features])
+  const filteredFeatures = useMemo(() => features.filter(f =>
+    (!filters.dev || f.dev_status === filters.dev) &&
+    (!filters.qa || (f.qa_status || '') === filters.qa) &&
+    (!filters.dev_assignee || f.assigned_to === filters.dev_assignee) &&
+    (!filters.qa_owner || f.qa_owner === filters.qa_owner) &&
+    (!filters.platform || f.platform === filters.platform) &&
+    (!filters.type || f.type === filters.type)
+  ), [features, filters])
 
   const progress = useMemo(() => {
     const total = features.length
@@ -430,6 +460,24 @@ export default function SprintBoard({
           </div>
         )}
 
+        {/* Filters */}
+        {features.length > 0 && (
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-[11px] font-medium" style={{ color: 'var(--c-text-muted)' }}>Filter:</span>
+            <FilterSelect value={filters.dev} onChange={(v) => setFilter('dev', v)} placeholder="Dev Status" options={DEV_STATUS.map(s => ({ v: s.v, label: s.label }))} />
+            <FilterSelect value={filters.qa} onChange={(v) => setFilter('qa', v)} placeholder="QA Status" options={QA_STATUS.filter(s => s.v).map(s => ({ v: s.v, label: s.label }))} />
+            <FilterSelect value={filters.dev_assignee} onChange={(v) => setFilter('dev_assignee', v)} placeholder="Dev" options={(members || []).filter(m => m.role !== 'tester').map(m => ({ v: m.id, label: memberName(m) }))} />
+            <FilterSelect value={filters.qa_owner} onChange={(v) => setFilter('qa_owner', v)} placeholder="QA Owner" options={(members || []).filter(m => m.role === 'tester').map(m => ({ v: m.id, label: memberName(m) }))} />
+            <FilterSelect value={filters.type} onChange={(v) => setFilter('type', v)} placeholder="Type" options={TYPES.map(t => ({ v: t.v, label: t.label }))} />
+            {platforms.length > 0 && <FilterSelect value={filters.platform} onChange={(v) => setFilter('platform', v)} placeholder="Platform" options={platforms.map(p => ({ v: p, label: p }))} />}
+            {activeFilterCount > 0 && (
+              <button onClick={clearFilters} className="text-[11px] flex items-center gap-1 cursor-pointer px-2 py-1 rounded" style={{ color: 'var(--c-text-secondary)', border: '1px solid var(--c-border)' }}>
+                <X size={11} /> Clear ({activeFilterCount}) · {filteredFeatures.length}/{features.length}
+              </button>
+            )}
+          </div>
+        )}
+
         {/* Progress bar */}
         {features.length > 0 && (
           <div className="flex items-center gap-3">
@@ -472,7 +520,7 @@ export default function SprintBoard({
             </tr>
           </thead>
           <tbody>
-            {features.map((f, idx) => (
+            {filteredFeatures.map((f, idx) => (
               <FeatureRow
                 key={f.id} f={f} idx={idx} members={members} isTester={isTester}
                 expanded={expandedId === f.id} isBacklogView={isBacklogView}
@@ -482,6 +530,11 @@ export default function SprintBoard({
                 onGoToSession={onGoToSession} model={model} refreshIssues={refreshIssues}
               />
             ))}
+            {features.length > 0 && filteredFeatures.length === 0 && (
+              <tr><td colSpan={16} className="px-4 py-10 text-center text-xs" style={{ color: 'var(--c-text-muted)' }}>
+                No features match the filters. <button onClick={clearFilters} className="underline cursor-pointer" style={{ color: 'var(--c-accent)' }}>Clear filters</button>
+              </td></tr>
+            )}
             {features.length === 0 && (
               <tr><td colSpan={16} className="px-4 py-10 text-center text-xs" style={{ color: 'var(--c-text-muted)' }}>
                 {isBacklogView ? 'Backlog is empty — move features here with the archive icon.' : activeSprintId === '__all__' ? 'No features yet.' : 'No features in this sprint yet — add one below.'}
