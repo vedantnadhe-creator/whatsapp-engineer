@@ -34,8 +34,11 @@ import {
   Code2,
   Palette,
   FlaskConical,
+  ListMusic,
+  FolderPlus,
 } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
+import { usePlaylists, createPlaylist, renamePlaylist, deletePlaylist, addToPlaylist, removeFromPlaylist } from '../hooks/useApi';
 
 const STATUS_COLORS = {
   running: 'var(--c-status-running)',
@@ -68,7 +71,8 @@ function formatTokens(n) {
   return String(n);
 }
 
-function SessionMenu({ session, onClose, onShare, onFork, onMerge, onAddToSprint, onToggleBookmark, onRename, onDelete }) {
+function SessionMenu({ session, onClose, onShare, onFork, onMerge, onAddToSprint, onToggleBookmark, onRename, onDelete, playlists = [], isInPlaylist, onTogglePlaylistItem }) {
+  const [showPlaylists, setShowPlaylists] = useState(false);
   const ref = useRef(null);
   const [copied, setCopied] = useState(false);
   const [renaming, setRenaming] = useState(false);
@@ -270,6 +274,41 @@ function SessionMenu({ session, onClose, onShare, onFork, onMerge, onAddToSprint
         {session.bookmarked ? 'Remove bookmark' : 'Bookmark'}
       </button>
 
+      {onTogglePlaylistItem && (
+        <>
+          <button
+            onClick={(e) => { e.stopPropagation(); setShowPlaylists((v) => !v); }}
+            className="flex w-full items-center gap-2 px-3 py-1.5 text-sm cursor-pointer"
+            style={itemStyle}
+            onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'var(--c-surface-2)')}
+            onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+          >
+            <ListMusic size={14} style={{ color: 'var(--c-text-secondary)' }} />
+            Add to playlist
+          </button>
+          {showPlaylists && (
+            <div style={{ borderTop: '1px solid var(--c-border)', borderBottom: '1px solid var(--c-border)', maxHeight: 180, overflowY: 'auto' }}>
+              {(playlists || []).length === 0 && (
+                <div className="px-3 py-1.5 text-xs" style={{ color: 'var(--c-text-muted)' }}>No playlists yet</div>
+              )}
+              {(playlists || []).map((pl) => (
+                <button
+                  key={pl.id}
+                  onClick={(e) => { e.stopPropagation(); onTogglePlaylistItem(pl, session.id); }}
+                  className="flex w-full items-center gap-2 px-3 py-1.5 text-sm cursor-pointer"
+                  style={itemStyle}
+                  onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'var(--c-surface-2)')}
+                  onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+                >
+                  <span style={{ width: 14, display: 'inline-flex' }}>{isInPlaylist?.(pl, session.id) ? <Check size={13} style={{ color: 'var(--c-accent)' }} /> : null}</span>
+                  <span className="truncate">{pl.name}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+
       <button
         onClick={copyId}
         className="flex w-full items-center gap-2 px-3 py-1.5 text-sm cursor-pointer"
@@ -327,7 +366,7 @@ function SessionMenu({ session, onClose, onShare, onFork, onMerge, onAddToSprint
   );
 }
 
-function SessionItem({ session, isActive, onSelect, billingMode = 'api', onToggleBookmark, onShareSession, onForkSession, onMergeSession, onAddToSprintSession, onRenameSession, onDeleteSession }) {
+function SessionItem({ session, isActive, onSelect, billingMode = 'api', onToggleBookmark, onShareSession, onForkSession, onMergeSession, onAddToSprintSession, onRenameSession, onDeleteSession, playlists = [], isInPlaylist, onTogglePlaylistItem }) {
   const ownerLabel = session.owner_name || session.owner_email || null;
   const [menuOpen, setMenuOpen] = useState(false);
 
@@ -459,6 +498,9 @@ function SessionItem({ session, isActive, onSelect, billingMode = 'api', onToggl
           onToggleBookmark={onToggleBookmark}
           onRename={onRenameSession}
           onDelete={onDeleteSession}
+          playlists={playlists}
+          isInPlaylist={isInPlaylist}
+          onTogglePlaylistItem={onTogglePlaylistItem}
         />
       )}
     </div>
@@ -549,13 +591,43 @@ function SidebarContent({
   onSearchChange,
 }) {
   const [adminOpen, setAdminOpen] = useState(false);
-  const [sessionFilter, setSessionFilter] = useState('all'); // 'all', 'mine', or 'saved'
+  const [sessionFilter, setSessionFilter] = useState('all'); // 'all' | 'mine' | 'saved' | 'pl:<id>'
   const { theme, toggle } = useTheme();
+
+  // Playlists — personal session groupings.
+  const { playlists, refresh: refreshPlaylists } = usePlaylists();
+  const activePlaylist = sessionFilter.startsWith('pl:') ? (playlists || []).find(p => p.id === sessionFilter.slice(3)) : null;
+  const isInPlaylist = (pl, sessionId) => (pl.session_ids || []).includes(sessionId);
+  const doCreatePlaylist = async () => {
+    const name = window.prompt('New playlist name')?.trim();
+    if (!name) return;
+    const pl = await createPlaylist(name);
+    await refreshPlaylists();
+    if (pl?.id) setSessionFilter('pl:' + pl.id);
+  };
+  const doRenamePlaylist = async (pl) => {
+    const name = window.prompt('Rename playlist', pl.name)?.trim();
+    if (!name || name === pl.name) return;
+    await renamePlaylist(pl.id, name); refreshPlaylists();
+  };
+  const doDeletePlaylist = async (pl) => {
+    if (!window.confirm(`Delete playlist "${pl.name}"? (sessions are not deleted)`)) return;
+    await deletePlaylist(pl.id);
+    if (sessionFilter === 'pl:' + pl.id) setSessionFilter('all');
+    refreshPlaylists();
+  };
+  const onTogglePlaylistItem = async (pl, sessionId) => {
+    if (isInPlaylist(pl, sessionId)) await removeFromPlaylist(pl.id, sessionId);
+    else await addToPlaylist(pl.id, sessionId);
+    refreshPlaylists();
+  };
 
   const filteredSessions = sessionFilter === 'mine'
     ? (sessions || []).filter((s) => s.is_mine)
     : sessionFilter === 'saved'
     ? (sessions || []).filter((s) => s.bookmarked)
+    : activePlaylist
+    ? (sessions || []).filter((s) => isInPlaylist(activePlaylist, s.id))
     : (sessions || []);
 
   return (
@@ -739,6 +811,34 @@ function SidebarContent({
         </div>
       )}
 
+      {/* Playlists — personal session groupings */}
+      {view === 'chat' && (
+        <div className="flex items-center gap-1 flex-wrap px-3 py-1.5" style={{ borderBottom: '1px solid var(--c-border)' }}>
+          <span className="flex items-center gap-1 text-[10px] font-mono uppercase mr-0.5" style={{ color: 'var(--c-text-muted)' }}>
+            <ListMusic size={11} /> Lists
+          </span>
+          {(playlists || []).map(pl => {
+            const active = sessionFilter === 'pl:' + pl.id;
+            return (
+              <button key={pl.id}
+                onClick={() => setSessionFilter(active ? 'all' : 'pl:' + pl.id)}
+                onDoubleClick={() => doRenamePlaylist(pl)}
+                title="Click to filter · double-click to rename"
+                className="text-[10px] font-medium rounded-full px-2 py-0.5 cursor-pointer transition-colors flex items-center gap-1"
+                style={{ backgroundColor: active ? 'var(--c-accent)' : 'var(--c-surface-2)', color: active ? '#fff' : 'var(--c-text-secondary)', border: '1px solid var(--c-border)' }}>
+                {pl.name} <span style={{ opacity: 0.7 }}>{(pl.session_ids || []).length}</span>
+                {active && <X size={10} onClick={(e) => { e.stopPropagation(); doDeletePlaylist(pl); }} />}
+              </button>
+            );
+          })}
+          <button onClick={doCreatePlaylist} title="New playlist"
+            className="text-[10px] rounded-full px-1.5 py-0.5 cursor-pointer flex items-center gap-0.5"
+            style={{ color: 'var(--c-accent)', border: '1px dashed var(--c-border)' }}>
+            <FolderPlus size={11} /> New
+          </button>
+        </div>
+      )}
+
       {/* Session list */}
       <div className="flex-1 overflow-y-auto">
         {filteredSessions.length > 0 ? (
@@ -757,6 +857,9 @@ function SidebarContent({
                 onAddToSprintSession={onAddToSprintSession}
                 onRenameSession={onRenameSession}
                 onDeleteSession={onDeleteSession}
+                playlists={playlists}
+                isInPlaylist={isInPlaylist}
+                onTogglePlaylistItem={onTogglePlaylistItem}
               />
             ))}
             {hasMore && (
@@ -773,7 +876,7 @@ function SidebarContent({
           </>
         ) : (
           <div className="px-4 py-8 text-center text-sm" style={{ color: 'var(--c-text-muted)' }}>
-            {sessionFilter === 'mine' ? 'No sessions by you yet' : sessionFilter === 'saved' ? 'No saved sessions yet' : 'No sessions yet'}
+            {sessionFilter === 'mine' ? 'No sessions by you yet' : sessionFilter === 'saved' ? 'No saved sessions yet' : activePlaylist ? 'This playlist is empty — add sessions from the ⋯ menu.' : 'No sessions yet'}
           </div>
         )}
       </div>
