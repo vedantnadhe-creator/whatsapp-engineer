@@ -729,6 +729,8 @@ function DescriptionBlock({ f, onUpdate }) {
 
 // ── Detail drawer: subtasks + bugs + test cases ─────────────────────────────
 function FeatureDetail({ f, isTester, members, onUpdate, onCreateIssue, onGoToSession, model, refreshIssues }) {
+  const devMembers = (members || []).filter(m => m.role !== 'tester')
+  const testerMembers = (members || []).filter(m => m.role === 'tester')
   return (
     <div className="px-6 py-4 flex flex-col gap-6">
       <DescriptionBlock f={f} onUpdate={onUpdate} />
