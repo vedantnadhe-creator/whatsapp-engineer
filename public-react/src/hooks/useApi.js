@@ -388,6 +388,27 @@ export async function toggleBookmark(sessionId) {
   return apiFetch(`/api/sessions/${sessionId}/bookmark`, { method: 'POST' });
 }
 
+// ── Playlists (personal session groupings) ──
+export function usePlaylists() {
+  const { data, loading, error, refresh } = useGet('/api/playlists');
+  return { playlists: data ?? [], loading, error, refresh };
+}
+export async function createPlaylist(name) {
+  return apiFetch('/api/playlists', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) });
+}
+export async function renamePlaylist(id, name) {
+  return apiFetch(`/api/playlists/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) });
+}
+export async function deletePlaylist(id) {
+  return apiFetch(`/api/playlists/${id}`, { method: 'DELETE' });
+}
+export async function addToPlaylist(id, sessionId) {
+  return apiFetch(`/api/playlists/${id}/items`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId }) });
+}
+export async function removeFromPlaylist(id, sessionId) {
+  return apiFetch(`/api/playlists/${id}/items/${sessionId}`, { method: 'DELETE' });
+}
+
 export async function markSessionDone(sessionId) {
   return apiFetch(`/api/sessions/${sessionId}/mark-done`, { method: 'POST' });
 }

@@ -9,6 +9,7 @@ import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { useAuth } from '../context/AuthContext'
 import {
   useModels, useSessions, renameSession, deleteSession, toggleBookmark, getTranscript,
+  usePlaylists, createPlaylist, renamePlaylist, deletePlaylist, addToPlaylist, removeFromPlaylist,
   useCostStats, useAgents, useSprints, useIssues, useTeamMembers,
   runAgent, getSprintChangelog, requestIssueSummary, getIssueLastResponse, generateSprintChangelog,
   uploadFile,
@@ -27,7 +28,7 @@ import {
   MessageSquare, SendHorizontal, Wrench, ChevronDown, LayoutGrid, Sparkles, DollarSign,
   ChevronRight, Loader2, Paperclip, CheckCircle2,
   Settings, Users, Phone, FileText, BookOpen, Clock, User as UserIcon, Bell, BellOff,
-  Square, Copy, Check,
+  Square, Copy, Check, ListMusic, FolderPlus,
 } from 'lucide-react'
 
 // Completion chime — same triangle-wave arpeggio V1 plays when the bot finishes.
@@ -117,6 +118,8 @@ export default function TerminalPage() {
   const [page, setPage] = useState(1)
   const { sessions, totalPages, refresh: refreshSessions } = useSessions(page, search)
   const hasMore = page < (totalPages || 1)
+  const { playlists, refresh: refreshPlaylists } = usePlaylists()
+  const [plMenuFor, setPlMenuFor] = useState(null) // session id whose "add to playlist" submenu is open
 
   // Top-level workspace tab. 'chat' is the terminal/conversation; the others mount
   // the same feature views V1's dashboard uses (reused as-is, no fork).
@@ -512,10 +515,50 @@ export default function TerminalPage() {
   }
   const doBookmark = async (s) => { setMenuFor(null); await toggleBookmark(s.id); refreshSessions() }
 
+  // Playlists — personal session groupings.
+  const activePlaylist = sessionFilter.startsWith('pl:') ? (playlists || []).find(p => p.id === sessionFilter.slice(3)) : null
+  const doCreatePlaylist = async () => {
+    const name = window.prompt('New playlist name')?.trim()
+    if (!name) return
+    const pl = await createPlaylist(name)
+    await refreshPlaylists()
+    if (pl?.id) setSessionFilter('pl:' + pl.id)
+  }
+  const doRenamePlaylist = async (pl) => {
+    const name = window.prompt('Rename playlist', pl.name)?.trim()
+    if (!name || name === pl.name) return
+    await renamePlaylist(pl.id, name); refreshPlaylists()
+  }
+  const doDeletePlaylist = async (pl) => {
+    if (!window.confirm(`Delete playlist "${pl.name}"? (sessions are not deleted)`)) return
+    await deletePlaylist(pl.id)
+    if (sessionFilter === 'pl:' + pl.id) setSessionFilter('all')
+    refreshPlaylists()
+  }
+  const isInPlaylist = (pl, sessionId) => (pl.session_ids || []).includes(sessionId)
+  const doTogglePlaylistItem = async (pl, s) => {
+    if (isInPlaylist(pl, s.id)) await removeFromPlaylist(pl.id, s.id)
+    else await addToPlaylist(pl.id, s.id)
+    refreshPlaylists()
+  }
+
   if (loading) return <div className="h-screen flex items-center justify-center bg-bg text-text-secondary font-mono text-sm">Loading…</div>
   if (!user) return <Login />
 
   const activeSession = (sessions || []).find(s => s.id === activeId) || null
+
+  // Sidebar list after the active filter (All / Mine / Saved / a playlist).
+  const visibleSessions = (() => {
+    const all = sessions || []
+    if (sessionFilter === 'mine') return all.filter(s => s.is_mine)
+    if (sessionFilter === 'saved') return all.filter(s => s.bookmarked)
+    if (sessionFilter.startsWith('pl:')) {
+      const ids = new Set(activePlaylist?.session_ids || [])
+      return all.filter(s => ids.has(s.id))
+    }
+    return all
+  })()
+
   // Connection + activity aware: green only while Claude is actively working,
   // blue (done) when connected and idle, amber connecting, red exited/error.
   const statusColor = status === 'live' ? (working ? 'var(--c-status-running)' : 'var(--c-status-completed)') : status === 'connecting' ? '#f2cc60' : status === 'idle' ? 'var(--c-text-muted)' : 'var(--c-status-failed)'
@@ -633,8 +676,34 @@ export default function TerminalPage() {
                 </button>
               ))}
             </div>
+            {/* Playlists — personal session groupings */}
+            <div className="px-2 py-1.5 flex items-center gap-1 flex-wrap" style={{ borderBottom: '1px solid var(--c-border)' }}>
+              <span className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide mr-0.5" style={{ color: 'var(--c-text-muted)' }}>
+                <ListMusic size={11} /> Playlists
+              </span>
+              {(playlists || []).map(pl => {
+                const active = sessionFilter === 'pl:' + pl.id
+                return (
+                  <span key={pl.id} className="group/pl relative inline-flex items-center">
+                    <button onClick={() => setSessionFilter(active ? 'all' : 'pl:' + pl.id)}
+                      onDoubleClick={() => doRenamePlaylist(pl)}
+                      title="Click to filter · double-click to rename"
+                      className="text-[11px] font-medium rounded-full pl-2 pr-2 py-0.5 cursor-pointer transition-colors flex items-center gap-1"
+                      style={{ backgroundColor: active ? 'var(--c-accent)' : 'var(--c-surface-2)', color: active ? '#fff' : 'var(--c-text-secondary)', border: '1px solid var(--c-border)' }}>
+                      {pl.name} <span style={{ opacity: 0.7 }}>{(pl.session_ids || []).length}</span>
+                      {active && <X size={11} className="ml-0.5 hover:opacity-70" onClick={(e) => { e.stopPropagation(); doDeletePlaylist(pl) }} />}
+                    </button>
+                  </span>
+                )
+              })}
+              <button onClick={doCreatePlaylist} title="New playlist"
+                className="text-[11px] rounded-full px-1.5 py-0.5 cursor-pointer flex items-center gap-0.5"
+                style={{ color: 'var(--c-accent)', border: '1px dashed var(--c-border)' }}>
+                <FolderPlus size={11} /> New
+              </button>
+            </div>
             <div className="flex-1 overflow-y-auto">
-              {(sessionFilter === 'mine' ? (sessions || []).filter(s => s.is_mine) : sessionFilter === 'saved' ? (sessions || []).filter(s => s.bookmarked) : (sessions || [])).map(s => (
+              {visibleSessions.map(s => (
                 <div key={s.id} className="relative group" style={{ borderBottom: '1px solid var(--c-border)' }}>
                   <div onClick={() => openSession(s)}
                     className="px-3 py-2 text-xs cursor-pointer transition-colors"
@@ -645,7 +714,7 @@ export default function TerminalPage() {
                       <span title={s.status || 'unknown'}><StatusDot status={s.status} size={7} /></span>
                       {s.bookmarked ? <Star size={11} fill="#f2cc60" style={{ color: '#f2cc60' }} /> : null}
                       <span className="truncate flex-1" style={{ color: 'var(--c-text)' }}>{s.name || s.task || s.id}</span>
-                      <button onClick={(e) => { e.stopPropagation(); setMenuFor(menuFor === s.id ? null : s.id) }}
+                      <button onClick={(e) => { e.stopPropagation(); setPlMenuFor(null); setMenuFor(menuFor === s.id ? null : s.id) }}
                         className="opacity-0 group-hover:opacity-100 p-0.5 rounded cursor-pointer" style={{ color: 'var(--c-text-muted)' }}>
                         <MoreVertical size={13} />
                       </button>
@@ -671,14 +740,31 @@ export default function TerminalPage() {
                       <MenuItem icon={<Share2 size={12} />} label="Share" onClick={() => { setMenuFor(null); setShareFor(s) }} />
                       <MenuItem icon={<Pencil size={12} />} label="Rename" onClick={() => doRename(s)} />
                       <MenuItem icon={<Star size={12} />} label={s.bookmarked ? 'Unbookmark' : 'Bookmark'} onClick={() => doBookmark(s)} />
+                      <MenuItem icon={<ListMusic size={12} />} label="Add to playlist" onClick={() => setPlMenuFor(plMenuFor === s.id ? null : s.id)} />
+                      {plMenuFor === s.id && (
+                        <div style={{ borderTop: '1px solid var(--c-border)', marginTop: 2, paddingTop: 2, maxHeight: 180, overflowY: 'auto' }}>
+                          {!(playlists || []).length && <div className="px-3 py-1.5 text-[11px]" style={{ color: 'var(--c-text-muted)' }}>No playlists yet</div>}
+                          {(playlists || []).map(pl => (
+                            <button key={pl.id} onClick={() => doTogglePlaylistItem(pl, s)}
+                              className="w-full flex items-center gap-2 px-3 py-1.5 cursor-pointer text-left hover:opacity-80"
+                              style={{ color: 'var(--c-text-secondary)' }}>
+                              <span style={{ width: 12, display: 'inline-flex' }}>{isInPlaylist(pl, s.id) ? <Check size={12} style={{ color: 'var(--c-accent)' }} /> : null}</span>
+                              <span className="truncate flex-1">{pl.name}</span>
+                            </button>
+                          ))}
+                          <button onClick={doCreatePlaylist} className="w-full flex items-center gap-2 px-3 py-1.5 cursor-pointer text-left" style={{ color: 'var(--c-accent)' }}>
+                            <FolderPlus size={12} /> New playlist
+                          </button>
+                        </div>
+                      )}
                       {user.isAdmin && <MenuItem icon={<Trash2 size={12} />} label="Delete" danger onClick={() => doDelete(s)} />}
                     </div>
                   )}
                 </div>
               ))}
-              {!(sessionFilter === 'mine' ? (sessions || []).filter(s => s.is_mine) : sessionFilter === 'saved' ? (sessions || []).filter(s => s.bookmarked) : (sessions || [])).length && (
+              {!visibleSessions.length && (
                 <div className="px-3 py-4 text-xs text-center" style={{ color: 'var(--c-text-muted)' }}>
-                  {sessionFilter === 'mine' ? 'No sessions by you yet' : sessionFilter === 'saved' ? 'No saved sessions yet' : 'No sessions.'}
+                  {sessionFilter === 'mine' ? 'No sessions by you yet' : sessionFilter === 'saved' ? 'No saved sessions yet' : sessionFilter.startsWith('pl:') ? 'This playlist is empty — add sessions from the ⋮ menu.' : 'No sessions.'}
                 </div>
               )}
               {hasMore && (

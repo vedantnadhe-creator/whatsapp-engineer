@@ -115,6 +115,20 @@ class SessionStore {
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (user_id, session_id)
             );
+            -- Playlists: personal, per-user groupings of sessions (like a playlist).
+            CREATE TABLE IF NOT EXISTS playlists (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS playlist_items (
+                playlist_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                added_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (playlist_id, session_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_playlists_user ON playlists(user_id);
             CREATE TABLE IF NOT EXISTS sprints (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
@@ -823,6 +837,7 @@ class SessionStore {
             this.db.prepare('DELETE FROM session_share_links WHERE session_id = ?').run(sessionId);
             this.db.prepare('DELETE FROM access_requests WHERE session_id = ?').run(sessionId);
             this.db.prepare('DELETE FROM bookmarks WHERE session_id = ?').run(sessionId);
+            this.db.prepare('DELETE FROM playlist_items WHERE session_id = ?').run(sessionId);
             this.db.prepare('UPDATE issues SET session_id = NULL WHERE session_id = ?').run(sessionId);
             this.db.prepare('DELETE FROM sessions WHERE id = ?').run(sessionId);
         });
@@ -1009,6 +1024,55 @@ class SessionStore {
 
     getBookmarkedSessionIds(userId) {
         return new Set(this.db.prepare('SELECT session_id FROM bookmarks WHERE user_id = ?').all(userId).map(r => r.session_id));
+    }
+
+    // ── Playlists (personal session groupings) ───────────────────
+
+    // All of a user's playlists, each with its session ids. Scoped by user_id so
+    // playlists are always private to their owner.
+    getPlaylists(userId) {
+        const lists = this.db.prepare('SELECT id, name, created_at FROM playlists WHERE user_id = ? ORDER BY created_at').all(userId);
+        const items = this.db.prepare(
+            'SELECT pi.playlist_id, pi.session_id FROM playlist_items pi JOIN playlists p ON p.id = pi.playlist_id WHERE p.user_id = ?'
+        ).all(userId);
+        const byList = new Map(lists.map(l => [l.id, []]));
+        for (const it of items) byList.get(it.playlist_id)?.push(it.session_id);
+        return lists.map(l => ({ ...l, session_ids: byList.get(l.id) || [] }));
+    }
+
+    createPlaylist(userId, name) {
+        const id = `PL-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+        this.db.prepare('INSERT INTO playlists (id, user_id, name) VALUES (?, ?, ?)').run(id, userId, name);
+        return { id, name, session_ids: [] };
+    }
+
+    // Ownership-checked rename — only affects the caller's own playlist.
+    renamePlaylist(userId, id, name) {
+        const r = this.db.prepare('UPDATE playlists SET name = ? WHERE id = ? AND user_id = ?').run(name, id, userId);
+        return r.changes > 0;
+    }
+
+    deletePlaylist(userId, id) {
+        const r = this.db.prepare('DELETE FROM playlists WHERE id = ? AND user_id = ?').run(id, userId);
+        if (r.changes > 0) this.db.prepare('DELETE FROM playlist_items WHERE playlist_id = ?').run(id);
+        return r.changes > 0;
+    }
+
+    // Verify the playlist belongs to the user before mutating its items.
+    _ownsPlaylist(userId, playlistId) {
+        return !!this.db.prepare('SELECT 1 FROM playlists WHERE id = ? AND user_id = ?').get(playlistId, userId);
+    }
+
+    addToPlaylist(userId, playlistId, sessionId) {
+        if (!this._ownsPlaylist(userId, playlistId)) return false;
+        this.db.prepare('INSERT OR IGNORE INTO playlist_items (playlist_id, session_id) VALUES (?, ?)').run(playlistId, sessionId);
+        return true;
+    }
+
+    removeFromPlaylist(userId, playlistId, sessionId) {
+        if (!this._ownsPlaylist(userId, playlistId)) return false;
+        this.db.prepare('DELETE FROM playlist_items WHERE playlist_id = ? AND session_id = ?').run(playlistId, sessionId);
+        return true;
     }
 
     // ── Sprints ──────────────────────────────────────────────────

@@ -181,6 +181,52 @@ a{color:#60a5fa;text-decoration:none}</style></head>
         } catch (err) { res.status(500).json({ error: err.message }); }
     });
 
+    // ── Playlists (personal session groupings) — all scoped to req.user.id ──
+    app.get('/api/playlists', requireAuth, (req, res) => {
+        try { res.json(store.getPlaylists(req.user.id)); }
+        catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    app.post('/api/playlists', requireAuth, (req, res) => {
+        try {
+            const name = String(req.body?.name || '').trim();
+            if (!name) return res.status(400).json({ error: 'name is required' });
+            res.json(store.createPlaylist(req.user.id, name));
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    app.put('/api/playlists/:id', requireAuth, (req, res) => {
+        try {
+            const name = String(req.body?.name || '').trim();
+            if (!name) return res.status(400).json({ error: 'name is required' });
+            if (!store.renamePlaylist(req.user.id, req.params.id, name)) return res.status(404).json({ error: 'Playlist not found' });
+            res.json({ success: true });
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    app.delete('/api/playlists/:id', requireAuth, (req, res) => {
+        try {
+            if (!store.deletePlaylist(req.user.id, req.params.id)) return res.status(404).json({ error: 'Playlist not found' });
+            res.json({ success: true });
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    app.post('/api/playlists/:id/items', requireAuth, (req, res) => {
+        try {
+            const sessionId = String(req.body?.sessionId || '');
+            if (!sessionId) return res.status(400).json({ error: 'sessionId is required' });
+            if (!store.addToPlaylist(req.user.id, req.params.id, sessionId)) return res.status(404).json({ error: 'Playlist not found' });
+            res.json({ success: true });
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    app.delete('/api/playlists/:id/items/:sessionId', requireAuth, (req, res) => {
+        try {
+            if (!store.removeFromPlaylist(req.user.id, req.params.id, req.params.sessionId)) return res.status(404).json({ error: 'Playlist not found' });
+            res.json({ success: true });
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
     app.get('/api/sessions/active', optionalAuth, (req, res) => {
         try { res.json(store.getAllActiveSessions()); }
         catch (err) { res.status(500).json({ error: err.message }); }
