@@ -13,6 +13,7 @@ import CostView from './components/CostView'
 import Login from './pages/Login'
 import ShareSessionModal from './components/ShareSessionModal'
 import MergeDialog from './components/MergeDialog'
+import VoiceOrchestrator from './components/VoiceOrchestrator'
 import { AdminModal, UsersPanel, PhonesPanel, PromptsPanel, LearningsPanel, CronPanel, AccessRequestsPanel, SettingsPanel } from './components/AdminPanels'
 import { ThemeProvider } from './context/ThemeContext'
 
@@ -616,6 +617,9 @@ function Dashboard() {
           <button onClick={(e) => { e.stopPropagation(); setNotification(null) }} className="ml-2 opacity-50 hover:opacity-100 cursor-pointer text-xs">&times;</button>
         </div>
       )}
+
+      {/* Per-user voice orchestrator (floating) */}
+      <VoiceOrchestrator />
     </div>
   )
 }

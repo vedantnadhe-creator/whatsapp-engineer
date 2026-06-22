@@ -686,6 +686,23 @@ export async function transcribeAudio(blob) {
   });
 }
 
+// ── Voice Orchestrator ──
+export async function orchestratorMyWork() {
+  return apiFetch('/api/orchestrator/my-work');
+}
+export async function orchestratorChat(text) {
+  return apiFetch('/api/orchestrator/chat', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }),
+  });
+}
+// Raw audio blob in → { transcript, reply, actions, audioBase64 }
+export async function orchestratorVoice(blob) {
+  return apiFetch('/api/orchestrator/voice', { method: 'POST', body: blob });
+}
+export async function orchestratorReset() {
+  return apiFetch('/api/orchestrator/reset', { method: 'POST' });
+}
+
 // ---------------------------------------------------------------------------
 // Team members (for assignment dropdowns)
 // ---------------------------------------------------------------------------

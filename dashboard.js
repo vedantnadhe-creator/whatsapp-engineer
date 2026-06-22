@@ -22,6 +22,7 @@ import {
 import * as sheetsService from './sheets_service.js';
 import { listOllamaModels } from './ollama_models.js';
 import { probeHeadroom } from './headroom.js';
+import { runOrchestratorTurn, synthesizeSpeech } from './voice_orchestrator.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -972,7 +973,7 @@ Do NOT ask for confirmation — proceed through each step automatically. If any 
 
     // ── Speech-to-Text (Deepgram) ─────────────────────────────────
 
-    const DEEPGRAM_API_KEY = 'a8b75fa07ad77e26a7866d995ed329553927767b';
+    const DEEPGRAM_API_KEY = config.DEEPGRAM_API_KEY;
     const audioUploadHandler = express.raw({ type: '*/*', limit: '25mb' });
     app.post('/api/transcribe', audioUploadHandler, async (req, res) => {
         try {
@@ -995,6 +996,131 @@ Do NOT ask for confirmation — proceed through each step automatically. If any 
             console.error('[Deepgram] Transcription error:', err.message);
             res.status(500).json({ error: err.message });
         }
+    });
+
+    // ── Voice Orchestrator (per-user, Gemini + Deepgram) ─────────
+    // Short rolling conversation memory per user (avoids shipping history over the wire).
+    const voiceHistory = new Map();
+
+    // Compact summary of everything assigned to this user in the sprint.
+    const buildUserWorkContext = (user) => {
+        const mine = (store.getAllIssues() || []).filter(i => i.category !== 'chat' && (i.assigned_to === user.id || i.qa_owner === user.id));
+        if (!mine.length) return 'Nothing is currently assigned to you.';
+        return mine.map(i => {
+            const role = i.assigned_to === user.id && i.qa_owner === user.id ? 'dev+QA' : i.assigned_to === user.id ? 'dev' : 'QA';
+            const parent = i.parent_issue_id ? ' (subtask)' : '';
+            const bugs = (i.open_bugs || 0) ? `, ${i.open_bugs} open bug(s)` : '';
+            return `- "${i.title}"${parent} [${i.type || 'task'}] — your role: ${role}; dev: ${i.dev_status || 'todo'}, QA: ${i.qa_status || '—'}${bugs}`;
+        }).join('\n');
+    };
+
+    // Fuzzy-match a spoken title against the user's own issues.
+    const findMyIssue = (user, title) => {
+        const all = (store.getAllIssues() || []).filter(i => i.category !== 'chat' && (i.assigned_to === user.id || i.qa_owner === user.id));
+        if (!title) return null;
+        const t = String(title).toLowerCase().trim();
+        return all.find(i => i.title?.toLowerCase() === t)
+            || all.find(i => i.title?.toLowerCase().includes(t))
+            || all.find(i => t.includes((i.title || '').toLowerCase()))
+            || null;
+    };
+    const DEV_STATUSES = ['todo', 'in_progress', 'dev_completed', 'done'];
+    const QA_STATUSES = ['testing', 'pass', 'fail', 'not_needed'];
+
+    // Side-effecting tools, with the request user bound in. These drive the SAME
+    // store/messageHandler paths the UI uses, so behavior stays consistent.
+    const orchestratorExecutors = (user) => ({
+        list_my_work: async () => ({ ok: true, work: buildUserWorkContext(user) }),
+        update_issue_status: async ({ issue_title, dev_status, qa_status }) => {
+            const issue = findMyIssue(user, issue_title);
+            if (!issue) return { ok: false, error: `No assigned item matching "${issue_title}".` };
+            const patch = {};
+            if (dev_status && DEV_STATUSES.includes(dev_status)) patch.dev_status = dev_status;
+            if (qa_status && QA_STATUSES.includes(qa_status)) { patch.qa_status = qa_status; if (qa_status === 'pass') patch.dev_status = 'done'; }
+            if (!Object.keys(patch).length) return { ok: false, error: 'No valid status supplied.' };
+            store.updateIssue(issue.id, patch);
+            const updated = store.getIssue(issue.id);
+            wsBroadcast('issue_updated', { issue: updated });
+            return { ok: true, title: issue.title, dev_status: updated.dev_status, qa_status: updated.qa_status };
+        },
+        start_session_for_issue: async ({ issue_title, instruction }) => {
+            const issue = findMyIssue(user, issue_title);
+            if (!issue) return { ok: false, error: `No assigned item matching "${issue_title}".` };
+            if (issue.session_id && store.getSession(issue.session_id)) return { ok: true, title: issue.title, sessionId: issue.session_id, existing: true };
+            const phone = user.phone || user.email || user.id;
+            const result = await messageHandler({ isWeb: true, phone: String(phone), text: buildFeatureDevPrompt(issue, instruction || ''), pushName: user.displayName || 'Voice', ownerId: user.id, model: 'claude-opus-4-8', mode: 'developer' });
+            if (result?.sessionId) {
+                store.updateSession(result.sessionId, { sprint_id: issue.sprint_id || null, type: issue.type || 'feature', name: issue.title.slice(0, 120), mode: 'developer' });
+                store.updateIssue(issue.id, { session_id: result.sessionId, dev_status: 'in_progress', status: 'in_progress' });
+                wsBroadcast('issue_updated', { issue: store.getIssue(issue.id) });
+            }
+            return { ok: true, title: issue.title, sessionId: result?.sessionId };
+        },
+        create_session: async ({ task }) => {
+            if (!task) return { ok: false, error: 'No task supplied.' };
+            const phone = user.phone || user.email || user.id;
+            const result = await messageHandler({ isWeb: true, phone: String(phone), text: task, pushName: user.displayName || 'Voice', ownerId: user.id, model: 'claude-opus-4-8', mode: 'developer' });
+            return { ok: true, sessionId: result?.sessionId, task };
+        },
+        add_subtask: async ({ parent_issue_title, title }) => {
+            const parent = findMyIssue(user, parent_issue_title);
+            if (!parent) return { ok: false, error: `No assigned feature matching "${parent_issue_title}".` };
+            const sub = store.createIssue({ title, parentIssueId: parent.id, category: 'issue', type: 'task', sprintId: parent.sprint_id || null, createdBy: user.id });
+            wsBroadcast('issue_updated', { issue: store.getIssue(parent.id) });
+            return { ok: true, parent: parent.title, subtask: title, id: sub?.id };
+        },
+        log_bug: async ({ issue_title, title, critical }) => {
+            const issue = findMyIssue(user, issue_title);
+            if (!issue) return { ok: false, error: `No assigned feature matching "${issue_title}".` };
+            const bug = store.createBug({ issueId: issue.id, title, severity: critical ? 'critical' : 'normal', createdBy: user.id });
+            wsBroadcast('issue_updated', { issue: store.getIssue(issue.id) });
+            return { ok: true, issue: issue.title, bug: title, critical: !!critical, id: bug?.id };
+        },
+    });
+
+    const runVoiceTurn = async (user, userText) => {
+        const history = voiceHistory.get(user.id) || [];
+        const out = await runOrchestratorTurn({ workContext: buildUserWorkContext(user), history, userText, executors: orchestratorExecutors(user) });
+        voiceHistory.set(user.id, (out.history || []).slice(-24)); // cap memory
+        return out;
+    };
+
+    app.get('/api/orchestrator/my-work', requireAuth, (req, res) => {
+        try { res.json({ work: buildUserWorkContext(req.user) }); }
+        catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    app.post('/api/orchestrator/reset', requireAuth, (req, res) => { voiceHistory.delete(req.user.id); res.json({ ok: true }); });
+
+    // Typed turn — text in, spoken + text reply out.
+    app.post('/api/orchestrator/chat', requireAuth, async (req, res) => {
+        try {
+            const text = String(req.body?.text || '').trim();
+            if (!text) return res.status(400).json({ error: 'text is required' });
+            const { reply, actions } = await runVoiceTurn(req.user, text);
+            let audioBase64 = null;
+            try { audioBase64 = (await synthesizeSpeech(reply)).toString('base64'); } catch (_) { /* text still returned */ }
+            res.json({ transcript: text, reply, actions, audioBase64 });
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    // Voice turn — raw audio in → Deepgram STT → orchestrator → Deepgram TTS → JSON out.
+    app.post('/api/orchestrator/voice', requireAuth, audioUploadHandler, async (req, res) => {
+        try {
+            const dgRes = await fetch('https://api.deepgram.com/v1/listen?model=nova-3&smart_format=true', {
+                method: 'POST',
+                headers: { 'Authorization': `Token ${DEEPGRAM_API_KEY}`, 'Content-Type': req.headers['content-type'] || 'audio/webm' },
+                body: req.body,
+            });
+            if (!dgRes.ok) throw new Error(`Deepgram STT ${dgRes.status}: ${await dgRes.text()}`);
+            const data = await dgRes.json();
+            const transcript = (data?.results?.channels?.[0]?.alternatives?.[0]?.transcript || '').trim();
+            if (!transcript) return res.json({ transcript: '', reply: "I didn't catch that — try again.", actions: [], audioBase64: null });
+            const { reply, actions } = await runVoiceTurn(req.user, transcript);
+            let audioBase64 = null;
+            try { audioBase64 = (await synthesizeSpeech(reply)).toString('base64'); } catch (_) { }
+            res.json({ transcript, reply, actions, audioBase64 });
+        } catch (err) { res.status(500).json({ error: err.message }); }
     });
 
     // ── Workspace File Browser ───────────────────────────────────

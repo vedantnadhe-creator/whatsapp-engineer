@@ -15,6 +15,10 @@ const config = {
     // proxy is reachable, Claude sessions route through it (compress → Anthropic).
     HEADROOM_BASE_URL: process.env.HEADROOM_BASE_URL || 'http://localhost:8787',
 
+    // Deepgram — speech-to-text (/api/transcribe) and text-to-speech (voice orchestrator).
+    DEEPGRAM_API_KEY: process.env.DEEPGRAM_API_KEY || '',
+    DEEPGRAM_TTS_MODEL: process.env.DEEPGRAM_TTS_MODEL || 'aura-2-thalia-en',
+
     // Gemini API
     GEMINI_API_KEY: process.env.GEMINI_API_KEY || '',
     GEMINI_MODEL: process.env.GEMINI_MODEL || 'gemini-3-flash-preview',
