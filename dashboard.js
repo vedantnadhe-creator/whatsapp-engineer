@@ -48,8 +48,15 @@ export function startDashboard(store, messageHandler, port = 18790, wa = null, e
     app.use(cors({ origin: true, credentials: true }));
     app.use(express.json({ strict: false }));
     app.use(cookieParser());
-    app.use(express.static(path.join(__dirname, 'public')));
-    app.use('/sessions', express.static(path.join(__dirname, 'public')));
+    // Serve the SPA. index.html must NOT be cached (else browsers keep loading an
+    // old build's hashed JS and never see new features); hashed assets are immutable.
+    const staticOpts = {
+        setHeaders: (res, filePath) => {
+            if (filePath.endsWith('index.html')) res.setHeader('Cache-Control', 'no-cache, must-revalidate');
+        },
+    };
+    app.use(express.static(path.join(__dirname, 'public'), staticOpts));
+    app.use('/sessions', express.static(path.join(__dirname, 'public'), staticOpts));
 
     // ── S3 Client (for PRD proxy) ─────────────────────────
     const s3 = new S3Client({
@@ -2267,6 +2274,7 @@ Steps:
     // ── SPA catch-all — serve index.html for any non-API route ──
     app.get('{*path}', (req, res) => {
         if (req.path.startsWith('/api/')) return res.status(404).json({ error: 'Not found' });
+        res.setHeader('Cache-Control', 'no-cache, must-revalidate');
         res.sendFile(path.join(__dirname, 'public', 'index.html'));
     });
 
