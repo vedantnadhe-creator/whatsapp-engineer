@@ -5,6 +5,7 @@
 import pty from 'node-pty';
 import { EventEmitter } from 'events';
 import config from './config.js';
+import { isOllamaModel, ollamaModelName, ollamaEnv, stripLeakedOllamaEnv } from './ollama_models.js';
 import fs from 'fs';
 import path from 'path';
 
@@ -265,16 +266,22 @@ class ClaudeManager extends EventEmitter {
         const { preamble, extraArgs } = this._roleAugment(sessionId);
         const head = [KB_HINT, preamble].filter(Boolean).join('\n\n');
         const fullPrompt = fileRef ? `${head}\n\n${fileRef}\n\n${prompt}` : `${head}\n\n${prompt}`;
-        const args = ['--print', '--model', model, '--output-format', 'stream-json', '--verbose', ...SKIP_PERMS, ...extraArgs, fullPrompt];
-        console.log(`[Claude] NEW session ${sessionId} | model: ${model} | cwd: ${workingDir}${extraArgs.length ? ' | read-only' : ''}`);
-        this._runPty(sessionId, config.CLAUDE_BIN, args, workingDir, 0);
+        // Ollama fallback: strip the `ollama:` tag for --model and inject the
+        // Anthropic-override env so claude routes to the local Ollama server.
+        const useOllama = isOllamaModel(model);
+        const realModel = useOllama ? ollamaModelName(model) : model;
+        const args = ['--print', '--model', realModel, '--output-format', 'stream-json', '--verbose', ...SKIP_PERMS, ...extraArgs, fullPrompt];
+        console.log(`[Claude] NEW session ${sessionId} | model: ${realModel}${useOllama ? ' (ollama)' : ''} | cwd: ${workingDir}${extraArgs.length ? ' | read-only' : ''}`);
+        this._runPty(sessionId, config.CLAUDE_BIN, args, workingDir, 0, null, useOllama);
     }
 
     _spawnPlan(sessionId, prompt, workingDir, model = 'claude-opus-4-8') {
         const planPrefix = 'PLANNING MODE: Read the codebase and relevant knowledge base docs, then write a detailed step-by-step plan of the changes you would make. Do NOT modify any files. Output the plan as a numbered list, then stop.';
-        const args = ['--print', '--model', model, '--output-format', 'stream-json', '--verbose', ...SKIP_PERMS, `${KB_HINT}\n\n${planPrefix}\n\nTask: ${prompt}`];
-        console.log(`[Claude] PLAN session ${sessionId} | model: ${model} | cwd: ${workingDir}`);
-        this._runPty(sessionId, config.CLAUDE_BIN, args, workingDir, 0);
+        const useOllama = isOllamaModel(model);
+        const realModel = useOllama ? ollamaModelName(model) : model;
+        const args = ['--print', '--model', realModel, '--output-format', 'stream-json', '--verbose', ...SKIP_PERMS, `${KB_HINT}\n\n${planPrefix}\n\nTask: ${prompt}`];
+        console.log(`[Claude] PLAN session ${sessionId} | model: ${realModel}${useOllama ? ' (ollama)' : ''} | cwd: ${workingDir}`);
+        this._runPty(sessionId, config.CLAUDE_BIN, args, workingDir, 0, null, useOllama);
     }
 
     _spawnResume(sessionId, claudeSessionId, followUp, workingDir, baseCost = 0, imagePath = null, model = 'claude-opus-4-8') {
@@ -283,8 +290,12 @@ class ClaudeManager extends EventEmitter {
         // was created; the disallowed-tools flags must be passed on each resume).
         const { extraArgs } = this._roleAugment(sessionId);
         const fullFollowUp = fileRef ? `${fileRef}\n\n${followUp}` : followUp;
-        const args = ['--resume', claudeSessionId, '--print', '--model', model, '--output-format', 'stream-json', '--verbose', ...SKIP_PERMS, ...extraArgs, fullFollowUp];
-        console.log(`[Claude] RESUME session ${sessionId} | model: ${model} | claude_id: ${claudeSessionId}${extraArgs.length ? ' | read-only' : ''}`);
+        // Ollama fallback: strip the `ollama:` tag for --model and inject the
+        // Anthropic-override env so claude routes to the local Ollama server.
+        const useOllama = isOllamaModel(model);
+        const realModel = useOllama ? ollamaModelName(model) : model;
+        const args = ['--resume', claudeSessionId, '--print', '--model', realModel, '--output-format', 'stream-json', '--verbose', ...SKIP_PERMS, ...extraArgs, fullFollowUp];
+        console.log(`[Claude] RESUME session ${sessionId} | model: ${realModel}${useOllama ? ' (ollama)' : ''} | claude_id: ${claudeSessionId}${extraArgs.length ? ' | read-only' : ''}`);
         // Carry recovery context so we can fall back to a fresh summarised session
         // if the resume transcript overflows the model context ("Prompt is too long").
         this._runPty(sessionId, config.CLAUDE_BIN, args, workingDir, baseCost, {
@@ -292,7 +303,7 @@ class ClaudeManager extends EventEmitter {
             followUp,
             workingDir,
             model,
-        });
+        }, useOllama);
     }
 
     // When --resume overflows the context window, start a FRESH Claude session
@@ -330,26 +341,34 @@ class ClaudeManager extends EventEmitter {
         }
     }
 
-    _buildEnv(sessionId) {
+    _buildEnv(sessionId, useOllama = false) {
         const env = { ...process.env };
         try {
             const session = this.store.getSession(sessionId);
-            if (!session?.owner_id) return env;
-            const user = this.store.getUserById?.(session.owner_id);
-            if (!user) return env;
-            const name = user.display_name || user.email?.split('@')[0] || user.phone || 'OliBot User';
-            const email = user.email || `${(user.phone || user.id || 'user').toString().replace(/[^a-zA-Z0-9._-]/g, '')}@olibot.local`;
-            env.GIT_AUTHOR_NAME = name;
-            env.GIT_AUTHOR_EMAIL = email;
-            env.GIT_COMMITTER_NAME = name;
-            env.GIT_COMMITTER_EMAIL = email;
+            if (session?.owner_id) {
+                const user = this.store.getUserById?.(session.owner_id);
+                if (user) {
+                    const name = user.display_name || user.email?.split('@')[0] || user.phone || 'OliBot User';
+                    const email = user.email || `${(user.phone || user.id || 'user').toString().replace(/[^a-zA-Z0-9._-]/g, '')}@olibot.local`;
+                    env.GIT_AUTHOR_NAME = name;
+                    env.GIT_AUTHOR_EMAIL = email;
+                    env.GIT_COMMITTER_NAME = name;
+                    env.GIT_COMMITTER_EMAIL = email;
+                }
+            }
         } catch (err) {
             console.error(`[Claude] Failed to resolve git author for ${sessionId}: ${err.message}`);
         }
+        // Ollama model → repoint ANTHROPIC_* at the local Ollama server (blank API_KEY
+        // is required — a non-empty key would win and break routing).
+        // Real model → strip any Ollama-routing env that leaked in from the parent
+        // process so the model hits real Anthropic instead of 404-ing at Ollama.
+        if (useOllama) Object.assign(env, ollamaEnv());
+        else stripLeakedOllamaEnv(env);
         return env;
     }
 
-    _runPty(sessionId, bin, args, workingDir, baseCost = 0, recovery = null) {
+    _runPty(sessionId, bin, args, workingDir, baseCost = 0, recovery = null, useOllama = false) {
         const entry = { proc: null, baseCost, costUsd: baseCost, inputTokens: 0, outputTokens: 0, lastOutput: '', lineBuffer: '', resultEmitted: false, recovery };
         this.processes.set(sessionId, entry);
 
@@ -358,7 +377,7 @@ class ClaudeManager extends EventEmitter {
             cols: 1000000,
             rows: 50,
             cwd: workingDir || config.DEFAULT_WORKING_DIR,
-            env: this._buildEnv(sessionId),
+            env: this._buildEnv(sessionId, useOllama),
         });
         entry.proc = proc;
 

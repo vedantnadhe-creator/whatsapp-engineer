@@ -32,7 +32,7 @@ import path from 'path';
 import config from './config.js';
 import { verifyJwt } from './auth.js';
 import { createExtractor } from './term_extract.js';
-import { isOllamaModel, ollamaModelName, ollamaEnv } from './ollama_models.js';
+import { isOllamaModel, ollamaModelName, ollamaEnv, stripLeakedOllamaEnv } from './ollama_models.js';
 import { isHeadroomEnabled, headroomEnv, probeHeadroom } from './headroom.js';
 
 // Claude Code persists per-folder trust in ~/.claude.json. We pre-accept it for
@@ -363,16 +363,20 @@ export function attachTerminalServer(store) {
         // when the admin toggle is on AND the proxy is reachable (else leave direct).
         const useHeadroom = !useOllama && isHeadroomEnabled(store) && headroomReachable;
 
+        // Build the child env: Ollama → repoint at Ollama; Headroom → repoint at the
+        // compression proxy; otherwise strip any Ollama-routing env that leaked in
+        // from the parent process so a real model hits real Anthropic (not Ollama).
+        const childEnv = { ...process.env, TERM: 'xterm-256color' };
+        if (useOllama) Object.assign(childEnv, ollamaEnv());
+        else if (useHeadroom) Object.assign(childEnv, headroomEnv());
+        else stripLeakedOllamaEnv(childEnv);
+
         const proc = pty.spawn(bin, args, {
             name: 'xterm-256color',
             cols: Math.max(20, cols | 0),
             rows: Math.max(5, rows | 0),
             cwd: workingDir,
-            env: {
-                ...process.env, TERM: 'xterm-256color',
-                ...(useOllama ? ollamaEnv() : {}),
-                ...(useHeadroom ? headroomEnv() : {}),
-            },
+            env: childEnv,
         });
 
         // Headless emulator mirror — same bytes as the PTY, read back as clean text.
