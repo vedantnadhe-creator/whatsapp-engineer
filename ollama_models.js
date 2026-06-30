@@ -28,6 +28,7 @@ export const STATIC_OLLAMA_MODELS = [
     { id: `${OLLAMA_PREFIX}qwen3.5:cloud`, name: 'Ollama · qwen3.5 (cloud) 🖼️', description: 'Ollama Cloud — vision + tools + thinking' },
     { id: `${OLLAMA_PREFIX}gemini-3-flash-preview:cloud`, name: 'Ollama · gemini-3-flash (cloud) 🖼️', description: 'Ollama Cloud — vision + tools + thinking, fast' },
     { id: `${OLLAMA_PREFIX}minimax-m3:cloud`, name: 'Ollama · minimax-m3 (cloud) 🖼️', description: 'Ollama Cloud — vision + tools + thinking' },
+    { id: `${OLLAMA_PREFIX}kimi-k2.7-code:cloud`, name: 'Ollama · kimi-k2.7-code (cloud) 🖼️', description: 'Ollama Cloud — code-tuned, vision + tools + thinking' },
 ];
 
 export function isOllamaModel(id) {
