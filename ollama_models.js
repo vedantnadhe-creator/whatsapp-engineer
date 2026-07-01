@@ -18,17 +18,10 @@ export const OLLAMA_PREFIX = 'ollama:';
 // whatever Ollama reports live. Small / sensible cloud models to start; edit these
 // (or just pull more in Ollama) and the dropdown updates. The user will confirm
 // the exact tags they want.
+// Only minimax-m3 (vision + tools + thinking) — the single sanctioned Ollama fallback.
+// Verified end-to-end via the Anthropic-compat /v1/messages path with image input.
 export const STATIC_OLLAMA_MODELS = [
-    { id: `${OLLAMA_PREFIX}gpt-oss:20b-cloud`, name: 'Ollama · gpt-oss 20B (cloud)', description: 'Ollama Cloud — small, fast fallback' },
-    { id: `${OLLAMA_PREFIX}qwen3-coder:480b-cloud`, name: 'Ollama · qwen3-coder (cloud)', description: 'Ollama Cloud — coding-tuned fallback' },
-    // Vision-capable Ollama Cloud models — glm-5.2:cloud has NO image support, so these
-    // are the equivalents that do. Picking one routes the session through Ollama with
-    // image input (verified end-to-end via the Anthropic-compat /v1/messages path).
-    { id: `${OLLAMA_PREFIX}gemma4:cloud`, name: 'Ollama · gemma4 (cloud) 🖼️', description: 'Ollama Cloud — vision + tools + thinking (GLM equivalent with images)' },
-    { id: `${OLLAMA_PREFIX}qwen3.5:cloud`, name: 'Ollama · qwen3.5 (cloud) 🖼️', description: 'Ollama Cloud — vision + tools + thinking' },
-    { id: `${OLLAMA_PREFIX}gemini-3-flash-preview:cloud`, name: 'Ollama · gemini-3-flash (cloud) 🖼️', description: 'Ollama Cloud — vision + tools + thinking, fast' },
     { id: `${OLLAMA_PREFIX}minimax-m3:cloud`, name: 'Ollama · minimax-m3 (cloud) 🖼️', description: 'Ollama Cloud — vision + tools + thinking' },
-    { id: `${OLLAMA_PREFIX}kimi-k2.7-code:cloud`, name: 'Ollama · kimi-k2.7-code (cloud) 🖼️', description: 'Ollama Cloud — code-tuned, vision + tools + thinking' },
 ];
 
 export function isOllamaModel(id) {
@@ -92,9 +85,9 @@ export function stripLeakedOllamaEnv(env) {
     return env;
 }
 
-// Dynamic list: curated fallbacks + admin-added custom names + whatever the running
-// Ollama actually has (deduped by id). Never throws — if Ollama is down or slow we
-// still return the static + custom entries so the endpoint stays fast and healthy.
+// Curated allowlist + admin-added custom names. We deliberately do NOT merge whatever
+// Ollama has installed live (e.g. glm-5.2:cloud) — only the sanctioned static entry
+// (minimax-m3) plus any explicit admin-added custom tags should appear in the dropdown.
 export async function listOllamaModels(customNames = []) {
     const byId = new Map(STATIC_OLLAMA_MODELS.map((m) => [m.id, m]));
     // Admin-added models (from Settings) — take priority over static labels.
@@ -102,23 +95,6 @@ export async function listOllamaModels(customNames = []) {
         if (!name || !String(name).trim()) continue;
         const entry = ollamaModelEntry(name);
         byId.set(entry.id, entry);
-    }
-    try {
-        const ctrl = new AbortController();
-        const t = setTimeout(() => ctrl.abort(), 1500);
-        const res = await fetch(`${config.OLLAMA_BASE_URL}/api/tags`, { signal: ctrl.signal });
-        clearTimeout(t);
-        if (res.ok) {
-            const data = await res.json();
-            for (const m of data?.models || []) {
-                const real = m?.name || m?.model;
-                if (!real) continue;
-                const id = `${OLLAMA_PREFIX}${real}`;
-                byId.set(id, { id, name: `Ollama · ${real}`, description: 'Ollama (installed)' });
-            }
-        }
-    } catch (_) {
-        // Ollama not reachable — fall back to the curated list silently.
     }
     return [...byId.values()];
 }

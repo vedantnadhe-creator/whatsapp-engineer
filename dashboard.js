@@ -261,6 +261,7 @@ a{color:#60a5fa;text-decoration:none}</style></head>
         const claudeModels = [
             { id: 'claude-opus-4-8', name: 'Opus 4.8', description: 'Latest — most capable for complex work', default: true },
             { id: 'fable', name: 'Fable 5', description: 'Most capable for hardest, long-running tasks · ~2× faster than Opus but uses ~2× the tokens' },
+            { id: 'claude-sonnet-5', name: 'Sonnet 5', description: 'Latest Sonnet — strong for everyday tasks' },
             { id: 'claude-opus-4-7', name: 'Opus 4.7', description: 'Previous Opus generation' },
             { id: 'opus', name: 'Opus 4.6', description: 'Older Opus generation' },
             { id: 'sonnet', name: 'Sonnet 4.6', description: 'Best for everyday tasks' },
