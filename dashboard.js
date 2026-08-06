@@ -22,6 +22,7 @@ import {
 import * as sheetsService from './sheets_service.js';
 import { listOllamaModels, OLLAMA_PREFIX, isOllamaModel, safeOllamaModel, DEFAULT_OLLAMA_MODEL as OLLAMA_DEFAULT } from './ollama_models.js';
 import { listGrokModels, isGrokModel, safeGrokModel } from './grok_models.js';
+import { listCodexModels, isCodexModel, safeCodexModel } from './codex_models.js';
 import { mountGrokProxy } from './grok_proxy.js';
 import cron from 'node-cron';
 import { sendSprintStatusEmail, buildSprintStatusEmail } from './sprint_mailer.js';
@@ -55,11 +56,14 @@ export { pendingImages };
 // and sprint-only view are separate and unchanged.
 const TESTER_MODEL = 'haiku';
 const ROLE_MODEL_POLICY = {
-    business_analyst: { allow: (m) => isOllamaModel(m), fallback: OLLAMA_DEFAULT },
+    // Was Ollama-only for cost containment; Ollama left the dropdown on 2026-08-06,
+    // which would have left BAs with an empty list, so they now share the tester's
+    // cheapest-Claude-tier policy.
+    business_analyst: { allow: (m) => m === TESTER_MODEL, fallback: TESTER_MODEL },
     tester: { allow: (m) => m === TESTER_MODEL, fallback: TESTER_MODEL },
 };
 function resolveModelForRole(role, model) {
-    const safe = safeGrokModel(safeOllamaModel(model));
+    const safe = safeCodexModel(safeGrokModel(safeOllamaModel(model)));
     const policy = ROLE_MODEL_POLICY[role];
     if (policy && !policy.allow(safe)) return policy.fallback;
     return safe;
@@ -346,15 +350,12 @@ a{color:#60a5fa;text-decoration:none}</style></head>
             { id: 'sonnet', name: 'Sonnet 4.6', description: 'Best for everyday tasks' },
             { id: 'haiku', name: 'Haiku 4.5', description: 'Fastest for quick answers' },
         ];
-        let ollamaModels = [];
-        try {
-            let customNames = [];
-            try { customNames = JSON.parse(store.getSetting('ollama_custom_models') || '[]'); } catch (_) { customNames = []; }
-            ollamaModels = await listOllamaModels(Array.isArray(customNames) ? customNames : []);
-        } catch (_) { /* keep Claude list only */ }
-        let grokModels = [];
-        try { grokModels = await listGrokModels(); } catch (_) { /* keep the rest of the list */ }
-        const all = [...claudeModels, ...ollamaModels, ...grokModels];
+        // Ollama and Grok were retired from the dropdown (2026-08-06) in favour of
+        // Codex. Their routing code is still present so existing sessions pinned to
+        // those models keep resuming, but no new session can select one.
+        let codexModels = [];
+        try { codexModels = await listCodexModels(); } catch (_) { /* keep the Claude list */ }
+        const all = [...claudeModels, ...codexModels];
 
         // Restricted roles see ONLY the models their policy allows (same policy the
         // routes enforce, so the dropdown can never offer something that would be

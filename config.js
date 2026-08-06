@@ -6,6 +6,13 @@ const config = {
     // Path to Claude Code binary
     CLAUDE_BIN: process.env.CLAUDE_BIN || '/home/ubuntu/.local/bin/claude',
 
+    // OpenAI Codex CLI — a second agent binary, not another API endpoint. Selecting a
+    // `codex:` model runs that session through `codex exec` instead of `claude`.
+    // Auth is the CLI's own (`codex login` → $CODEX_HOME/auth.json). We never set
+    // CODEX_API_KEY, so a ChatGPT plan subscription is used when one is signed in.
+    CODEX_BIN: process.env.CODEX_BIN || '/home/ubuntu/.local/bin/codex',
+    CODEX_HOME: process.env.CODEX_HOME || '/home/ubuntu/.codex',
+
     // Ollama fallback (per-session model switch). Ollama exposes an
     // Anthropic-compatible API; selecting an `ollama:` model routes that session here.
     OLLAMA_BASE_URL: process.env.OLLAMA_BASE_URL || 'http://localhost:11434',

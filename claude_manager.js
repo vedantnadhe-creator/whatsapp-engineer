@@ -7,6 +7,8 @@ import { EventEmitter } from 'events';
 import config from './config.js';
 import { isOllamaModel, ollamaModelName, ollamaEnv, stripLeakedOllamaEnv, safeOllamaModel } from './ollama_models.js';
 import { isGrokModel, grokModelName, grokEnv, stripLeakedGrokEnv, safeGrokModel } from './grok_models.js';
+import { isCodexModel, codexModelName, codexEnv, safeCodexModel, buildCodexArgs } from './codex_models.js';
+import { translateCodexEvent } from './codex_events.js';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -324,15 +326,44 @@ class ClaudeManager extends EventEmitter {
     _resolveProvider(model) {
         if (isOllamaModel(model)) return { provider: 'ollama', realModel: ollamaModelName(model) };
         if (isGrokModel(model)) return { provider: 'grok', realModel: grokModelName(model) };
+        // Codex is not an endpoint swap like the two above — it is a different agent
+        // binary, so the caller must branch on this before building CLI arguments.
+        if (isCodexModel(model)) return { provider: 'codex', realModel: codexModelName(model) };
         return { provider: null, realModel: model };
     }
 
+    // Whether this session's turn should run through `codex exec` rather than `claude`.
+    // Codex owns its own agent loop, sandbox and session store, so only the argument
+    // construction and event parsing differ — everything downstream is shared.
+    _codexTurn(sessionId, model, prompt, workingDir, threadId = null, imagePath = null) {
+        const { realModel } = this._resolveProvider(model);
+        const session = this.store.getSession(sessionId);
+        const canEdit = session?.edit_access !== 0;
+        const args = buildCodexArgs({
+            model: realModel,
+            prompt,
+            threadId,
+            workingDir: workingDir || config.DEFAULT_WORKING_DIR,
+            canEdit,
+            imagePath,
+        });
+        console.log(`[Codex] ${threadId ? 'RESUME' : 'NEW'} session ${sessionId} | model: ${realModel} | cwd: ${workingDir}${canEdit ? '' : ' | read-only sandbox'}`);
+        return args;
+    }
+
     _spawnNew(sessionId, prompt, workingDir, imagePath = null, model = 'claude-opus-4-8') {
-        model = safeGrokModel(safeOllamaModel(model));
+        model = safeCodexModel(safeGrokModel(safeOllamaModel(model)));
         const fileRef = this._prepareFile(imagePath, workingDir);
         const { preamble, extraArgs } = this._roleAugment(sessionId);
         const head = [KB_HINT, preamble].filter(Boolean).join('\n\n');
         const fullPrompt = fileRef ? `${head}\n\n${fileRef}\n\n${prompt}` : `${head}\n\n${prompt}`;
+        // Codex runs a different binary entirely — same persona/KB preamble, its own
+        // CLI contract. The read-only tester gate becomes a sandbox mode there.
+        if (isCodexModel(model)) {
+            const args = this._codexTurn(sessionId, model, fullPrompt, workingDir, null, imagePath);
+            this._runPty(sessionId, config.CODEX_BIN, args, workingDir, 0, null, 'codex');
+            return;
+        }
         // Ollama/Grok fallback: strip the provider tag for --model and inject the
         // Anthropic-override env so claude routes to the right local proxy.
         const { provider, realModel } = this._resolveProvider(model);
@@ -351,7 +382,18 @@ class ClaudeManager extends EventEmitter {
     }
 
     _spawnResume(sessionId, claudeSessionId, followUp, workingDir, baseCost = 0, imagePath = null, model = 'claude-opus-4-8', repairAttempted = false) {
-        model = safeGrokModel(safeOllamaModel(model));
+        model = safeCodexModel(safeGrokModel(safeOllamaModel(model)));
+        // Codex resumes by its own thread id, stored in the same column. It has no
+        // Anthropic transcript, so the tool-id sanitising below does not apply.
+        if (isCodexModel(model)) {
+            const { preamble } = this._roleAugment(sessionId);
+            const fileRef = this._prepareFile(imagePath, workingDir);
+            const head = [preamble, fileRef].filter(Boolean).join('\n\n');
+            const prompt = head ? `${head}\n\n${followUp}` : followUp;
+            const args = this._codexTurn(sessionId, model, prompt, workingDir, claudeSessionId, imagePath);
+            this._runPty(sessionId, config.CODEX_BIN, args, workingDir, baseCost, null, 'codex');
+            return;
+        }
         // Proactively repair malformed tool_use ids left by a prior turn (e.g. Ollama
         // models like kimi emit `functions.Read:237`-style ids with a `:`) before
         // replaying the transcript — Anthropic models reject those with a 400 on
@@ -490,6 +532,16 @@ class ClaudeManager extends EventEmitter {
         // parent process so the model hits real Anthropic instead of 404-ing.
         if (provider === 'ollama') { Object.assign(env, ollamaEnv()); stripLeakedGrokEnv(env); }
         else if (provider === 'grok') { Object.assign(env, grokEnv()); stripLeakedOllamaEnv(env); }
+        else if (provider === 'codex') {
+            // Codex is its own binary: it must NOT inherit the Anthropic proxy routing,
+            // and CODEX_API_KEY is deliberately left unset so the CLI uses the signed-in
+            // ChatGPT plan credentials in $CODEX_HOME/auth.json.
+            stripLeakedOllamaEnv(env);
+            stripLeakedGrokEnv(env);
+            delete env.ANTHROPIC_BASE_URL;
+            delete env.ANTHROPIC_AUTH_TOKEN;
+            Object.assign(env, codexEnv());
+        }
         else { stripLeakedOllamaEnv(env); stripLeakedGrokEnv(env); }
         return env;
     }
@@ -516,7 +568,7 @@ class ClaudeManager extends EventEmitter {
             for (const line of lines) {
                 const trimmed = line.trim();
                 if (!trimmed) continue;
-                try { const event = JSON.parse(trimmed); this._handleEvent(sessionId, event, entry); } catch (_) { }
+                try { this._consumeEvent(sessionId, JSON.parse(trimmed), entry, provider); } catch (_) { }
             }
         });
 
@@ -525,7 +577,7 @@ class ClaudeManager extends EventEmitter {
             console.log(`[Claude] Session ${sessionId} exited (code ${exitCode})`);
             const remaining = entry.lineBuffer.trim();
             if (remaining && !entry.resultEmitted) {
-                try { const event = JSON.parse(remaining); this._handleEvent(sessionId, event, entry); } catch (_) { }
+                try { this._consumeEvent(sessionId, JSON.parse(remaining), entry, provider); } catch (_) { }
             }
 
             // Context overflow on resume → recover with a summarised fresh session (once).
@@ -554,7 +606,9 @@ class ClaudeManager extends EventEmitter {
             // {"type":"result",...} line) is delivered — the turn then completes with
             // no visible reply. Recover the real final answer from Claude Code's own
             // on-disk transcript, which is written independently of this pty stream.
-            if (!entry.resultEmitted && exitCode === 0 && !entry.manualStop) {
+            // Codex writes its own session files, not a Claude transcript, so there is
+            // nothing here to salvage from — skip rather than search the wrong store.
+            if (!entry.resultEmitted && exitCode === 0 && !entry.manualStop && provider !== 'codex') {
                 this._salvageFromTranscript(sessionId, entry, workingDir);
             }
 
@@ -592,6 +646,24 @@ class ClaudeManager extends EventEmitter {
             }
         } catch (err) {
             console.error(`[Claude] Salvage failed for ${sessionId}: ${err.message}`);
+        }
+    }
+
+    // Single entry point for a parsed stdout line. Claude's stream-json events are
+    // handled directly; Codex speaks its own vocabulary, so its events are translated
+    // into the same shapes first and everything downstream stays provider-agnostic.
+    _consumeEvent(sessionId, event, entry, provider = null) {
+        if (provider !== 'codex') return this._handleEvent(sessionId, event, entry);
+        if (!entry.codexCtx) entry.codexCtx = {};
+        // Persist the thread id the moment Codex reports it — if the turn later dies
+        // (401, crash, stop), the session is still resumable instead of orphaned.
+        if (event?.type === 'thread.started' && event.thread_id) {
+            this.store.updateSession(sessionId, { claude_session_id: event.thread_id });
+            entry.claudeSessionId = event.thread_id;
+            console.log(`[Codex] Session ${sessionId} → thread_id: ${event.thread_id}`);
+        }
+        for (const translated of translateCodexEvent(event, entry.codexCtx)) {
+            this._handleEvent(sessionId, translated, entry);
         }
     }
 
