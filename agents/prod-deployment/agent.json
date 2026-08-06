@@ -1,11 +1,12 @@
 {
-  "id": "prod-deployment",
-  "name": "Prod Deployment",
-  "description": "Merge UAT → main, run DB scripts, verify PROD access, deploy services via auto_deploy.sh, and write a changelog.",
-  "icon": "Rocket",
-  "model": "claude-opus-4-8",
-  "type": "task",
-  "workflow_file": "workflow.md",
-  "state_file": "state.json",
-  "version": 1
+    "id": "prod-deployment",
+    "name": "Prod Deployment",
+    "description": "Single session, native subagents. 5 gated phases: changelog (prod↔UAT, HTML→S3) → DB+env discovery by branch date → branch +1 → apply DB/env/configmaps → parallel deploy + Slack #infrahub status.",
+    "icon": "Rocket",
+    "model": "claude-sonnet-5",
+    "type": "task",
+    "run_mode": "single-session",
+    "workflow_file": "workflow.md",
+    "state_file": "state.json",
+    "version": 3
 }

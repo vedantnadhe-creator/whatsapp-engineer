@@ -5,9 +5,11 @@
 import pty from 'node-pty';
 import { EventEmitter } from 'events';
 import config from './config.js';
-import { isOllamaModel, ollamaModelName, ollamaEnv, stripLeakedOllamaEnv } from './ollama_models.js';
+import { isOllamaModel, ollamaModelName, ollamaEnv, stripLeakedOllamaEnv, safeOllamaModel } from './ollama_models.js';
+import { isGrokModel, grokModelName, grokEnv, stripLeakedGrokEnv, safeGrokModel } from './grok_models.js';
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 
 const KB_DIR = config.KB_DIR;
 const KB_HINT = `[Context: Knowledge Base is a local git repo at ${KB_DIR}. Structure: pluginlive.md (company overview), Assessment/ (aptitude, communication, custom, role-based, scheduling), ATS/ (Admin, Corporate, Institute, Student, ElasticSearch), Infrastructure/ (servers, deployment, MCP, skills). To search: grep -rl "<term>" ${KB_DIR} --include="*.md". To read a doc: cat ${KB_DIR}/<path>. To update/create: write to ${KB_DIR}/<path> then cd ${KB_DIR} && git add -A && git commit -m "<msg>" && git push origin main. Read only what's relevant to the current task — do not read all docs upfront. The KB lives ONLY in this GitHub repo — there is no Outline wiki; never call app.getoutline.com or any Outline API.]`;
@@ -19,6 +21,11 @@ const TESTER_PROMPT = `[ROLE: TESTER] You are operating as a QA tester, not a de
 SOURCE OF TRUTH — derive expected behavior in THIS strict priority order, do NOT jump to reading code first:
   1. PRDs — the product requirements are the primary spec. If the tester's instruction names a PRD or links one, use it. PRDs live as public HTML on S3 (links shared by the developer); the create-prd skill produces them.
   2. Knowledge Base — the pluginlive-kb GitHub repo cloned at /home/ubuntu/pluginlive-kb. Search it: grep -rl "<term>" /home/ubuntu/pluginlive-kb --include="*.md", then read the relevant doc (structure: pluginlive.md, Assessment/, ATS/, Infrastructure/). This describes current production-truth behavior.
+
+DATABASE — you have read-only DB access to ALL environments. Never ask the user for DB credentials, an admin login, or an API endpoint to read data; use this instead:
+  /home/ubuntu/scripts/ro-query.sh <dev|uat|prod> "SELECT ..."
+Also accepts -f <file.sql> or a query on stdin, and PSQL_EXTRA for psql flags (e.g. PSQL_EXTRA="-t -A" for bare values). Discover the layout with "\\dt <schema>.*" — schemas are admin, assessment, corporate, institute, student, user_management, ai_interviewer, search_engine, mandate, public (UAT and PROD also have candidate_ingestion_schema).
+SELECT only — the credential itself holds no write privilege, so INSERT/UPDATE/DELETE/DDL will be refused by the server. That is intentional: verify data, never change it. Do not attempt to write, and do not look for another route to a writable connection (other credentials in .env files, the admin UI, psql as an app user) — reading is your access, by design.
 
 Work AUTONOMOUSLY: do NOT pause to ask the user for a PRD, acceptance criteria, scope, or permission to proceed. Pull the expected behavior from the PRD/KB (and the tester's instruction), then just start testing. Only surface a question at the very end if a finding genuinely cannot be resolved — never block the run waiting on an answer. Focus on:
 - Understanding what changed and the expected behavior (from PRD/KB first; code only if neither covers it).
@@ -38,12 +45,49 @@ const SKIP_PERMS = IS_ROOT ? [] : ['--dangerously-skip-permissions'];
 // Tools that mutate files — disabled (via --disallowedTools) for read-only testers.
 const EDIT_TOOLS = 'Edit,Write,NotebookEdit,MultiEdit';
 
+// Designer role persona — injected for design-mode sessions that run inside a REAL
+// frontend repo (not the designs workspace). In the designs workspace the repo's own
+// CLAUDE.md carries the persona; in a product repo it would otherwise be replaced by
+// the developer CLAUDE.md, so we inject the designer contract here instead.
+// Scope is enforced by cwd (the session is spawned inside one frontend repo) plus
+// these rules; there is no path-level tool sandbox, so the rules must be explicit.
+const DESIGNER_PROMPT = `[ROLE: DESIGNER — FRONTEND ONLY] You are the designer building real UI in a product frontend repo. You own how it LOOKS and FEELS; a developer wires the backend afterwards.
+
+YOU MAY (this is your job):
+- Create/edit frontend code in THIS repo only: components, pages, routes, styles/CSS, assets, client-side state, and static markup.
+- Build and run the app locally to see your UI, and iterate on layout, spacing, hierarchy, states, responsiveness and interactions.
+
+YOU MUST NOT (a developer does these later):
+- Touch ANY backend: never edit /home/ubuntu/api/*, server code, controllers/services/repositories, Prisma schemas, SQL, migrations, or seed scripts.
+- Change API contracts, request/response shapes, auth logic, or business rules.
+- Edit .env / secrets / configmaps / CI files.
+- Deploy to UAT or PROD — ever. No ssh to uat.pluginlive.com, no PROD box, no autodeploy.sh, no kubectl, no docker push. No pushing to UAT / release-* / main.
+
+DEPLOYING TO DEV (allowed — this is how you show your work):
+You MAY deploy the frontend you changed to the DEV server so the team can see it live. DEV only.
+1. Commit ONLY the frontend files you changed, then push this repo's Development branch (the DEV pipeline builds from Development).
+2. Run the DEV-only deploy script from /home/ubuntu: ./auto_deploy.sh <app>  (e.g. ./auto_deploy.sh admin-react). That script deploys DEV and nothing else.
+   For the webpack frontends that run bare on this box (admin-react, institute-react): nvm use 20 && npm run build, then restart the service via systemctl.
+3. Deploy ONLY the frontend app you worked on — never a backend service.
+4. Open the DEV URL and confirm your change is actually live before reporting done.
+
+WHEN YOU NEED DATA:
+Do NOT build or call a new backend endpoint. Use realistic mock/stub data (a local fixture or an existing API already wired in the app), keep it clearly marked, and list exactly what the screen needs (endpoint, fields, shape) in your handoff notes so the developer can connect it.
+
+DESIGN SYSTEM (mandatory, do not skip):
+The spec is SPLIT into part files — never read the whole thing.
+1. Read the keyword index /home/ubuntu/pluginlive-designs/website/docs/.components.json (small).
+2. Read ONLY the part file its anchor names, e.g. .../website/docs/design-system/05-atoms.md — plus the foundations once (04-foundations-tokens.md, 03-foundations-layout-motion.md).
+3. Implement using ONLY the tokens/classes/geometry/states that section specifies. Never hardcode a hex or improvise a component. If a keyword is not in the index, STOP and ask.
+Also follow the repo's existing conventions and /home/ubuntu/CODING_STYLE.md — match the surrounding code.
+
+FINISHING: report what you changed, which screens/routes to look at, how to run it, and the data the developer still needs to wire.`;
+
 class ClaudeManager extends EventEmitter {
     constructor(sessionStore) {
         super();
         this.store = sessionStore;
         this.processes = new Map();
-        this._lastNotify = {};
     }
 
     async startSession(userPhone, task, workingDir, imagePath = null, ownerId = null, model = 'claude-opus-4-8', opts = {}) {
@@ -224,6 +268,10 @@ class ClaudeManager extends EventEmitter {
         const entry = this.processes.get(sessionId);
         const session = this.store.getSession(sessionId);
         const costUsd = entry?.costUsd || session?.cost_usd || 0;
+        // Mark this a deliberate stop so the async proc.on('exit', ...) handler below
+        // (which fires after kill(), with a non-zero signal exit code) doesn't clobber
+        // the 'stopped' status we're about to set with 'failed'.
+        if (entry) entry.manualStop = true;
         if (entry?.proc) { try { entry.proc.kill(); } catch (_) { } }
         this.store.updateSession(sessionId, { status: 'stopped' });
         this.processes.delete(sessionId);
@@ -247,6 +295,16 @@ class ClaudeManager extends EventEmitter {
     _roleAugment(sessionId) {
         try {
             const s = this.store.getSession(sessionId);
+            // Design mode inside a real frontend repo: inject the designer contract,
+            // because the repo's developer CLAUDE.md would otherwise be the only
+            // persona. In the designs workspace that repo's own CLAUDE.md already
+            // carries it, so we add nothing.
+            if (s && s.mode === 'design') {
+                const inDesignsRepo = String(s.working_dir || '').startsWith(config.DESIGNS_DIR);
+                return inDesignsRepo
+                    ? { preamble: '', extraArgs: [] }
+                    : { preamble: DESIGNER_PROMPT, extraArgs: [] };
+            }
             if (!s || s.mode !== 'tester') return { preamble: '', extraArgs: [] };
             const canEdit = s.edit_access !== 0;
             const editLine = canEdit
@@ -261,49 +319,116 @@ class ClaudeManager extends EventEmitter {
         } catch { return { preamble: '', extraArgs: [] }; }
     }
 
+    // Resolves which non-Anthropic provider (if any) a model id routes through, and
+    // the real `--model` value to pass once any provider tag is stripped.
+    _resolveProvider(model) {
+        if (isOllamaModel(model)) return { provider: 'ollama', realModel: ollamaModelName(model) };
+        if (isGrokModel(model)) return { provider: 'grok', realModel: grokModelName(model) };
+        return { provider: null, realModel: model };
+    }
+
     _spawnNew(sessionId, prompt, workingDir, imagePath = null, model = 'claude-opus-4-8') {
+        model = safeGrokModel(safeOllamaModel(model));
         const fileRef = this._prepareFile(imagePath, workingDir);
         const { preamble, extraArgs } = this._roleAugment(sessionId);
         const head = [KB_HINT, preamble].filter(Boolean).join('\n\n');
         const fullPrompt = fileRef ? `${head}\n\n${fileRef}\n\n${prompt}` : `${head}\n\n${prompt}`;
-        // Ollama fallback: strip the `ollama:` tag for --model and inject the
-        // Anthropic-override env so claude routes to the local Ollama server.
-        const useOllama = isOllamaModel(model);
-        const realModel = useOllama ? ollamaModelName(model) : model;
+        // Ollama/Grok fallback: strip the provider tag for --model and inject the
+        // Anthropic-override env so claude routes to the right local proxy.
+        const { provider, realModel } = this._resolveProvider(model);
         const args = ['--print', '--model', realModel, '--output-format', 'stream-json', '--verbose', ...SKIP_PERMS, ...extraArgs, fullPrompt];
-        console.log(`[Claude] NEW session ${sessionId} | model: ${realModel}${useOllama ? ' (ollama)' : ''} | cwd: ${workingDir}${extraArgs.length ? ' | read-only' : ''}`);
-        this._runPty(sessionId, config.CLAUDE_BIN, args, workingDir, 0, null, useOllama);
+        console.log(`[Claude] NEW session ${sessionId} | model: ${realModel}${provider ? ` (${provider})` : ''} | cwd: ${workingDir}${extraArgs.length ? ' | read-only' : ''}`);
+        this._runPty(sessionId, config.CLAUDE_BIN, args, workingDir, 0, null, provider);
     }
 
     _spawnPlan(sessionId, prompt, workingDir, model = 'claude-opus-4-8') {
+        model = safeGrokModel(safeOllamaModel(model));
         const planPrefix = 'PLANNING MODE: Read the codebase and relevant knowledge base docs, then write a detailed step-by-step plan of the changes you would make. Do NOT modify any files. Output the plan as a numbered list, then stop.';
-        const useOllama = isOllamaModel(model);
-        const realModel = useOllama ? ollamaModelName(model) : model;
+        const { provider, realModel } = this._resolveProvider(model);
         const args = ['--print', '--model', realModel, '--output-format', 'stream-json', '--verbose', ...SKIP_PERMS, `${KB_HINT}\n\n${planPrefix}\n\nTask: ${prompt}`];
-        console.log(`[Claude] PLAN session ${sessionId} | model: ${realModel}${useOllama ? ' (ollama)' : ''} | cwd: ${workingDir}`);
-        this._runPty(sessionId, config.CLAUDE_BIN, args, workingDir, 0, null, useOllama);
+        console.log(`[Claude] PLAN session ${sessionId} | model: ${realModel}${provider ? ` (${provider})` : ''} | cwd: ${workingDir}`);
+        this._runPty(sessionId, config.CLAUDE_BIN, args, workingDir, 0, null, provider);
     }
 
-    _spawnResume(sessionId, claudeSessionId, followUp, workingDir, baseCost = 0, imagePath = null, model = 'claude-opus-4-8') {
+    _spawnResume(sessionId, claudeSessionId, followUp, workingDir, baseCost = 0, imagePath = null, model = 'claude-opus-4-8', repairAttempted = false) {
+        model = safeGrokModel(safeOllamaModel(model));
+        // Proactively repair malformed tool_use ids left by a prior turn (e.g. Ollama
+        // models like kimi emit `functions.Read:237`-style ids with a `:`) before
+        // replaying the transcript — Anthropic models reject those with a 400 on
+        // resume, which is exactly what a kimi → Sonnet model switch used to trigger.
+        this._sanitizeTranscriptToolIds(workingDir, claudeSessionId);
         const fileRef = this._prepareFile(imagePath, workingDir);
-        // Re-apply tester edit-gating on every turn (the persona was set when the fork
-        // was created; the disallowed-tools flags must be passed on each resume).
-        const { extraArgs } = this._roleAugment(sessionId);
-        const fullFollowUp = fileRef ? `${fileRef}\n\n${followUp}` : followUp;
-        // Ollama fallback: strip the `ollama:` tag for --model and inject the
-        // Anthropic-override env so claude routes to the local Ollama server.
-        const useOllama = isOllamaModel(model);
-        const realModel = useOllama ? ollamaModelName(model) : model;
+        // Re-apply the role contract on every turn. The disallowed-tools flags are CLI
+        // args and must be passed on each resume; the persona also has to be re-stated,
+        // otherwise a long session is frozen on whatever prompt it got at turn 1 — so a
+        // rule change (e.g. designers may now deploy to DEV) never reaches sessions that
+        // are already running, and the model drifts on the rules it does still remember.
+        const { preamble, extraArgs } = this._roleAugment(sessionId);
+        const head = [preamble, fileRef].filter(Boolean).join('\n\n');
+        const fullFollowUp = head ? `${head}\n\n${followUp}` : followUp;
+        // Ollama/Grok fallback: strip the provider tag for --model and inject the
+        // Anthropic-override env so claude routes to the right local proxy.
+        const { provider, realModel } = this._resolveProvider(model);
         const args = ['--resume', claudeSessionId, '--print', '--model', realModel, '--output-format', 'stream-json', '--verbose', ...SKIP_PERMS, ...extraArgs, fullFollowUp];
-        console.log(`[Claude] RESUME session ${sessionId} | model: ${realModel}${useOllama ? ' (ollama)' : ''} | claude_id: ${claudeSessionId}${extraArgs.length ? ' | read-only' : ''}`);
+        console.log(`[Claude] RESUME session ${sessionId} | model: ${realModel}${provider ? ` (${provider})` : ''} | claude_id: ${claudeSessionId}${extraArgs.length ? ' | read-only' : ''}`);
         // Carry recovery context so we can fall back to a fresh summarised session
-        // if the resume transcript overflows the model context ("Prompt is too long").
+        // if the resume transcript overflows the model context ("Prompt is too long"),
+        // and so a lingering bad tool_use id can trigger one repair-and-retry.
         this._runPty(sessionId, config.CLAUDE_BIN, args, workingDir, baseCost, {
             isResume: true,
             followUp,
             workingDir,
             model,
-        }, useOllama);
+            idRepairAttempted: repairAttempted,
+        }, provider);
+    }
+
+    // Rewrites any tool_use.id / tool_result.tool_use_id in a Claude Code transcript
+    // that doesn't match the Anthropic API's required `^[a-zA-Z0-9_-]+$` pattern (e.g.
+    // Ollama models emitting `functions.Read:237`). Idempotent — a clean transcript
+    // costs one file read and no write. Returns the number of lines fixed.
+    _sanitizeTranscriptToolIds(workingDir, claudeSessionId) {
+        try {
+            if (!claudeSessionId) return 0;
+            const slug = (workingDir || config.DEFAULT_WORKING_DIR).replace(/\//g, '-');
+            const transcriptPath = path.join(os.homedir(), '.claude', 'projects', slug, `${claudeSessionId}.jsonl`);
+            if (!fs.existsSync(transcriptPath)) return 0;
+            const idPattern = /^[a-zA-Z0-9_-]+$/;
+            const sanitize = (id) => id.replace(/[^a-zA-Z0-9_-]/g, '_');
+            const original = fs.readFileSync(transcriptPath, 'utf8');
+            const lines = original.split('\n');
+            let fixed = 0;
+            const out = lines.map((line) => {
+                if (!line.trim()) return line;
+                let ev;
+                try { ev = JSON.parse(line); } catch { return line; }
+                let changed = false;
+                const content = ev?.message?.content;
+                if (Array.isArray(content)) {
+                    for (const block of content) {
+                        if (block?.type === 'tool_use' && typeof block.id === 'string' && !idPattern.test(block.id)) {
+                            block.id = sanitize(block.id);
+                            changed = true;
+                        }
+                        if (block?.type === 'tool_result' && typeof block.tool_use_id === 'string' && !idPattern.test(block.tool_use_id)) {
+                            block.tool_use_id = sanitize(block.tool_use_id);
+                            changed = true;
+                        }
+                    }
+                }
+                if (changed) { fixed++; return JSON.stringify(ev); }
+                return line;
+            });
+            if (fixed > 0) {
+                fs.writeFileSync(`${transcriptPath}.bak`, original);
+                fs.writeFileSync(transcriptPath, out.join('\n'));
+                console.log(`[Claude] Sanitized ${fixed} malformed tool_use id(s) in transcript ${claudeSessionId} before resume`);
+            }
+            return fixed;
+        } catch (err) {
+            console.error(`[Claude] Transcript sanitize failed for ${claudeSessionId}: ${err.message}`);
+            return 0;
+        }
     }
 
     // When --resume overflows the context window, start a FRESH Claude session
@@ -341,7 +466,7 @@ class ClaudeManager extends EventEmitter {
         }
     }
 
-    _buildEnv(sessionId, useOllama = false) {
+    _buildEnv(sessionId, provider = null) {
         const env = { ...process.env };
         try {
             const session = this.store.getSession(sessionId);
@@ -359,16 +484,17 @@ class ClaudeManager extends EventEmitter {
         } catch (err) {
             console.error(`[Claude] Failed to resolve git author for ${sessionId}: ${err.message}`);
         }
-        // Ollama model → repoint ANTHROPIC_* at the local Ollama server (blank API_KEY
-        // is required — a non-empty key would win and break routing).
-        // Real model → strip any Ollama-routing env that leaked in from the parent
-        // process so the model hits real Anthropic instead of 404-ing at Ollama.
-        if (useOllama) Object.assign(env, ollamaEnv());
-        else stripLeakedOllamaEnv(env);
+        // Ollama/Grok model → repoint ANTHROPIC_* at the right local proxy (blank
+        // API_KEY is required — a non-empty key would win and break routing).
+        // Real model → strip any Ollama/Grok-routing env that leaked in from the
+        // parent process so the model hits real Anthropic instead of 404-ing.
+        if (provider === 'ollama') { Object.assign(env, ollamaEnv()); stripLeakedGrokEnv(env); }
+        else if (provider === 'grok') { Object.assign(env, grokEnv()); stripLeakedOllamaEnv(env); }
+        else { stripLeakedOllamaEnv(env); stripLeakedGrokEnv(env); }
         return env;
     }
 
-    _runPty(sessionId, bin, args, workingDir, baseCost = 0, recovery = null, useOllama = false) {
+    _runPty(sessionId, bin, args, workingDir, baseCost = 0, recovery = null, provider = null) {
         const entry = { proc: null, baseCost, costUsd: baseCost, inputTokens: 0, outputTokens: 0, lastOutput: '', lineBuffer: '', resultEmitted: false, recovery };
         this.processes.set(sessionId, entry);
 
@@ -377,7 +503,7 @@ class ClaudeManager extends EventEmitter {
             cols: 1000000,
             rows: 50,
             cwd: workingDir || config.DEFAULT_WORKING_DIR,
-            env: this._buildEnv(sessionId, useOllama),
+            env: this._buildEnv(sessionId, provider),
         });
         entry.proc = proc;
 
@@ -410,11 +536,63 @@ class ClaudeManager extends EventEmitter {
                 return;
             }
 
-            const status = exitCode === 0 ? 'completed' : 'failed';
-            this.store.updateSession(sessionId, { status });
+            // A model switch (or any other path) can still surface a malformed
+            // tool_use.id 400 that proactive sanitization on this resume didn't catch —
+            // sanitize once more and retry this exact resume, transparently, instead of
+            // leaving the session dead until someone hand-patches the transcript.
+            const badToolId = /tool_use\.id.{0,80}pattern|tool_use_id.{0,80}pattern/i.test(entry.lastOutput || '');
+            if (badToolId && entry.recovery?.isResume && !entry.recovery.idRepairAttempted) {
+                this.processes.delete(sessionId);
+                console.log(`[Claude] Session ${sessionId} hit malformed tool_use id on resume — repairing transcript and retrying once.`);
+                this.emit('assistant_message', { sessionId, content: '_(Detected a corrupted tool-call id from a prior model — repaired the transcript and retrying automatically.)_' });
+                const r = entry.recovery;
+                this._spawnResume(sessionId, this.store.getSession(sessionId)?.claude_session_id, r.followUp, r.workingDir, entry.baseCost || 0, null, r.model, true);
+                return;
+            }
+
+            // node-pty's 'exit' can fire before the final 'data' chunk (the closing
+            // {"type":"result",...} line) is delivered — the turn then completes with
+            // no visible reply. Recover the real final answer from Claude Code's own
+            // on-disk transcript, which is written independently of this pty stream.
+            if (!entry.resultEmitted && exitCode === 0 && !entry.manualStop) {
+                this._salvageFromTranscript(sessionId, entry, workingDir);
+            }
+
+            // A deliberate stop() already set status 'stopped' and kill()'s exit code is
+            // just signal noise — don't reclassify it as a crash.
+            const status = entry.manualStop ? 'stopped' : (exitCode === 0 ? 'completed' : 'failed');
+            if (!entry.manualStop) this.store.updateSession(sessionId, { status });
             this.processes.delete(sessionId);
             this.emit('session_end', { sessionId, code: exitCode, status, costUsd: entry.costUsd });
         });
+    }
+
+    // Reads Claude Code's own transcript (~/.claude/projects/<cwd-slug>/<claude_session_id>.jsonl)
+    // to recover the last assistant reply when the pty stream never delivered a
+    // parseable final event for this turn.
+    _salvageFromTranscript(sessionId, entry, workingDir) {
+        try {
+            const claudeSessionId = entry.claudeSessionId || this.store.getSession(sessionId)?.claude_session_id;
+            if (!claudeSessionId) return;
+            const slug = (workingDir || config.DEFAULT_WORKING_DIR).replace(/\//g, '-');
+            const transcriptPath = path.join(os.homedir(), '.claude', 'projects', slug, `${claudeSessionId}.jsonl`);
+            if (!fs.existsSync(transcriptPath)) return;
+            const lines = fs.readFileSync(transcriptPath, 'utf8').trim().split('\n');
+            for (let i = lines.length - 1; i >= 0; i--) {
+                let ev;
+                try { ev = JSON.parse(lines[i]); } catch { continue; }
+                if (ev.type !== 'assistant' || !ev.message) continue;
+                const content = this._extractText(ev.message);
+                if (!content) continue;
+                console.log(`[Claude] Session ${sessionId} salvaged final reply from transcript (pty stream missed it)`);
+                this.store.upsertLastAssistantMessage(sessionId, content);
+                entry.resultEmitted = true;
+                this.emit('result', { sessionId, content, costUsd: entry.costUsd || entry.baseCost || 0 });
+                return;
+            }
+        } catch (err) {
+            console.error(`[Claude] Salvage failed for ${sessionId}: ${err.message}`);
+        }
     }
 
     _handleEvent(sessionId, event, entry) {
@@ -454,20 +632,12 @@ class ClaudeManager extends EventEmitter {
                     ? `<!--thinking-->\n${entry.thinkingLines.join('\n')}\n<!--/thinking-->\n\n`
                     : '';
                 this.store.upsertLastAssistantMessage(sessionId, thinkingBlock + content);
-                const now = Date.now();
-                if (!this._lastNotify[sessionId] || (now - this._lastNotify[sessionId]) > 10000) {
-                    this._lastNotify[sessionId] = now;
-                    this.emit('assistant_message', { sessionId, content: thinkingBlock + content });
-                }
+                this.emit('assistant_message', { sessionId, content: thinkingBlock + content });
             } else if (thinking && thinking.length > 0) {
                 // No text content yet but we have thinking — still update the message
                 const thinkingBlock = `<!--thinking-->\n${entry.thinkingLines.join('\n')}\n<!--/thinking-->`;
                 this.store.upsertLastAssistantMessage(sessionId, thinkingBlock);
-                const now = Date.now();
-                if (!this._lastNotify[sessionId] || (now - this._lastNotify[sessionId]) > 10000) {
-                    this._lastNotify[sessionId] = now;
-                    this.emit('assistant_message', { sessionId, content: thinkingBlock });
-                }
+                this.emit('assistant_message', { sessionId, content: thinkingBlock });
             }
         }
 

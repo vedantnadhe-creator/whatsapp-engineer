@@ -28,7 +28,7 @@ export function UsersPanel({ users = [], onAdd, onDelete, onResetPassword, onUpd
   const [testerAccess, setTesterAccess] = useState('chat')
 
   const handleAdd = async () => {
-    if (!email) return
+    if (!email && !name) return
     const sprintOnly = role === 'tester' && testerAccess === 'sprint'
     // canEdit only matters for chat-access testers; others always can edit.
     await onAdd({ email, displayName: name, role, isAdmin, canEdit: role === 'tester' ? (sprintOnly ? false : canEdit) : true, sprintOnly })
@@ -38,12 +38,13 @@ export function UsersPanel({ users = [], onAdd, onDelete, onResetPassword, onUpd
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 gap-3">
-        <input value={email} onChange={e => setEmail(e.target.value)} placeholder="Email" className="bg-surface-2 border border-border rounded-lg px-3 py-2 text-sm text-text-primary placeholder-text-muted outline-none focus:border-accent col-span-2" />
+        <input value={email} onChange={e => setEmail(e.target.value)} placeholder="Email (optional — leave blank for a name-only placeholder, no login access)" className="bg-surface-2 border border-border rounded-lg px-3 py-2 text-sm text-text-primary placeholder-text-muted outline-none focus:border-accent col-span-2" />
         <input value={name} onChange={e => setName(e.target.value)} placeholder="Display name" className="bg-surface-2 border border-border rounded-lg px-3 py-2 text-sm text-text-primary placeholder-text-muted outline-none focus:border-accent" />
         <select value={role} onChange={e => setRole(e.target.value)} className="bg-surface-2 border border-border rounded-lg px-3 py-2 text-sm text-text-primary outline-none focus:border-accent cursor-pointer">
           <option value="developer">Developer</option>
           <option value="designer">Designer</option>
           <option value="tester">Tester</option>
+          <option value="business_analyst">Business Analyst</option>
           <option value="viewer">Viewer</option>
           <option value="admin">Admin</option>
         </select>
@@ -79,9 +80,24 @@ export function UsersPanel({ users = [], onAdd, onDelete, onResetPassword, onUpd
           <div key={u.id} className="flex items-center justify-between py-3">
             <div>
               <p className="text-sm font-medium text-text-primary">{u.display_name || u.email}</p>
-              <p className="text-xs text-text-muted">{u.email} · <span className="capitalize">{u.role}</span>{u.is_admin ? ' · Admin' : ''}{u.role === 'tester' ? (u.sprint_only ? ' · Sprint only' : (u.can_edit ? ' · Chat · can edit' : ' · Chat · read-only')) : ''}</p>
+              <p className="text-xs text-text-muted">{u.email || 'No login access yet'} · <span className="capitalize">{u.role === 'business_analyst' ? 'Business Analyst' : u.role}</span>{u.is_admin ? ' · Admin' : ''}{u.role === 'tester' ? (u.sprint_only ? ' · Sprint only' : (u.can_edit ? ' · Chat · can edit' : ' · Chat · read-only')) : ''}</p>
             </div>
             <div className="flex items-center gap-3">
+              {onUpdateUser && (
+                <select
+                  value={u.role}
+                  onChange={e => onUpdateUser(u.id, { role: e.target.value })}
+                  className="bg-surface-2 border border-border rounded-lg px-2 py-1 text-xs text-text-primary outline-none focus:border-accent cursor-pointer capitalize"
+                  title="Change role"
+                >
+                  <option value="developer">Developer</option>
+                  <option value="designer">Designer</option>
+                  <option value="tester">Tester</option>
+                  <option value="business_analyst">Business Analyst</option>
+                  <option value="viewer">Viewer</option>
+                  <option value="admin">Admin</option>
+                </select>
+              )}
               {u.role === 'tester' && onUpdateUser && (
                 <button
                   onClick={() => onUpdateUser(u.id, { sprintOnly: !u.sprint_only })}

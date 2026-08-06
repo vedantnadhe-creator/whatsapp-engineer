@@ -20,7 +20,10 @@ export async function apiFetch(url, opts = {}) {
   // For mutations, deduplicate — if identical request is in-flight, return its promise
   // Skip dedup for file uploads (each upload is unique)
   if (method !== 'GET' && !url.includes('/upload')) {
-    const key = `${method}:${fullUrl}`;
+    // The body is part of the key: same URL + different payload is NOT the same request.
+    // Without it, two quick per-row "send to sprint" posts collapse into one and the
+    // second feature silently never moves (both hit /api/sprints/<id>/move-issues).
+    const key = `${method}:${fullUrl}:${typeof opts.body === 'string' ? opts.body : ''}`;
     if (inflightMutations.has(key)) return inflightMutations.get(key);
     const promise = _doFetch(fullUrl, opts).finally(() => inflightMutations.delete(key));
     inflightMutations.set(key, promise);
@@ -111,7 +114,10 @@ export async function getTranscript(sessionId) {
 // so the list accumulates instead of being replaced on "Load more".
 // When `q` (search query) changes, paging is reset and the list is re-fetched
 // from page 1 with the query attached. q is debounced internally.
-export function useSessions(page = 1, q = '') {
+// `filter` is the sidebar tab ('all' | 'mine' | 'saved'). It is sent to the API so each
+// tab is filtered and paginated in SQL — a page of "Mine" is 20 of yours, not the handful
+// of yours that happen to sit in the first 20 of "All".
+export function useSessions(page = 1, q = '', filter = 'all') {
   const [pagesData, setPagesData] = useState({});
   const [meta, setMeta] = useState({ total: 0, totalPages: 1, showAllSessions: false });
   const [loading, setLoading] = useState(true);
@@ -121,6 +127,8 @@ export function useSessions(page = 1, q = '') {
   pagesRef.current = pagesData;
   const qRef = useRef(debouncedQ);
   qRef.current = debouncedQ;
+  const filterRef = useRef(filter);
+  filterRef.current = filter;
 
   // Debounce q changes (250ms) so we don't fire a request on every keystroke
   useEffect(() => {
@@ -128,16 +136,17 @@ export function useSessions(page = 1, q = '') {
     return () => clearTimeout(t);
   }, [q]);
 
-  const buildUrl = (p, query) => {
+  const buildUrl = (p, query, tab) => {
     const params = new URLSearchParams({ page: String(p) });
     if (query) params.set('q', query);
+    if (tab && tab !== 'all') params.set('filter', tab);
     return `/api/sessions?${params.toString()}`;
   };
 
-  const fetchPage = useCallback(async (p, query) => {
-    const data = await apiFetch(buildUrl(p, query));
-    // Ignore stale responses if the query changed mid-flight
-    if (query !== qRef.current) return data;
+  const fetchPage = useCallback(async (p, query, tab = filterRef.current) => {
+    const data = await apiFetch(buildUrl(p, query, tab));
+    // Ignore stale responses if the query or tab changed mid-flight
+    if (query !== qRef.current || tab !== filterRef.current) return data;
     setPagesData((prev) => ({ ...prev, [p]: data?.sessions ?? [] }));
     setMeta({
       total: data?.total ?? 0,
@@ -147,24 +156,25 @@ export function useSessions(page = 1, q = '') {
     return data;
   }, []);
 
-  // When q changes, reset cached pages and reload from page 1
+  // When q or the tab changes, drop cached pages and reload from page 1 — they belong
+  // to the previous result set.
   useEffect(() => {
     setPagesData({});
     setLoading(true);
-    fetchPage(1, debouncedQ)
+    fetchPage(1, debouncedQ, filter)
       .catch(setError)
       .finally(() => setLoading(false));
-  }, [debouncedQ, fetchPage]);
+  }, [debouncedQ, filter, fetchPage]);
 
   // When the requested max page grows, fetch only the newly requested page.
   useEffect(() => {
     if (page === 1) return;
     if (pagesRef.current[page]) return;
     setLoading(true);
-    fetchPage(page, debouncedQ)
+    fetchPage(page, debouncedQ, filter)
       .catch(setError)
       .finally(() => setLoading(false));
-  }, [page, debouncedQ, fetchPage]);
+  }, [page, debouncedQ, filter, fetchPage]);
 
   // refresh() re-fetches all currently-loaded pages so polling updates status
   // without losing the user's scroll depth.
@@ -323,12 +333,18 @@ export function useAccessRequests() {
 // Standalone API helpers (not hooks)
 // ---------------------------------------------------------------------------
 
-export async function startSession(text, model, imageTokens = [], sprintId = null, type = null, labels = [], name = null, mode = 'developer') {
+export async function startSession(text, model, imageTokens = [], sprintId = null, type = null, labels = [], name = null, mode = 'developer', repo = null, parentIssueId = null) {
   return apiFetch('/api/sessions/start', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text, model, imageTokens, sprintId, type, labels, name, mode }),
+    body: JSON.stringify({ text, model, imageTokens, sprintId, type, labels, name, mode, repo, parentIssueId }),
   });
+}
+
+// Frontend repos a designer can build UI in ("" = the designs workspace).
+export function useFrontendRepos() {
+  const { data } = useGet('/api/frontend-repos');
+  return data?.repos ?? [];
 }
 
 export function useAgents() {
@@ -342,6 +358,34 @@ export async function runAgent(agentId, note = '') {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ note }),
   });
+}
+
+// Orchestrated agent run — starts a master session and returns immediately.
+// The master spawns worker sub-sessions via the `spawn_sub_session` tool and
+// they appear in the Agent Run Screen. Server pushes `agent_child_spawned`
+// events over the existing WebSocket.
+export async function runAgentOrchestrated(agentId, note = '') {
+  return apiFetch(`/api/agents/${agentId}/run-orchestrated`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ note }),
+  });
+}
+
+export async function getAgentSprint(agentId) {
+  return apiFetch(`/api/agents/${agentId}/current-sprint`);
+}
+
+export async function setAgentSprint(agentId, sprintName) {
+  return apiFetch(`/api/agents/${agentId}/set-sprint`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sprintName }),
+  });
+}
+
+export async function getSessionChildren(sessionId) {
+  return apiFetch(`/api/sessions/${sessionId}/children`);
 }
 
 export async function deleteSession(sessionId) {
@@ -370,6 +414,15 @@ export async function stopSession(sessionId) {
 
 export async function createShareLink(sessionId) {
   return apiFetch(`/api/sessions/${sessionId}/share-links`, { method: 'POST' });
+}
+
+// Runtime-verify a session's frontend work with Reticle (DEV box, Ollama/minimax-m3).
+// Spawns a new verification session parented to this one; returns its sessionId.
+export async function testSession(sessionId, routes = '') {
+  return apiFetch(`/api/sessions/${sessionId}/test`, {
+    method: 'POST',
+    body: JSON.stringify({ routes }),
+  });
 }
 
 export async function listShareLinks(sessionId) {
@@ -415,6 +468,19 @@ export async function markSessionDone(sessionId) {
 
 export async function getSprintChangelog(sprintId) {
   return apiFetch(`/api/sprints/${sprintId}/changelog`);
+}
+
+// Daily 6 AM IST status email to stakeholders — preview, manual send, last-sent time.
+export async function previewSprintStatus(sprintId) {
+  return apiFetch(`/api/sprints/${sprintId}/status-preview`);
+}
+
+export async function sendSprintStatus(sprintId) {
+  return apiFetch(`/api/sprints/${sprintId}/send-status`, { method: 'POST' });
+}
+
+export async function getSprintStatusLastSent(sprintId) {
+  return apiFetch(`/api/sprints/${sprintId}/status-last-sent`);
 }
 
 export async function requestIssueSummary(issueId) {
@@ -583,6 +649,16 @@ export async function uploadFile(file) {
       'x-mime-type': file.type || 'application/octet-stream',
     },
     body: file,
+  });
+}
+
+// Carry features (with their subtasks) into a sprint — the backlog rollover action.
+// Returns { moved, sprint: { id, name } }.
+export async function moveIssuesToSprint(sprintId, issueIds) {
+  return apiFetch(`/api/sprints/${sprintId}/move-issues`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ issueIds }),
   });
 }
 

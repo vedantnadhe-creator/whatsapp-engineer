@@ -151,6 +151,16 @@ class SupabaseStore {
         await this.supabase.from('messages').insert({ session_id: sessionId, role, content });
     }
 
+    async listSessionsByParent(parentSessionId) {
+        const { data, error } = await this.supabase
+            .from('sessions')
+            .select('id, name, status, type, labels, created_at')
+            .eq('parent_session_id', parentSessionId)
+            .order('created_at', { ascending: true });
+        if (error) return [];
+        return data || [];
+    }
+
     async upsertLastAssistantMessage(sessionId, content) {
         const { data } = await this.supabase.from('messages')
             .select('id, role')

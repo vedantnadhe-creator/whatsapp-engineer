@@ -20,8 +20,13 @@ import {
     parseWorkbookBuffer, importSprintData,
 } from './sprint_sheet.js';
 import * as sheetsService from './sheets_service.js';
-import { listOllamaModels } from './ollama_models.js';
+import { listOllamaModels, OLLAMA_PREFIX, isOllamaModel, safeOllamaModel, DEFAULT_OLLAMA_MODEL as OLLAMA_DEFAULT } from './ollama_models.js';
+import { listGrokModels, isGrokModel, safeGrokModel } from './grok_models.js';
+import { mountGrokProxy } from './grok_proxy.js';
+import cron from 'node-cron';
+import { sendSprintStatusEmail, buildSprintStatusEmail } from './sprint_mailer.js';
 import { probeHeadroom } from './headroom.js';
+import { runMasterAgent, SPAWN_TOOL } from './master_agent.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -38,6 +43,48 @@ function storePendingImage(filePath) {
 }
 export { pendingImages };
 
+// Per-role model policy (cost containment). A role listed here can only run the
+// models its `allow` accepts; anything else it asks for is coerced to `fallback`.
+// Enforced server-side on EVERY model-accepting route, so a raw API call can't
+// escape it — the dropdown filtering in /api/models uses the same policy.
+// Broken Ollama models are separately redirected (safeOllamaModel) so no session
+// can crash on invalid tool_use IDs.
+//   business_analyst → Ollama only, default minimax-m3
+//   tester           → Haiku only (2026-07-30; cheapest Claude tier for QA runs)
+// Only MODELS are restricted here — the tester QA persona, read-only edit gating
+// and sprint-only view are separate and unchanged.
+const TESTER_MODEL = 'haiku';
+const ROLE_MODEL_POLICY = {
+    business_analyst: { allow: (m) => isOllamaModel(m), fallback: OLLAMA_DEFAULT },
+    tester: { allow: (m) => m === TESTER_MODEL, fallback: TESTER_MODEL },
+};
+function resolveModelForRole(role, model) {
+    const safe = safeGrokModel(safeOllamaModel(model));
+    const policy = ROLE_MODEL_POLICY[role];
+    if (policy && !policy.allow(safe)) return policy.fallback;
+    return safe;
+}
+
+// Designers can now build real UI directly in a product FRONTEND repo (backend is
+// added by a developer later). Repos are resolved from an allowlist of the
+// directories under FRONTEND_DIR — never from a caller-supplied path — so a design
+// session can't be pointed at /home/ubuntu/api/* or anywhere else on the box.
+// `null`/unknown → the designs workspace, which stays the default.
+const FRONTEND_DIR = process.env.FRONTEND_DIR || '/home/ubuntu/frontend';
+function listFrontendRepos() {
+    try {
+        return fs.readdirSync(FRONTEND_DIR, { withFileTypes: true })
+            .filter(d => d.isDirectory() && !d.name.startsWith('.'))
+            .map(d => d.name)
+            .sort();
+    } catch (_) { return []; }
+}
+function resolveDesignWorkingDir(repo) {
+    const name = String(repo || '').trim();
+    if (!name || !listFrontendRepos().includes(name)) return config.DESIGNS_DIR;
+    return path.join(FRONTEND_DIR, name);
+}
+
 export function startDashboard(store, messageHandler, port = 18790, wa = null, executionEngine = null, orchestrator = null, hashPasswordFn = null) {
     // hashPassword function — passed in from index.js so we don't import store-specific module
     const hashPassword = hashPasswordFn || ((plain) => {
@@ -48,6 +95,10 @@ export function startDashboard(store, messageHandler, port = 18790, wa = null, e
     app.use(cors({ origin: true, credentials: true }));
     app.use(express.json({ strict: false }));
     app.use(cookieParser());
+    // Grok translation proxy for `grok:` sessions — token-authed, not cookie/JWT-authed
+    // (the spawned `claude` process has no dashboard session, just the shared secret
+    // grok_models.js injects via ANTHROPIC_AUTH_TOKEN).
+    mountGrokProxy(app);
     // Serve the SPA. index.html must NOT be cached (else browsers keep loading an
     // old build's hashed JS and never see new features); hashed assets are immutable.
     const staticOpts = {
@@ -108,13 +159,13 @@ a{color:#60a5fa;text-decoration:none}</style></head>
             const user = store.verifyPassword(email, password);
             if (!user) return res.status(401).json({ error: 'Invalid email or password' });
             const token = signJwt({ id: user.id, email: user.email, displayName: user.display_name, isAdmin: !!user.is_admin, role: user.role });
-            res.cookie('wa_token', token, { httpOnly: true, sameSite: 'lax', maxAge: 30 * 24 * 60 * 60 * 1000, secure: true, path: '/' });
+            res.cookie(config.COOKIE_NAME, token, { httpOnly: true, sameSite: 'lax', maxAge: 30 * 24 * 60 * 60 * 1000, secure: true, path: '/' });
             res.json({ success: true, user: { id: user.id, email: user.email, displayName: user.display_name, isAdmin: !!user.is_admin, role: user.role, canEdit: user.can_edit !== 0, sprintOnly: user.sprint_only === 1 } });
         } catch (err) { res.status(500).json({ error: err.message }); }
     });
 
     app.post('/api/auth/logout', (req, res) => {
-        res.clearCookie('wa_token', { path: '/' });
+        res.clearCookie(config.COOKIE_NAME, { path: '/' });
         res.json({ success: true });
     });
 
@@ -158,8 +209,35 @@ a{color:#60a5fa;text-decoration:none}</style></head>
             const q = (req.query.q || '').toString().trim();
             const showAll = store.getSetting('show_all_sessions') === 'true';
             const isAdmin = req.user.isAdmin || req.user.is_admin;
+            // Sidebar tab: 'all' | 'mine' | 'saved' | 'pl:<playlistId>'. Each filters and
+            // paginates in SQL so a tab returns a full page of its own rows, rather than
+            // the leftovers of one page of "All".
+            const rawFilter = String(req.query.filter || 'all');
+            const playlistId = rawFilter.startsWith('pl:') ? rawFilter.slice(3) : null;
+            const filter = playlistId ? 'playlist' : (['mine', 'saved'].includes(rawFilter) ? rawFilter : 'all');
             let sessions, total;
-            if (q) {
+            if (filter === 'playlist') {
+                sessions = q
+                    ? store.searchPlaylistSessions(req.user.id, playlistId, q, limit, offset)
+                    : store.getPlaylistSessions(req.user.id, playlistId, limit, offset);
+                total = q
+                    ? store.countSearchPlaylistSessions(req.user.id, playlistId, q)
+                    : store.countPlaylistSessions(req.user.id, playlistId);
+            } else if (filter === 'saved') {
+                sessions = q
+                    ? store.searchBookmarkedSessions(req.user.id, q, limit, offset)
+                    : store.getBookmarkedSessions(req.user.id, limit, offset);
+                total = q
+                    ? store.countSearchBookmarkedSessions(req.user.id, q)
+                    : store.countBookmarkedSessions(req.user.id);
+            } else if (filter === 'mine') {
+                sessions = q
+                    ? store.searchOwnSessions(req.user.id, q, limit, offset)
+                    : store.getOwnSessions(req.user.id, limit, offset);
+                total = q
+                    ? store.countSearchOwnSessions(req.user.id, q)
+                    : store.countOwnSessions(req.user.id);
+            } else if (q) {
                 if (showAll || isAdmin) {
                     sessions = store.searchSessionsForUser(req.user.id, q, limit, offset);
                     total = store.countSearchSessionsForUser(q);
@@ -259,7 +337,8 @@ a{color:#60a5fa;text-decoration:none}</style></head>
     // Selecting an `ollama:` model routes that session through the local Ollama server.
     app.get('/api/models', requireAuth, async (req, res) => {
         const claudeModels = [
-            { id: 'claude-opus-4-8', name: 'Opus 4.8', description: 'Latest — most capable for complex work' },
+            { id: 'claude-opus-5', name: 'Opus 5', description: 'Latest Opus — new frontier default, strongest on coding & knowledge work' },
+            { id: 'claude-opus-4-8', name: 'Opus 4.8', description: 'Previous Opus generation — most capable for complex work' },
             { id: 'fable', name: 'Fable 5', description: 'Most capable for hardest, long-running tasks · ~2× faster than Opus but uses ~2× the tokens' },
             { id: 'claude-sonnet-5', name: 'Sonnet 5', description: 'Latest Sonnet — strong for everyday tasks', default: true },
             { id: 'claude-opus-4-7', name: 'Opus 4.7', description: 'Previous Opus generation' },
@@ -273,7 +352,25 @@ a{color:#60a5fa;text-decoration:none}</style></head>
             try { customNames = JSON.parse(store.getSetting('ollama_custom_models') || '[]'); } catch (_) { customNames = []; }
             ollamaModels = await listOllamaModels(Array.isArray(customNames) ? customNames : []);
         } catch (_) { /* keep Claude list only */ }
-        res.json([...claudeModels, ...ollamaModels]);
+        let grokModels = [];
+        try { grokModels = await listGrokModels(); } catch (_) { /* keep the rest of the list */ }
+        const all = [...claudeModels, ...ollamaModels, ...grokModels];
+
+        // Restricted roles see ONLY the models their policy allows (same policy the
+        // routes enforce, so the dropdown can never offer something that would be
+        // coerced server-side). Business Analyst → Ollama; Tester → Haiku.
+        const policy = ROLE_MODEL_POLICY[req.user.role];
+        if (policy) {
+            const allowed = all.filter(m => policy.allow(m.id) && !m.disabled);
+            return res.json(allowed.map(m => ({ ...m, default: m.id === policy.fallback })));
+        }
+        res.json(all);
+    });
+
+    // Frontend repos a designer can build in. Powers the repo picker on the
+    // new-session screen; "" (the default) means the designs workspace.
+    app.get('/api/frontend-repos', requireAuth, (req, res) => {
+        res.json({ designsWorkspace: config.DESIGNS_DIR, repos: listFrontendRepos() });
     });
 
     // Terminal-session transcript — parse Claude Code's native JSONL into the
@@ -433,16 +530,22 @@ a{color:#60a5fa;text-decoration:none}</style></head>
     app.post('/api/admin/users', requireAuth, requireAdmin, async (req, res) => {
         try {
             const { email, displayName, role, isAdmin, canEdit, sprintOnly } = req.body;
-            if (!email) return res.status(400).json({ error: 'email is required' });
+            if (!email && !displayName) return res.status(400).json({ error: 'email or display name is required' });
 
             // Check if user already exists
-            const existing = store.getUserByEmail(email);
-            if (existing) return res.status(409).json({ error: 'A user with this email already exists' });
+            if (email) {
+                const existing = store.getUserByEmail(email);
+                if (existing) return res.status(409).json({ error: 'A user with this email already exists' });
+            }
 
-            const password = generatePassword();
-            const passwordHash = hashPassword(password);
+            // No email → a name-only placeholder for the roster/assignee dropdowns:
+            // no password, no login, no welcome email. Grant real access later by
+            // deleting and re-adding with an email once ready.
+            // ponytail: no "upgrade placeholder to real access" flow yet — recreate with email instead.
+            const password = email ? generatePassword() : null;
+            const passwordHash = password ? hashPassword(password) : null;
             const user = store.createUser({
-                email: email.toLowerCase().trim(),
+                email: email ? email.toLowerCase().trim() : null,
                 displayName: displayName || email.split('@')[0],
                 role: role || 'developer',
                 isAdmin: isAdmin ? 1 : 0,
@@ -454,8 +557,8 @@ a{color:#60a5fa;text-decoration:none}</style></head>
                 createdBy: req.user.id,
             });
 
-            // Send welcome email with password
-            if (config.SMTP_USER) {
+            // Send welcome email with password (only when the user has real login access)
+            if (password && config.SMTP_USER) {
                 await sendWelcomeEmail(user.email, user.display_name, password)
                     .catch(e => console.warn('[Auth] Welcome email failed:', e.message));
             }
@@ -525,35 +628,45 @@ a{color:#60a5fa;text-decoration:none}</style></head>
 
     app.post('/api/sessions/start', requireAuth, async (req, res) => {
         try {
-            const { text, model, sprintId, type, labels, name, mode } = req.body;
+            const { text, model, sprintId, type, labels, name, mode, repo, parentIssueId } = req.body;
             if (!text) return res.status(400).json({ error: 'text is required' });
-            // Mode is role-driven: design → designs repo, tester → tester persona/gating, else developer.
+            // Mode is role-driven: design → designs repo (or a chosen frontend repo),
+            // tester → tester persona/gating, else developer.
             const sessionMode = (mode === 'design' || mode === 'tester') ? mode : 'developer';
             const isDesign = sessionMode === 'design';
-            const sessionWorkingDir = isDesign ? config.DESIGNS_DIR : null;
+            // Designers may build real UI in a frontend repo; `repo` is validated
+            // against the allowlist and falls back to the designs workspace.
+            const sessionWorkingDir = isDesign ? resolveDesignWorkingDir(repo) : null;
             // Testers' code-edit access comes from their user setting (JWT lacks can_edit → read from store).
             const testerEditAccess = sessionMode === 'tester'
                 ? (store.getUserById(req.user.id)?.can_edit !== 0)
                 : undefined;
-            const allowedTypes = ['task', 'bug', 'feature', 'improvement'];
+            const allowedTypes = ['task', 'bug', 'feature', 'improvement', 'epic'];
             const sessionType = allowedTypes.includes(type) ? type : null;
-            if (!sessionType) return res.status(400).json({ error: 'type is required (task, bug, feature, improvement)' });
+            if (!sessionType) return res.status(400).json({ error: `type is required (${allowedTypes.join(', ')})` });
             const tagList = Array.isArray(labels)
                 ? labels.map(l => String(l).trim()).filter(Boolean)
                 : (typeof labels === 'string' ? labels.split(',').map(l => l.trim()).filter(Boolean) : []);
+            // Optional: file this work as a subtask of an existing feature instead of a
+            // standalone task. Parent must exist, and it decides the sprint — a subtask
+            // living in a different sprint from its parent would break the board rollups.
+            const parent = parentIssueId ? store.getIssue(parentIssueId) : null;
+            if (parentIssueId && !parent) return res.status(400).json({ error: 'parentIssueId does not exist' });
+            if (parent && parent.parent_issue_id) return res.status(400).json({ error: 'Cannot nest a subtask under another subtask' });
+            const issueSprintId = parent ? parent.sprint_id : (sprintId || null);
 
             const phone = req.body.phone || req.user.phone || req.user.email || req.user.id;
             const startInstruction = /^(start fresh|new task|ignore previous)/i.test(text) ? text : `[start fresh] ${text}`;
             const tokens = Array.isArray(req.body.imageTokens) ? req.body.imageTokens : (req.body.imageToken ? [req.body.imageToken] : []);
             const imagePath = tokens.map(t => { const p = pendingImages.get(t); pendingImages.delete(t); return p; }).filter(Boolean)[0] || null;
-            const result = await messageHandler({ isWeb: true, phone: String(phone), text: startInstruction, pushName: req.user.displayName || 'Dashboard', imagePath, ownerId: req.user.id, model: model || 'claude-opus-4-8', workingDir: sessionWorkingDir, mode: sessionMode, editAccess: testerEditAccess });
+            const result = await messageHandler({ isWeb: true, phone: String(phone), text: startInstruction, pushName: req.user.displayName || 'Dashboard', imagePath, ownerId: req.user.id, model: resolveModelForRole(req.user.role, model || 'claude-opus-4-8'), workingDir: sessionWorkingDir, mode: sessionMode, editAccess: testerEditAccess });
             // Attach sprint + type + tags + name and auto-create a session task issue
             if (result?.sessionId) {
                 const sessionName = (typeof name === 'string' && name.trim())
                     ? name.trim().slice(0, 120)
                     : text.replace(/^\[start fresh\]\s*/i, '').trim().slice(0, 60);
                 store.updateSession(result.sessionId, {
-                    sprint_id: sprintId || null,
+                    sprint_id: issueSprintId,
                     type: sessionType,
                     labels: tagList,
                     name: sessionName,
@@ -567,9 +680,13 @@ a{color:#60a5fa;text-decoration:none}</style></head>
                     priority: 'medium',
                     labels: ['session', ...tagList],
                     createdBy: req.user.id,
-                    sprintId: sprintId || null,
+                    sprintId: issueSprintId,
                     type: sessionType,
-                    category: 'chat',
+                    parentIssueId: parent ? parent.id : null,
+                    // Subtasks are real board rows under their parent; standalone session
+                    // tasks stay 'chat' so they don't clutter the top-level feature list.
+                    category: parent ? 'issue' : 'chat',
+                    platform: parent ? parent.platform : '',
                 });
                 // Link session to the issue
                 if (issue) {
@@ -684,9 +801,9 @@ Do NOT ask for confirmation — proceed through each step automatically. If any 
             const imagePath = tokens.map(t => { const p = pendingImages.get(t); pendingImages.delete(t); return p; }).filter(Boolean)[0] || null;
             // Allow switching the model mid-session: if the dashboard sends a model, persist it so the
             // resume spawns the CLI with the new model on this (and every subsequent) message.
-            const model = (typeof req.body.model === 'string' && req.body.model.trim()) ? req.body.model.trim() : null;
+            const model = resolveModelForRole(req.user.role, (typeof req.body.model === 'string' && req.body.model.trim()) ? req.body.model.trim() : null);
             if (model && model !== session.model) store.updateSession(sessionId, { model });
-            await messageHandler({ isWeb: true, phone: String(phone), text: `[resume ${sessionId}] ${text}`, pushName: req.user.displayName || 'Dashboard', imagePath, model: model || session.model });
+            await messageHandler({ isWeb: true, phone: String(phone), text: `[resume ${sessionId}] ${text}`, pushName: req.user.displayName || 'Dashboard', imagePath, model: model || resolveModelForRole(req.user.role, session.model) });
             res.json({ success: true });
         } catch (err) { res.status(500).json({ error: err.message }); }
     });
@@ -700,7 +817,7 @@ Do NOT ask for confirmation — proceed through each step automatically. If any 
             const phone = req.user.phone || req.user.email || req.user.id;
             const tokens = Array.isArray(req.body.imageTokens) ? req.body.imageTokens : (req.body.imageToken ? [req.body.imageToken] : []);
             const imagePath = tokens.map(t => { const p = pendingImages.get(t); pendingImages.delete(t); return p; }).filter(Boolean)[0] || null;
-            const result = await executionEngine.forkSession(parentId, text, String(phone), req.user.id, model, { imagePath });
+            const result = await executionEngine.forkSession(parentId, text, String(phone), req.user.id, resolveModelForRole(req.user.role, model), { imagePath });
             // If the parent session is part of a sprint feature, file the fork as a subtask of that feature.
             if (result?.sessionId) {
                 const parentFeature = store.getFeatureBySession(parentId);
@@ -743,7 +860,7 @@ Do NOT ask for confirmation — proceed through each step automatically. If any 
                 ? text.trim()
                 : 'Continue from the combined context of the merged sessions.';
             const phone = req.user.phone || req.user.email || req.user.id;
-            const result = await executionEngine.mergeSessions(visible, task, String(phone), req.user.id, model || null);
+            const result = await executionEngine.mergeSessions(visible, task, String(phone), req.user.id, resolveModelForRole(req.user.role, model) || null);
             res.json({ success: true, sessionId: result.sessionId, mergedFrom: result.mergedFrom });
         } catch (err) { res.status(500).json({ error: err.message }); }
     });
@@ -761,7 +878,7 @@ Do NOT ask for confirmation — proceed through each step automatically. If any 
             const task = (typeof req.body?.text === 'string' && req.body.text.trim())
                 ? req.body.text.trim()
                 : `Run a QA pass on the work in session ${parentId}. Review what changed by reading the code/diff and session history yourself, infer the expected behavior, then propose and run test cases and report findings. Do not pause to ask for a PRD or acceptance criteria — proceed autonomously.`;
-            const result = await executionEngine.forkSession(parentId, task, String(phone), req.user.id, req.body?.model || null, { mode: 'tester', editAccess });
+            const result = await executionEngine.forkSession(parentId, task, String(phone), req.user.id, resolveModelForRole(req.user.role, req.body?.model || null), { mode: 'tester', editAccess });
             res.json({ success: true, sessionId: result.sessionId, forkedFrom: result.forkedFrom, editAccess });
         } catch (err) { res.status(500).json({ error: err.message }); }
     });
@@ -784,7 +901,13 @@ Do NOT ask for confirmation — proceed through each step automatically. If any 
         if (fs.existsSync(statePath)) {
             try { state = JSON.parse(fs.readFileSync(statePath, 'utf8')); } catch (_) { state = {}; }
         }
-        return { ...meta, dir, workflow, state, workflowPath, statePath };
+        // Workers live in agents/<id>/workers/<workerId>.md (prompt file). The
+        // master agent's tool is allowed to spawn only workers that exist here.
+        const workersDir = path.join(dir, 'workers');
+        const workers = fs.existsSync(workersDir)
+            ? fs.readdirSync(workersDir).filter(f => f.endsWith('.md')).map(f => f.replace(/\.md$/, ''))
+            : [];
+        return { ...meta, dir, workflow, state, workflowPath, statePath, workers };
     }
 
     function listAgents() {
@@ -793,7 +916,7 @@ Do NOT ask for confirmation — proceed through each step automatically. If any 
             .filter(d => d.isDirectory())
             .map(d => loadAgent(d.name))
             .filter(Boolean)
-            .map(a => ({ id: a.id, name: a.name, description: a.description, icon: a.icon, model: a.model, version: a.version, lastRunAt: a.state?.last_run_at || null }));
+            .map(a => ({ id: a.id, name: a.name, description: a.description, icon: a.icon, model: a.model, version: a.version, run_mode: a.run_mode || null, lastRunAt: a.state?.last_run_at || null, workers: a.workers || [] }));
     }
 
     app.get('/api/agents', requireAuth, (req, res) => {
@@ -843,6 +966,286 @@ Do NOT ask for confirmation — proceed through each step automatically. If any 
                 });
             }
             res.json({ success: true, sessionId: result?.sessionId, agentId: agent.id });
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    // List the worker ids available under an agent (used by the UI to show
+    // the planned work in the Agent Run Screen and to let users open workers
+    // in their own chat later).
+    app.get('/api/agents/:id/workers', requireAuth, (req, res) => {
+        try {
+            const agent = loadAgent(req.params.id);
+            if (!agent) return res.status(404).json({ error: 'Agent not found' });
+            res.json({ workers: agent.workers || [] });
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    // Runtime-verify a session's frontend work with Reticle. The "Test" button in
+    // the Workspace hits this. It spawns a NEW single session, forced to an Ollama
+    // model (minimax-m3 by default — verification is Ollama-only), parented to the
+    // source session and pointed at the SAME working dir, seeded with the
+    // reticle-verify playbook. Runs on the DEV box against the app's dev server
+    // (Reticle can't test a deployed UAT/PROD URL — instrumentation is dev-only).
+    app.post('/api/sessions/:id/test', requireAuth, async (req, res) => {
+        try {
+            const source = store.getSession(req.params.id);
+            if (!source) return res.status(404).json({ error: 'Source session not found' });
+
+            const agent = loadAgent('reticle-verify');
+            if (!agent) return res.status(500).json({ error: 'reticle-verify agent not installed' });
+
+            // Force Ollama regardless of what the caller passes. safeOllamaModel keeps
+            // it on a known-good tag (redirects the broken kimi model to minimax-m3).
+            const model = safeOllamaModel(agent.model || OLLAMA_DEFAULT);
+            const targetDir = source.working_dir || config.DEFAULT_WORKING_DIR;
+            const phone = req.body.phone || req.user.phone || req.user.email || req.user.id;
+            const routesHint = (req.body?.routes || '').toString().trim();
+
+            const prompt = [
+                `[start fresh] You are the **Reticle Verify** agent. Verify the frontend work done in session ${source.id}.`,
+                `TARGET_DIR: ${targetDir}`,
+                `SOURCE_SESSION: ${source.id}`,
+                `Source task: ${source.task || source.name || '(unknown)'}`,
+                routesHint ? `Routes/flows to focus on: ${routesHint}` : '',
+                `\n---\n\n${agent.workflow}`,
+            ].filter(Boolean).join('\n');
+
+            const result = await messageHandler({
+                isWeb: true,
+                phone: String(phone),
+                text: prompt,
+                pushName: req.user.displayName || 'Reticle',
+                ownerId: req.user.id,
+                model,
+                workingDir: targetDir,
+            });
+
+            if (result?.sessionId) {
+                store.updateSession(result.sessionId, {
+                    type: 'test',
+                    name: `Reticle Verify — ${source.id}`,
+                    labels: ['reticle-verify', source.id],
+                    parent_session_id: source.id,
+                });
+            }
+            res.json({ success: true, sessionId: result?.sessionId, model, sourceSessionId: source.id });
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    // Orchestrated agent run — the new Agent Run Screen. Starts a master
+    // session that has the `spawn_sub_session` tool. The master decides when
+    // (and which) worker sessions to spawn, and our backend wires the
+    // tool_use ↔ tool_result round-trip through the Anthropic Messages API.
+    //
+    // The first message is the scope prompt (or the user's opening prompt).
+    // Master streams text to the same WebSocket channel as regular sessions,
+    // and every worker it spawns shows up as a new entry in the same view
+    // (linked by parent_session_id = masterSessionId).
+    app.post('/api/agents/:id/run-orchestrated', requireAuth, async (req, res) => {
+        try {
+            const agent = loadAgent(req.params.id);
+            if (!agent) return res.status(404).json({ error: 'Agent not found' });
+            const userNote = (req.body?.note || '').toString().trim();
+            const phone = req.body.phone || req.user.phone || req.user.email || req.user.id;
+            const triggeredBy = req.user.displayName || req.user.email || req.user.id;
+            const stateBlock = `## Current agent state (from ${agent.statePath})\n\n\`\`\`json\n${JSON.stringify(agent.state, null, 2)}\n\`\`\``;
+            const workersBlock = agent.workers?.length
+                ? `\n## Available workers (use spawn_sub_session)\n${agent.workers.map(w => `- ${w}`).join('\n')}\n`
+                : '\n(No workers registered for this agent yet.)\n';
+
+            // 1) Create the master session via the standard path. We give it a
+            // "[start fresh] master" prompt so handleIncomingMessage routes to
+            // START_SESSION. The master will read its full workflow as `system`
+            // on the first API call below, not from the user-role prompt.
+            const result = await messageHandler({
+                isWeb: true,
+                phone: String(phone),
+                text: `[start fresh] ${agent.name} master session — triggered by ${triggeredBy} on ${new Date().toISOString()}${userNote ? `\n\nUser note: ${userNote}` : ''}`,
+                pushName: triggeredBy,
+                ownerId: req.user.id,
+                model: agent.model || 'claude-opus-4-8',
+                workingDir: null,        // master has no repo cwd
+                mode: 'developer',
+            });
+            const masterSessionId = result?.sessionId;
+            if (!masterSessionId) return res.status(500).json({ error: 'Failed to create master session' });
+
+            // Tag the master session so the UI knows it's the orchestrator.
+            store.updateSession(masterSessionId, {
+                type: agent.type || 'task',
+                name: `${agent.name} — Master — ${new Date().toISOString().slice(0, 16).replace('T', ' ')}`,
+                labels: ['agent', agent.id, 'master'],
+            });
+
+            // 2) Build the system prompt (master workflow + state + workers)
+            // and the opening user message. Master talks to the user first
+            // (scope questions) before spawning any workers.
+            const system = [
+                `You are the **${agent.name}** master agent (id: ${agent.id}).`,
+                `\n${stateBlock}`,
+                workersBlock,
+                `\n---\n\n# Master workflow\n\n${agent.workflow}`,
+                `\n---\n\n# How to use spawn_sub_session\n\nYou have one tool: spawn_sub_session. Call it whenever the next step of your workflow should be done by a fresh, isolated Claude session. The worker you spawn does NOT see this conversation — pass it a complete, self-contained prompt with all the context it needs (sprint name, services, branches, what to do, what to return). After spawning, the user can chat with the worker directly in the UI. When you relay the worker's result back, summarise it — don't dump raw logs.\n\nYou may spawn workers in any order; the user will see them appear in the Agent Run Screen and can interject at any time. Do NOT attempt to do the worker's job yourself — always spawn the right worker.\n\nIf a worker fails or returns a result you don't understand, surface it to the user instead of guessing.`,
+            ].filter(Boolean).join('\n');
+
+            const openingUser = userNote
+                ? userNote
+                : `(Master session started. Begin: greet the user, confirm scope, then start the workflow.)`;
+
+            // 3) Drive the master in the background. We respond immediately
+            // with the masterSessionId so the UI can switch to the Agent Run
+            // Screen; the orchestration runs as a fire-and-forget async loop.
+            (async () => {
+                try {
+                    const conversation = [{ role: 'user', content: openingUser }];
+                    let assistantText = '';
+                    let totalUsage = null;
+                    for (let turn = 0; turn < 12; turn++) {
+                        const turnResult = await runMasterAgent({
+                            model: agent.model || 'claude-opus-4-8',
+                            system,
+                            messages: conversation,
+                            onText: (delta) => {
+                                assistantText += delta;
+                                wsBroadcast('session_message', { sessionId: masterSessionId, type: 'assistant_delta', text: delta });
+                            },
+                            onToolUse: async (tool) => {
+                                if (tool.name !== 'spawn_sub_session') {
+                                    return { isError: true, content: `Unknown tool "${tool.name}". You only have spawn_sub_session.` };
+                                }
+                                const childAgentId = String(tool.input?.agent_id || '').trim();
+                                const childPrompt = String(tool.input?.prompt || '').trim();
+                                const childName = String(tool.input?.name || '').trim();
+                                if (!agent.workers.includes(childAgentId)) {
+                                    return { isError: true, content: `worker "${childAgentId}" is not registered under agent ${agent.id}. Available: ${agent.workers.join(', ') || '(none)'}` };
+                                }
+                                if (!childPrompt) return { isError: true, content: 'prompt is required' };
+                                // Spawn the child session via the same path the
+                                // /api/agents/:id/run route uses. Tag it as a
+                                // worker so the UI knows to nest it under master.
+                                const child = await messageHandler({
+                                    isWeb: true,
+                                    phone: String(phone),
+                                    text: `[start fresh] ${childPrompt}`,
+                                    pushName: triggeredBy,
+                                    ownerId: req.user.id,
+                                    model: agent.model || 'claude-opus-4-8',
+                                    workingDir: null,
+                                    mode: 'developer',
+                                });
+                                if (!child?.sessionId) return { isError: true, content: 'Failed to spawn child session' };
+                                store.updateSession(child.sessionId, {
+                                    type: 'task',
+                                    name: childName || `${agent.name} — ${childAgentId}`,
+                                    labels: ['agent', agent.id, 'worker', childAgentId],
+                                    parent_session_id: masterSessionId,
+                                });
+                                wsBroadcast('agent_child_spawned', {
+                                    masterSessionId,
+                                    childSessionId: child.sessionId,
+                                    agentId: childAgentId,
+                                    name: childName || childAgentId,
+                                });
+                                return { content: JSON.stringify({ sessionId: child.sessionId, agentId: childAgentId, message: 'Worker spawned. The user can now chat with it in the Agent Run Screen. You can continue your work; the worker runs in parallel and you can ask the user for its result if needed.' }) };
+                            },
+                        });
+                        if (turnResult.final?.usage) totalUsage = { ...(totalUsage || {}), ...turnResult.final.usage };
+                        // Commit the assistant text we just streamed into the
+                        // session store so the transcript is durable.
+                        if (assistantText) {
+                            store.addMessage?.(masterSessionId, 'assistant', assistantText);
+                            wsBroadcast('session_message', { sessionId: masterSessionId, type: 'assistant_done', text: assistantText });
+                            assistantText = '';
+                        }
+                        if (turnResult.final?.error) {
+                            store.addMessage?.(masterSessionId, 'assistant', `[master error] ${turnResult.final.error}`);
+                            break;
+                        }
+                        if (turnResult.final?.stop_reason && turnResult.final.stop_reason !== 'tool_use') break;
+                    }
+                    if (totalUsage) {
+                        try { store.incrementCost?.(masterSessionId, ((totalUsage.input_tokens || 0) * 3 + (totalUsage.output_tokens || 0) * 15) / 1_000_000); } catch (_) { /* cost is best-effort */ }
+                    }
+                } catch (err) {
+                    console.error(`[Agent ${agent.id}] master loop crashed:`, err?.message || err);
+                    try { store.addMessage?.(masterSessionId, 'assistant', `[master crashed] ${err?.message || err}`); } catch (_) { /* */ }
+                }
+            })();
+
+            res.json({ success: true, masterSessionId, agentId: agent.id });
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    // List child sessions of a master session (used by the Agent Run Screen
+    // to render the worker column under the master).
+    app.get('/api/sessions/:id/children', requireAuth, async (req, res) => {
+        try {
+            const sessionId = req.params.id;
+            const session = store.getSession(sessionId);
+            if (!session) return res.status(404).json({ error: 'Session not found' });
+            // Ownership: the master session's owner can see all its children.
+            if (session.owner_id !== req.user.id && !req.user.isAdmin) {
+                return res.status(403).json({ error: 'Forbidden' });
+            }
+            const children = (store.listSessionsByParent?.(sessionId) || [])
+                .map(s => ({ id: s.id, name: s.name, type: s.type, status: s.status, labels: s.labels, created_at: s.created_at }));
+            res.json({ children });
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    // Sprint trigger — sets the active sprint for the prod-deployment agent.
+    // Two side-effects (both idempotent):
+    //   1) Writes agents/prod-deployment/current_sprint.txt (gitignored) so
+    //      the master/workers can read the current sprint.
+    //   2) Appends a "## Current sprint: <name>" line to ~/CLAUDE.md so every
+    //      Claude session in the box knows the active sprint.
+    // The "append" is naive (always adds) — that's deliberate. Each line has
+    // an ISO timestamp so the most-recent line is always the truth; old lines
+    // are kept for audit.
+    app.post('/api/agents/:id/set-sprint', requireAuth, async (req, res) => {
+        try {
+            const agent = loadAgent(req.params.id);
+            if (!agent) return res.status(404).json({ error: 'Agent not found' });
+            const sprintName = String(req.body?.sprintName || '').trim();
+            if (!sprintName) return res.status(400).json({ error: 'sprintName is required' });
+            const sprintFile = path.join(agent.dir, 'current_sprint.txt');
+            const stamp = new Date().toISOString();
+            // 1) Local file the master/workers read directly.
+            fs.writeFileSync(sprintFile, `${sprintName}\n# set ${stamp}\n`, 'utf8');
+            // 2) ~/CLAUDE.md — append a single-line marker (idempotent: the
+            // master can grep the most recent one).
+            const home = process.env.HOME || '/root';
+            const claudeMd = path.join(home, 'CLAUDE.md');
+            const marker = `<!-- sprint:set agent=${agent.id} name=${JSON.stringify(sprintName)} at=${stamp} -->`;
+            const line = `${marker}\n## Current sprint: ${sprintName}\n(${stamp})\n`;
+            if (fs.existsSync(claudeMd)) {
+                fs.appendFileSync(claudeMd, `\n\n${line}`);
+            } else {
+                // Bootstrap a minimal CLAUDE.md if the user has none — better
+                // than silently failing the trigger.
+                fs.writeFileSync(claudeMd, `${line}\n`, 'utf8');
+            }
+            res.json({ success: true, sprintName, sprintFile, claudeMd, at: stamp });
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    // Get the current sprint for an agent (used by the UI to show "Sprint: X"
+    // on the agent card and to pre-populate the master prompt).
+    app.get('/api/agents/:id/current-sprint', requireAuth, (req, res) => {
+        try {
+            const agent = loadAgent(req.params.id);
+            if (!agent) return res.status(404).json({ error: 'Agent not found' });
+            const sprintFile = path.join(agent.dir, 'current_sprint.txt');
+            let sprintName = null;
+            let setAt = null;
+            if (fs.existsSync(sprintFile)) {
+                const text = fs.readFileSync(sprintFile, 'utf8');
+                const firstLine = text.split('\n')[0].trim();
+                const stampMatch = text.match(/# set (.+)/);
+                sprintName = firstLine || null;
+                setAt = stampMatch ? stampMatch[1].trim() : null;
+            }
+            res.json({ sprintName, setAt });
         } catch (err) { res.status(500).json({ error: err.message }); }
     });
 
@@ -1214,6 +1617,22 @@ Do NOT ask for confirmation — proceed through each step automatically. If any 
         } catch (err) { res.status(500).json({ error: err.message }); }
     });
 
+    // Carry features into this sprint (backlog → next sprint at rollover). Also clears
+    // is_backlog, so a moved feature lands straight on the target sprint's board.
+    app.post('/api/sprints/:id/move-issues', requireAuth, (req, res) => {
+        try {
+            const sprint = store.getSprint(req.params.id);
+            if (!sprint) return res.status(404).json({ error: 'Sprint not found' });
+            const { issueIds } = req.body;
+            if (!Array.isArray(issueIds) || issueIds.length === 0) {
+                return res.status(400).json({ error: 'issueIds must be a non-empty array' });
+            }
+            const moved = store.moveIssuesToSprint(issueIds, sprint.id);
+            wsBroadcast('issues_moved', { sprintId: sprint.id, issueIds: moved.map(i => i.id) });
+            res.json({ success: true, moved: moved.length, sprint: { id: sprint.id, name: sprint.name } });
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
     // ── Sprint Board ⇄ Spreadsheet (Open in Sheet / Template / Upload) ──
     // These are additive: the in-app board editing stays exactly as-is.
     const safeParse = (s) => { try { return JSON.parse(s); } catch (_) { return null; } };
@@ -1473,6 +1892,18 @@ The user may ask follow-up questions about the changelog — answer based on the
 
     // ── Issues (Linear-like task board) ──────────────────────────
 
+    // Attachments arrive from the client as [{ name, key, contentType }]. They are stored
+    // and later rendered as links, so keep only well-formed entries whose key points inside
+    // the upload prefix — GET /api/attachments enforces the same prefix when serving.
+    const sanitizeAttachments = (list) => (Array.isArray(list) ? list : [])
+        .filter(a => a && typeof a.key === 'string' && a.key.startsWith('bug-attachments/') && !a.key.includes('..'))
+        .slice(0, 20)
+        .map(a => ({
+            name: String(a.name || 'file').slice(0, 200),
+            key: a.key,
+            contentType: String(a.contentType || 'application/octet-stream').slice(0, 120),
+        }));
+
     app.get('/api/issues', requireAuth, (req, res) => {
         try { res.json(store.getAllIssues()); }
         catch (err) { res.status(500).json({ error: err.message }); }
@@ -1480,7 +1911,7 @@ The user may ask follow-up questions about the changelog — answer based on the
 
     app.post('/api/issues', requireAuth, (req, res) => {
         try {
-            const { title, description, priority, labels, forkSessionId, sprintId, assignedTo, type, mode, platform, qaOwner, parentIssueId, sessionId, deadline } = req.body;
+            const { title, description, priority, labels, forkSessionId, sprintId, assignedTo, type, mode, platform, qaOwner, parentIssueId, sessionId, deadline, attachments } = req.body;
             if (!title) return res.status(400).json({ error: 'title is required' });
             // Design issues: explicit mode from client, else default by creator's role (designers make design issues).
             const issueMode = (mode === 'design' || mode === 'developer')
@@ -1488,7 +1919,7 @@ The user may ask follow-up questions about the changelog — answer based on the
                 : (req.user.role === 'designer' ? 'design' : 'developer');
             // A subtask inherits its parent's sprint so it lives under the same feature.
             const parent = parentIssueId ? store.getIssue(parentIssueId) : null;
-            const issue = store.createIssue({ title, description, priority, labels, createdBy: req.user.id, forkSessionId: forkSessionId || null, sprintId: parent ? parent.sprint_id : (sprintId || null), assignedTo: assignedTo || null, type: type || 'task', mode: issueMode, platform: parent ? parent.platform : (platform || ''), qaOwner: qaOwner || '', parentIssueId: parentIssueId || null, sessionId: sessionId || null, deadline: deadline || null });
+            const issue = store.createIssue({ title, description, priority, labels, createdBy: req.user.id, forkSessionId: forkSessionId || null, sprintId: parent ? parent.sprint_id : (sprintId || null), assignedTo: assignedTo || null, type: type || 'task', mode: issueMode, platform: parent ? parent.platform : (platform || ''), qaOwner: qaOwner || '', parentIssueId: parentIssueId || null, sessionId: sessionId || null, deadline: deadline || null, attachments: sanitizeAttachments(attachments) });
             wsBroadcast('issue_created', { issue });
 
             // Notify assignee
@@ -1513,11 +1944,12 @@ The user may ask follow-up questions about the changelog — answer based on the
             const allowed = ['title', 'description', 'status', 'priority', 'labels', 'assigned_to', 'sort_order', 'sprint_id', 'type', 'stage', 'prd_url', 'design_session_id', 'qa_session_id',
                 // Sprint board fields
                 'platform', 'qa_owner', 'dev_status', 'dev_percent', 'deadline',
-                'test_cases_count', 'test_cases_done_date', 'qa_status', 'open_bugs', 'critical_bugs', 'qa_comments', 'is_backlog'];
+                'test_cases_count', 'test_cases_done_date', 'qa_status', 'open_bugs', 'critical_bugs', 'qa_comments', 'is_backlog', 'attachments', 'is_critical'];
             const updates = {};
             for (const key of allowed) {
                 if (req.body[key] !== undefined) updates[key] = req.body[key];
             }
+            if (updates.attachments !== undefined) updates.attachments = sanitizeAttachments(updates.attachments);
             if (updates.status === 'completed') updates.completed_at = new Date().toISOString();
             // Keep the kanban status in sync when a manager flips Dev Status on the sprint board.
             if (updates.dev_status !== undefined) {
@@ -1808,6 +2240,73 @@ The user may ask follow-up questions about the changelog — answer based on the
         try { res.json(store.getSprintProgress(req.params.id)); }
         catch (err) { res.status(500).json({ error: err.message }); }
     });
+
+    // ── Sprint status email (daily 6 AM IST + manual) ───────────────────
+
+    // Recipients default to the whole team — every user account that has an email — so a
+    // new joiner is covered without a config change. An explicit `sprint_status_recipients`
+    // setting still wins when someone wants a narrower stakeholder list.
+    function getStatusRecipients() {
+        try {
+            const parsed = JSON.parse(store.getSetting('sprint_status_recipients') || '[]');
+            if (Array.isArray(parsed) && parsed.length) return parsed;
+        } catch (_) { /* malformed setting — fall back to the roster */ }
+        return [...new Set(
+            store.getAllUsers()
+                .map(u => String(u.email || '').trim())
+                .filter(e => e.includes('@'))
+        )];
+    }
+
+    // Preview the exact email that would be sent — lets you see it before it goes out.
+    app.get('/api/sprints/:id/status-preview', requireAuth, (req, res) => {
+        try {
+            const sprint = store.getSprint(req.params.id);
+            if (!sprint) return res.status(404).json({ error: 'Sprint not found' });
+            const progress = store.getSprintProgress(sprint.id);
+            const issues = store.getIssuesBySprint(sprint.id);
+            const { subject, html } = buildSprintStatusEmail(sprint, progress, issues, { trigger: 'manual', triggeredBy: req.user.displayName });
+            res.json({ subject, html, recipients: getStatusRecipients() });
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    // Send it now (the manual button).
+    app.post('/api/sprints/:id/send-status', requireAuth, async (req, res) => {
+        try {
+            const sprint = store.getSprint(req.params.id);
+            if (!sprint) return res.status(404).json({ error: 'Sprint not found' });
+            const progress = store.getSprintProgress(sprint.id);
+            const issues = store.getIssuesBySprint(sprint.id);
+            const recipients = getStatusRecipients();
+            const result = await sendSprintStatusEmail(sprint, progress, issues, recipients, { trigger: 'manual', triggeredBy: req.user.displayName });
+            store.setSetting(`sprint_status_last_sent:${sprint.id}`, new Date().toISOString());
+            res.json({ success: true, ...result });
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    app.get('/api/sprints/:id/status-last-sent', requireAuth, (req, res) => {
+        try { res.json({ lastSentAt: store.getSetting(`sprint_status_last_sent:${req.params.id}`) || null }); }
+        catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    // Daily 6:00 AM IST — status mail for every active sprint. Each sprint is sent
+    // independently so one bad address / sprint doesn't block the others.
+    cron.schedule('0 6 * * *', async () => {
+        console.log('[SprintMailer] Running daily 6 AM IST status send...');
+        const active = store.getAllSprints().filter(s => s.status === 'active');
+        for (const sprint of active) {
+            try {
+                const progress = store.getSprintProgress(sprint.id);
+                const issues = store.getIssuesBySprint(sprint.id);
+                const recipients = getStatusRecipients();
+                await sendSprintStatusEmail(sprint, progress, issues, recipients, { trigger: 'scheduled' });
+                store.setSetting(`sprint_status_last_sent:${sprint.id}`, new Date().toISOString());
+                console.log(`[SprintMailer] Sent status for "${sprint.name}" to ${recipients.join(', ')}`);
+            } catch (err) {
+                console.error(`[SprintMailer] Failed to send status for sprint ${sprint.id}:`, err.message);
+            }
+        }
+    }, { timezone: 'Asia/Kolkata' });
 
     // ── Lifecycle Stages (Idea → Design → Development → QA → Done) ─────
 

@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useAuth } from '../context/AuthContext';
 import {
   ArrowUp,
@@ -21,13 +21,14 @@ import {
   RotateCcw,
   Pencil,
   FlaskConical,
+  AlertTriangle,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import ShareSessionModal from './ShareSessionModal';
-import { getSessionFeature, setSessionFeatureStatus } from '../hooks/useApi';
+import { getSessionFeature, setSessionFeatureStatus, useFrontendRepos } from '../hooks/useApi';
 
 // Sprint feature lifecycle, surfaced at the top of a feature's session.
 const FEATURE_STATUS = [
@@ -49,12 +50,35 @@ const colors = {
 };
 
 function StatusDot({ status }) {
-  const color = status === 'running' ? 'var(--c-status-running)' : status === 'completed' ? 'var(--c-status-completed)' : status === 'error' ? 'var(--c-status-failed)' : 'var(--c-text-secondary)';
+  const color = status === 'running' ? 'var(--c-status-running)' : status === 'completed' ? 'var(--c-status-completed)' : status === 'failed' ? 'var(--c-status-failed)' : 'var(--c-text-secondary)';
   return (
     <span
       className="inline-block w-2 h-2 rounded-full flex-shrink-0"
       style={{ backgroundColor: color }}
     />
+  );
+}
+
+function CrashedBanner({ onResume }) {
+  return (
+    <div
+      className="flex items-center gap-3 rounded-lg px-3.5 py-3 mb-3 text-[13px]"
+      style={{ backgroundColor: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.3)', color: 'var(--c-status-failed)' }}
+    >
+      <AlertTriangle size={16} className="flex-shrink-0" />
+      <span className="flex-1" style={{ color: 'var(--c-text)' }}>
+        This session crashed mid-turn and stopped responding. Your work isn't lost — send a message to pick up right where it left off.
+      </span>
+      {onResume && (
+        <button
+          onClick={onResume}
+          className="px-2.5 py-1 rounded cursor-pointer font-medium flex-shrink-0"
+          style={{ backgroundColor: 'var(--c-status-failed)', color: '#fff' }}
+        >
+          Continue
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -504,8 +528,8 @@ function ModelSelector({ models, selectedModel, onChange, className = '', compac
         }}
       >
         {models.map((m) => (
-          <option key={m.id} value={m.id} style={{ backgroundColor: colors.surface2 }}>
-            {m.name}
+          <option key={m.id} value={m.id} disabled={m.disabled} style={{ backgroundColor: colors.surface2 }}>
+            {m.name}{m.disabled ? ` — ${m.disabledReason || 'unavailable'}` : ''}
           </option>
         ))}
       </select>
@@ -548,11 +572,13 @@ export default function Workspace({
   isNewSession = false,
   onStartSession,
   onForkSession,
+  onTest,
   onAdvanceStage,
   onUploadFile,
   onTranscribe,
   models = [],
   sprints = [],
+  issues = [],
   hasAccess = true,
   busy = false,
   typing = false,
@@ -573,7 +599,23 @@ export default function Workspace({
   );
   const [selectedSprint, setSelectedSprint] = useState('');
   const [sessionType, setSessionType] = useState('task');
+  // Add this session to the sprint as a top-level task, or as a subtask of a feature.
+  // No default — picking one is required, so the filing decision is never made by accident.
+  const [addAs, setAddAs] = useState('');
+  const [parentIssueId, setParentIssueId] = useState('');
+  const isRealSprint = !!selectedSprint && selectedSprint !== '__none__';
+  // Candidate parents = top-level, non-archived features of the chosen sprint.
+  const sprintFeatures = useMemo(() => (
+    isRealSprint
+      ? (issues || []).filter((i) => i.sprint_id === selectedSprint && !i.parent_issue_id && !i.is_backlog && i.category !== 'chat')
+      : []
+  ), [issues, selectedSprint, isRealSprint]);
+  // Changing sprint invalidates the parent — it belonged to the previous sprint's list.
+  useEffect(() => { setAddAs(''); setParentIssueId(''); }, [selectedSprint]);
   const [sessionName, setSessionName] = useState('');
+  // Designer "build in" target: '' = designs workspace, else a frontend repo name.
+  const [selectedRepo, setSelectedRepo] = useState('');
+  const frontendRepos = useFrontendRepos();
 
   // Linked sprint feature (if this session was started from the Sprint Board) → drives the status control.
   const [feature, setFeature] = useState(null);
@@ -585,11 +627,13 @@ export default function Workspace({
     return () => { alive = false; };
   }, [session?.id, session?.status, isNewSession]);
   const [newSessionError, setNewSessionError] = useState('');
+  const [sendError, setSendError] = useState('');
   const [accessNote, setAccessNote] = useState('');
   const [showFork, setShowFork] = useState(false);
   const [forkText, setForkText] = useState('');
   const [testText, setTestText] = useState('');
   const [showShare, setShowShare] = useState(false);
+  const [testing, setTesting] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [recording, setRecording] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
@@ -752,6 +796,7 @@ export default function Workspace({
   }, [attachments, onUploadFile]);
 
   const handleSend = async () => {
+    if (busy) return;
     const text = inputText.trim();
     if (!text && attachments.length === 0) return;
     // Upload any pending attachments — get tokens (for Claude) + urls (for display)
@@ -768,15 +813,27 @@ export default function Workspace({
       .join('\n');
     const baseText = text || (imageTokens.length > 0 ? '' : '');
     const finalText = [baseText, attachMarkdown].filter(Boolean).join('\n\n') || '[attachment]';
+    setSendError('');
     if (isNewSession && onStartSession) {
       if (!selectedSprint) { setNewSessionError('Please choose a sprint or select "No sprint".'); return; }
       if (!sessionType) { setNewSessionError('Please select a type.'); return; }
+      if (isRealSprint && !addAs) { setNewSessionError('Please choose whether to add this as a task or a subtask.'); return; }
+      if (addAs === 'subtask' && !parentIssueId) { setNewSessionError('Please choose the feature this subtask belongs to.'); return; }
       setNewSessionError('');
       const sprintToSend = selectedSprint === '__none__' ? null : selectedSprint;
-      onStartSession(finalText, selectedModel, imageTokens, sprintToSend, sessionType, [], sessionName.trim() || null);
+      onStartSession(finalText, selectedModel, imageTokens, sprintToSend, sessionType, [], sessionName.trim() || null, selectedRepo || null, parentIssueId || null);
       setSessionName('');
+      setAddAs('');
+      setParentIssueId('');
     } else if (onSendMessage) {
-      onSendMessage(finalText, selectedModel, imageTokens);
+      // Await + catch: if the send fails (auth, permission, network), keep the typed
+      // text in the box and show the error instead of silently discarding it.
+      try {
+        await onSendMessage(finalText, selectedModel, imageTokens);
+      } catch (err) {
+        setSendError(err?.message || 'Failed to send message — please try again.');
+        return;
+      }
     }
     // Clean up previews
     attachments.forEach((att) => { if (att.previewUrl) URL.revokeObjectURL(att.previewUrl); });
@@ -922,6 +979,20 @@ export default function Workspace({
             <GitBranch size={14} style={{ color: colors.textSecondary }} />
           </button>
         )}
+        {onTest && (
+          <button
+            onClick={async () => {
+              if (testing) return;
+              setTesting(true);
+              try { await onTest(); } finally { setTesting(false); }
+            }}
+            disabled={testing}
+            className="p-1 rounded cursor-pointer hover:opacity-80 transition-opacity disabled:opacity-50"
+            title="Test — runtime-verify this session's frontend work with Reticle (Ollama / minimax-m3, DEV dev-server, pre-deploy)"
+          >
+            <FlaskConical size={14} style={{ color: testing ? 'var(--c-accent)' : colors.textSecondary }} />
+          </button>
+        )}
         <button
           onClick={() => setShowShare(true)}
           className="p-1 rounded cursor-pointer hover:opacity-80 transition-opacity"
@@ -970,6 +1041,11 @@ export default function Workspace({
     { id: 'bug', label: 'Bug', color: '#ef4444' },
     { id: 'feature', label: 'Feature', color: '#8b5cf6' },
     { id: 'improvement', label: 'Improvement', color: '#06b6d4' },
+    { id: 'epic', label: 'Epic', color: '#a78bfa' },
+  ];
+  const ADD_AS_OPTIONS = [
+    { id: 'task', label: 'Task', color: '#3b82f6' },
+    { id: 'subtask', label: 'Subtask', color: '#8b5cf6' },
   ];
   const newSessionView = (
     <div className="flex-1 flex items-center justify-center p-4">
@@ -1030,6 +1106,36 @@ export default function Workspace({
           </div>
         </div>
 
+        {/* Where to build — designers only. Default is the designs workspace;
+            picking a frontend repo starts the session inside that real repo
+            (frontend-only; a developer wires the backend afterwards). */}
+        {authUser?.role === 'designer' && (
+          <div className="mb-4 text-left">
+            <label className="block text-[11px] font-medium mb-1.5 uppercase tracking-wide" style={{ color: colors.textSecondary }}>
+              Build in
+            </label>
+            <div className="relative">
+              <select
+                value={selectedRepo}
+                onChange={(e) => setSelectedRepo(e.target.value)}
+                className="appearance-none cursor-pointer outline-none font-mono text-xs px-3 py-2 pr-7 rounded-lg w-full"
+                style={{ backgroundColor: colors.surface2, border: `1px solid ${colors.border}`, color: colors.text }}
+              >
+                <option value="">Designs workspace (prototypes)</option>
+                {frontendRepos.map((r) => (
+                  <option key={r} value={r}>{r} — real frontend repo</option>
+                ))}
+              </select>
+              <ChevronDown size={14} className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" style={{ color: colors.textSecondary }} />
+            </div>
+            {selectedRepo && (
+              <p className="text-[11px] mt-1.5" style={{ color: colors.textSecondary }}>
+                Frontend only — no backend, no deploys. Work on a <code>design/*</code> branch.
+              </p>
+            )}
+          </div>
+        )}
+
         {/* Sprint (optional — pick one or mark as no sprint) */}
         <div className="mb-4 text-left">
           <label className="block text-[11px] font-medium mb-1.5 uppercase tracking-wide" style={{ color: colors.textSecondary }}>
@@ -1064,6 +1170,60 @@ export default function Workspace({
             Pick a sprint, or choose <strong>No sprint</strong> to leave it unassigned.
           </p>
         </div>
+
+        {/* Task or subtask — a subtask needs a sprint feature to hang off, so sprint-only */}
+        {isRealSprint && (
+          <div className="mb-4 text-left">
+            <label className="block text-[11px] font-medium mb-1.5 uppercase tracking-wide" style={{ color: colors.textSecondary }}>
+              Add as <span style={{ color: '#ef4444' }}>*</span>
+            </label>
+            <div className="flex gap-1.5 flex-wrap">
+              {ADD_AS_OPTIONS.map((opt) => {
+                const active = addAs === opt.id;
+                // Nothing to parent to → the choice would dead-end, so keep it out of reach.
+                const disabled = opt.id === 'subtask' && sprintFeatures.length === 0;
+                return (
+                  <button
+                    key={opt.id}
+                    onClick={() => { setAddAs(opt.id); if (opt.id === 'task') { setParentIssueId(''); } }}
+                    disabled={disabled}
+                    title={disabled ? 'This sprint has no features to attach a subtask to' : opt.label}
+                    className="px-2.5 py-1 rounded-md text-[11px] font-medium cursor-pointer transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                    style={{
+                      backgroundColor: active ? `${opt.color}20` : colors.surface2,
+                      color: active ? opt.color : colors.textSecondary,
+                      // Unpicked and required → same red hint the Sprint field uses.
+                      border: `1px solid ${active ? opt.color : (addAs || disabled ? colors.border : '#ef444466')}`,
+                    }}
+                  >
+                    {opt.label}
+                  </button>
+                );
+              })}
+            </div>
+            {addAs === 'subtask' && (
+              <div className="relative mt-2">
+                <select
+                  value={parentIssueId}
+                  onChange={(e) => setParentIssueId(e.target.value)}
+                  aria-label="Parent feature for this subtask"
+                  className="appearance-none cursor-pointer outline-none font-mono text-xs px-3 py-2 pr-7 rounded-lg w-full"
+                  style={{
+                    backgroundColor: colors.surface2,
+                    border: `1px solid ${parentIssueId ? colors.border : '#ef444466'}`,
+                    color: parentIssueId ? colors.text : colors.textSecondary,
+                  }}
+                >
+                  <option value="">Select the parent feature…</option>
+                  {sprintFeatures.map((f) => (
+                    <option key={f.id} value={f.id}>{f.title}</option>
+                  ))}
+                </select>
+                <ChevronDown size={14} className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" style={{ color: colors.textSecondary }} />
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="flex items-center justify-center gap-3 mb-2">
           <ModelSelector
@@ -1104,6 +1264,9 @@ export default function Workspace({
             onEdit={msg.role === 'user' ? handleEditResend : undefined}
           />
         ))
+      )}
+      {session?.status === 'failed' && (
+        <CrashedBanner onResume={() => onSendMessage?.('Continue from where you left off.', selectedModel, [])} />
       )}
       {typing && <TypingIndicator />}
       <div ref={messagesEndRef} />
@@ -1274,7 +1437,7 @@ export default function Workspace({
         <textarea
           ref={textareaRef}
           value={inputText}
-          onChange={(e) => setInputText(e.target.value)}
+          onChange={(e) => { setInputText(e.target.value); if (sendError) setSendError(''); }}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
           placeholder={
@@ -1326,6 +1489,9 @@ export default function Workspace({
           </button>
         )}
       </div>
+      {sendError && (
+        <p className="text-[11px] mt-1.5" style={{ color: '#ef4444' }}>{sendError}</p>
+      )}
     </div>
   );
 

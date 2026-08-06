@@ -1,0 +1,70 @@
+{
+  "_comment": "Canonical repo/deploy config for the Prod Deployment agent. Grounded in the real prod builder box (140.245.25.134 = pl-prod-builder-v2-429181): ~/autodeploy.sh, ~/repositories/{frontend,api,special}/<APP>, ~/repositories/envs/{ui,api}/<APP>.env, ~/pl-oks-cluster/api-ns/configmaps/. Read by the agent's subagents; the agent NEVER hard-codes prod paths in prompts, it reads them from here.",
+
+  "prod": {
+    "host": "140.245.25.134",
+    "ssh": "ssh -o BatchMode=yes ubuntu@140.245.25.134",
+    "alias": "pl-prod-builder-v2-429181",
+    "repos_root": "/home/ubuntu/repositories",
+    "autodeploy_script": "/home/ubuntu/autodeploy.sh",
+    "central_env_dir": "/home/ubuntu/repositories/envs",
+    "configmaps_dir": "/home/ubuntu/pl-oks-cluster/api-ns/configmaps",
+    "kube_env": "PATH=/home/ubuntu/bin:$PATH"
+  },
+
+  "uat": {
+    "host": "uat.pluginlive.com",
+    "ssh": "ssh -o BatchMode=yes ubuntu@uat.pluginlive.com"
+  },
+
+  "db_scripts": {
+    "repo": "PluginLive-Technologies/DB-Scripts",
+    "clone": "https://github.com/PluginLive-Technologies/DB-Scripts.git",
+    "access": "clone with the vedantnadhe-creator PAT (see the db-script-push skill); the GitHub MCP account cannot read this repo",
+    "naming": "New files: <YYYYMMDDTHHMMSSZ>__<snake_case>.sql (UTC timestamp = global run order). Legacy files: NNN_ per feature folder.",
+    "header_env_block": "Each file header has an 'Environments applied' block: 'PROD — pending' vs 'PROD — applied YYYY-MM-DD'."
+  },
+
+  "slack": {
+    "channel_id": "C0BF1GTHZ6G",
+    "channel_name": "#infrahub",
+    "bot_user": "infrahub2",
+    "token_env": "INFRAHUB_SLACK_TOKEN",
+    "_note": "Token is read from env INFRAHUB_SLACK_TOKEN by prod_deploy_notify.sh — do NOT hard-code it in git-tracked files."
+  },
+
+  "branch_naming": {
+    "release_pattern": "release-v<MAJOR>.<MINOR>",
+    "hotfix_pattern": "release-v<MAJOR>.<MINOR>-hotfix-<N>",
+    "rules": {
+      "hotfix": "From current prod branch release-vX.Y[-hotfix-N]: next = release-vX.Y-hotfix-(N+1). If current has no -hotfix suffix, next = release-vX.Y-hotfix-1. Base the new branch off the current prod branch.",
+      "release": "From current prod release-vX.Y: next = release-vX.(Y+1) by default (minor bump). Major bump (v(X+1).0) only if the user explicitly asks. Base the new release off UAT.",
+      "example": "Current prod (all repos, 2026-07): release-v1.35-hotfix-3 → next hotfix release-v1.35-hotfix-4, next release release-v1.36."
+    }
+  },
+
+  "apps": {
+    "admin-react":       { "autodeploy": "admin-react",      "num": 1,  "type": "frontend", "path": "/home/ubuntu/repositories/frontend/admin-react",      "ocr": "pl-admin-react",      "k8s_ns": "web", "k8s_deploy": "admin-react",   "env_file": "/home/ubuntu/repositories/envs/ui/admin-react.env" },
+    "auth-react":        { "autodeploy": "auth-react",       "num": 2,  "type": "frontend", "path": "/home/ubuntu/repositories/frontend/auth-react",       "ocr": "pl-auth-react",       "k8s_ns": "web", "k8s_deploy": "auth-react",    "env_file": "/home/ubuntu/repositories/envs/ui/auth-react.env" },
+    "student-react":     { "autodeploy": "student-react",    "num": 3,  "type": "frontend", "path": "/home/ubuntu/repositories/frontend/student-react",    "ocr": "pl-student-react",    "k8s_ns": "web", "k8s_deploy": "student-react", "env_file": "/home/ubuntu/repositories/envs/ui/student-react.env", "env_note": "webpack bakes env at build; autodeploy also copies the env to .env (not just .env.prod). Never ship a DEV-built bundle." },
+    "corporate-react":   { "autodeploy": "corporate-react",  "num": 4,  "type": "frontend", "path": "/home/ubuntu/repositories/frontend/corporate-react",  "ocr": "pl-corporate-react",  "k8s_ns": "web", "k8s_deploy": "corporate-react", "env_file": "/home/ubuntu/repositories/envs/ui/corporate-react.env" },
+    "institute-react":   { "autodeploy": "institute-react",  "num": 5,  "type": "frontend", "path": "/home/ubuntu/repositories/frontend/institute-react",  "ocr": "pl-institute-react",  "k8s_ns": "web", "k8s_deploy": "institute-react", "env_file": "/home/ubuntu/repositories/envs/ui/institute-react.env" },
+    "admin-node":        { "autodeploy": "admin-node",       "num": 6,  "type": "api",      "path": "/home/ubuntu/repositories/api/admin-node",           "ocr": "pl-admin-api",        "k8s_ns": "api", "k8s_deploy": "admin-node",    "env_file": "/home/ubuntu/repositories/envs/api/admin-node.env",     "configmap": "admin-configmap-prod.yaml" },
+    "student-node":      { "autodeploy": "student-node",     "num": 7,  "type": "api",      "path": "/home/ubuntu/repositories/api/student-node",         "ocr": "pl-student-ap",       "k8s_ns": "api", "k8s_deploy": "student-node",  "env_file": "/home/ubuntu/repositories/envs/api/student-node.env",   "configmap": "student-configmap-prod.yaml" },
+    "corporate-node":    { "autodeploy": "corporate-node",   "num": 8,  "type": "api",      "path": "/home/ubuntu/repositories/api/corporate-node",       "ocr": "pl-corporate-api",    "k8s_ns": "api", "k8s_deploy": "corporate-node","env_file": "/home/ubuntu/repositories/envs/api/corporate-node.env", "configmap": "corporate-configmap.yaml" },
+    "institute-node":    { "autodeploy": "institute-node",   "num": 9,  "type": "api",      "path": "/home/ubuntu/repositories/api/institute-node",       "ocr": "pl-institute-api",    "k8s_ns": "api", "k8s_deploy": "institute-node","env_file": "/home/ubuntu/repositories/envs/api/institute-node.env", "configmap": "institute-configmap.yaml" },
+    "auth-node":         { "autodeploy": "auth-node",        "num": 10, "type": "api",      "path": "/home/ubuntu/repositories/api/auth-node",            "ocr": "pl-auth-api",         "k8s_ns": "api", "k8s_deploy": "auth-node",     "env_file": "/home/ubuntu/repositories/envs/api/auth-node.env",      "configmap": "auth-congigmap.yaml" },
+    "resume-parser":     { "autodeploy": "resume-parser",    "num": 11, "type": "special",  "path": "/home/ubuntu/repositories/api/Resume_Parser/USING API", "ocr": "pl-resume-parser",  "k8s_ns": "api", "k8s_deploy": "resume-parser", "env_file": null },
+    "search-service":    { "autodeploy": "search-service",   "num": 12, "type": "special",  "path": "/home/ubuntu/repositories/api/search-service",       "ocr": "pl-search-service",   "k8s_ns": "api", "k8s_deploy": "search-service","env_file": null, "configmap": "search-configmap.yaml" },
+    "fast-api":          { "autodeploy": "fast-api",         "num": 13, "type": "api",      "path": "/home/ubuntu/repositories/api/fast-api",             "ocr": "pl-fast-api",         "k8s_ns": "api", "k8s_deploy": "fast-api",      "env_file": "/home/ubuntu/repositories/envs/api/fast-api.env",       "configmap": "fast-api-configmap.yaml" },
+    "question-manager":  { "autodeploy": "question-manager", "num": 14, "type": "frontend", "path": "/home/ubuntu/repositories/frontend/question-manager", "ocr": "pl-question-manager", "k8s_ns": "web", "k8s_deploy": "question-manager", "env_file": "/home/ubuntu/repositories/envs/ui/question-manager.env" },
+    "assessment-react":  { "autodeploy": "assessment-react", "num": 15, "type": "frontend", "path": "/home/ubuntu/repositories/frontend/assessment-react", "ocr": "assessment-react",    "k8s_ns": "web", "k8s_deploy": "assessment-react", "env_file": "/home/ubuntu/repositories/envs/ui/assessment-react.env" },
+    "jdparser":          { "autodeploy": "jdparser",         "num": 16, "type": "special",  "path": "/home/ubuntu/repositories/api/Llama-JD-Parser",      "ocr": "pl-llama-jd-parser",  "k8s_ns": "api", "k8s_deploy": "jdparser",      "env_file": null }
+  },
+
+  "env_apply_rules": {
+    "frontend": "Add/update the var in the central env file (env_file above). autodeploy.sh copies it to <repo>/.env.prod at build time (and to <repo>/.env for student-react). The value is baked into the webpack bundle — a rebuild/redeploy is required for it to take effect.",
+    "api": "Two places, BOTH required: (1) the central env file (env_file) — copied to <repo>/.env.prod and baked into the image; AND (2) the K8s configmap (configmaps_dir/<configmap>) which is the pod's runtime env — edit the yaml then `kubectl apply -f <configmap>` and restart/rollout the deployment for it to take effect.",
+    "special": "resume-parser / jdparser read env differently (no central .env file) — inspect the service before touching; flag to the user rather than guessing."
+  }
+}

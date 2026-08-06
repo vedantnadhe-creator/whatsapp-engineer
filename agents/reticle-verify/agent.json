@@ -1,0 +1,14 @@
+{
+    "id": "reticle-verify",
+    "name": "Reticle Verify",
+    "description": "Runtime-verifies a session's frontend work on the DEV box using Reticle (real program state — network, store, console, React fiber) driven by an Ollama model. Pre-deploy gate that catches 'green build, dead app' bugs.",
+    "icon": "Bot",
+    "model": "ollama:minimax-m3:cloud",
+    "ollama_only": true,
+    "type": "test",
+    "run_mode": "single-session",
+    "hidden_from_agents_tab": true,
+    "workflow_file": "workflow.md",
+    "state_file": "state.json",
+    "version": 1
+}

@@ -14,6 +14,17 @@ node_modules/
 .env.production
 .env.local
 
+# Agent local-only files (env hints, infra notes, current-sprint marker).
+# These contain deploy-time secrets and infra details that must NEVER
+# be committed. Read by the prod-deployment master agent's workers.
+agents/**/env.local.json
+agents/**/infra.local.md
+agents/**/current_sprint.txt
+# ...including editor/manual backups of them — `env.local.json.bak` is NOT matched
+# by the rule above and holds live PROD secrets (JWT_SECRET, LiteLLM key, PostHog key).
+agents/**/env.local.json.*
+*.bak
+
 # Google service-account credentials (never commit secrets)
 google-sa.json
 *service-account*.json

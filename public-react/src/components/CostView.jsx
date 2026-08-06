@@ -2,8 +2,10 @@ import { useMemo } from 'react';
 import { DollarSign, RefreshCw, TrendingUp, Layers, ArrowUpRight, Info } from 'lucide-react';
 
 const MODEL_NAMES = {
+  'claude-opus-5': 'Opus 5',
   'claude-opus-4-8': 'Opus 4.8',
   'claude-opus-4-7': 'Opus 4.7',
+  'claude-sonnet-5': 'Sonnet 5',
   'fable': 'Fable 5',
   'opus': 'Opus 4.6',
   'sonnet': 'Sonnet 4.6',

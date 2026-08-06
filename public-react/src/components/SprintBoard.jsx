@@ -1,16 +1,17 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import {
   Plus, Play, MessageSquare, Bug, FlaskConical, Trash2, ChevronDown, ChevronRight,
-  GitFork, Check, X, Loader2, FileText, RefreshCw, CornerDownRight, ArrowLeft, Archive, ArchiveRestore,
-  Paperclip, ListTree, FileSpreadsheet, Download, Upload, ExternalLink, Sun, Moon,
+  GitFork, Check, X, Loader2, FileText, RefreshCw, CornerDownRight, ArrowLeft, ArrowRight, Archive,
+  Paperclip, ListTree, FileSpreadsheet, Download, Upload, ExternalLink, Sun, Moon, Mail,
 } from 'lucide-react'
 import { useTheme } from '../context/ThemeContext'
 import {
   startFeatureSession, getBugs, createBug, updateBug, deleteBug, forkBug,
   getTestCases, createTestCase, updateTestCase, deleteTestCase, generateTestCases,
   getSubtasks, uploadFile,
-  openSprintSheet, getSprintTemplate, importSprintSheet, apiUrl,
+  openSprintSheet, getSprintTemplate, importSprintSheet, moveIssuesToSprint, apiUrl,
   deleteIssue, uploadAttachment, attachmentUrl,
+  previewSprintStatus, sendSprintStatus, getSprintStatusLastSent,
 } from '../hooks/useApi'
 
 // Prefer a person's display name; fall back to the email's local part, never the raw email.
@@ -32,6 +33,7 @@ const QA_STATUS = [
   { v: 'not_needed', label: 'Not needed', color: 'var(--c-text-muted)' },
 ]
 const TYPES = [
+  { v: 'epic', label: 'Epic' },
   { v: 'feature', label: 'Feature' },
   { v: 'task', label: 'Task' },
   { v: 'bug', label: 'Bug' },
@@ -61,8 +63,14 @@ function featureCompletion(f) {
 }
 const completionColor = (pct) => pct >= 100 ? '#4ade80' : pct >= 70 ? '#60a5fa' : pct >= 50 ? '#fbbf24' : 'var(--c-text-muted)'
 
+// A row whose Type is Bug IS a bug: it counts toward the sprint bug totals until resolved,
+// alongside the child bugs filed against features. Mirrors SessionStore.isOpenBugRow().
+// Kept out of featureCompletion() on purpose — self-counting would cap a bug at 50% forever.
+const isOpenBugRow = (f) => f?.type === 'bug' && featureCompletion(f) < 100
+
 // Pill foreground colors (dark theme) — backgrounds are derived as a translucent tint.
 const TYPE_PILL = {
+  epic: '#a78bfa',
   feature: '#f472b6',
   task: '#4ade80',
   bug: '#f87171',
@@ -100,6 +108,59 @@ function FilterSelect({ value, onChange, placeholder, options }) {
       <option value="" style={{ color: 'var(--c-text)', backgroundColor: 'var(--c-surface)' }}>{placeholder}</option>
       {options.map(o => <option key={o.v} value={o.v} style={{ color: 'var(--c-text)', backgroundColor: 'var(--c-surface)' }}>{o.label}</option>)}
     </select>
+  )
+}
+
+// Quick "add a name to the roster" popover for the Dev/QA assignee dropdowns above —
+// name-only, no login access (that's granted later from Settings → Users).
+function AddMemberControl({ onAdd }) {
+  const [open, setOpen] = useState(false)
+  const [name, setName] = useState('')
+  const [role, setRole] = useState('developer')
+  const [busy, setBusy] = useState(false)
+
+  const submit = async () => {
+    if (!name.trim() || busy) return
+    setBusy(true)
+    try {
+      await onAdd(name.trim(), role)
+      setName(''); setRole('developer'); setOpen(false)
+    } finally { setBusy(false) }
+  }
+
+  if (!open) {
+    return (
+      <button
+        onClick={() => setOpen(true)}
+        className="text-[11px] flex items-center gap-1 cursor-pointer px-2 py-1 rounded"
+        style={{ color: 'var(--c-text-secondary)', border: '1px solid var(--c-border)' }}
+        title="Add a dev or tester name to the roster (reference only — no login access)"
+      ><Plus size={11} /> Add dev/tester</button>
+    )
+  }
+  return (
+    <div className="flex items-center gap-1.5">
+      <input
+        autoFocus
+        value={name}
+        onChange={e => setName(e.target.value)}
+        onKeyDown={e => { if (e.key === 'Enter') submit(); if (e.key === 'Escape') setOpen(false) }}
+        placeholder="Name"
+        className="text-[11px] px-2 py-1 rounded outline-none"
+        style={{ backgroundColor: 'var(--c-surface)', color: 'var(--c-text)', border: '1px solid var(--c-border)', width: 120 }}
+      />
+      <select
+        value={role}
+        onChange={e => setRole(e.target.value)}
+        className="text-[11px] rounded px-1.5 py-1 cursor-pointer outline-none"
+        style={{ backgroundColor: 'var(--c-surface)', color: 'var(--c-text)', border: '1px solid var(--c-border)' }}
+      >
+        <option value="developer">Dev</option>
+        <option value="tester">Tester</option>
+      </select>
+      <button onClick={submit} disabled={busy || !name.trim()} className="text-[11px] px-2 py-1 rounded cursor-pointer font-medium disabled:opacity-40" style={{ backgroundColor: 'var(--c-accent)', color: '#fff' }}>{busy ? '...' : 'Add'}</button>
+      <button onClick={() => setOpen(false)} className="text-[11px] px-1.5 py-1 rounded cursor-pointer" style={{ color: 'var(--c-text-muted)' }}><X size={11} /></button>
+    </div>
   )
 }
 
@@ -167,7 +228,7 @@ export default function SprintBoard({
   onBack,
   issues, refreshIssues, onCreateIssue, onUpdateIssue, onDeleteIssue,
   sprints, onCreateSprint, onUpdateSprint, onDeleteSprint,
-  members, user, model, onGoToSession,
+  members, onAddMember, user, model, onGoToSession,
   onGetChangelog, onRequestIssueSummary, onGetIssueLastResponse, onGenerateChangelog,
 }) {
   const [activeSprintId, setActiveSprintId] = useState(null) // null = all
@@ -215,6 +276,27 @@ export default function SprintBoard({
   }, [issues, activeSprintId])
   const backlogCount = useMemo(() => (issues || []).filter(i => i.category !== 'chat' && i.is_backlog).length, [issues])
 
+  // ── Backlog → sprint rollover ──────────────────────────────────────────
+  // "Next sprint" = the soonest planned sprint (earliest start date), else the active one.
+  const nextSprint = useMemo(() => {
+    const planned = [...sprints]
+      .filter(s => s.status === 'planning')
+      .sort((a, b) => String(a.start_date || '9999').localeCompare(String(b.start_date || '9999')))
+    return planned[0] || sprints.find(s => s.status === 'active') || sprints[0] || null
+  }, [sprints])
+  const [selectedIds, setSelectedIds] = useState([])
+  const [moveTargetId, setMoveTargetId] = useState('')
+  const [movingToSprint, setMovingToSprint] = useState(false)
+  // Switching tabs abandons the selection — ids from another view must never be carried over.
+  useEffect(() => { setSelectedIds([]) }, [activeSprintId])
+  // Preselect the next sprint, but keep a target the user picked by hand while it still exists.
+  useEffect(() => {
+    setMoveTargetId(prev => (prev && sprints.some(s => s.id === prev) ? prev : (nextSprint?.id || '')))
+  }, [sprints, nextSprint])
+  const toggleSelected = useCallback((id) => {
+    setSelectedIds(prev => (prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]))
+  }, [])
+
   // Filters — view-only narrowing of the rows (sprint progress stays full-sprint).
   const [filters, setFilters] = useState({ dev: '', qa: '', dev_assignee: '', qa_owner: '', platform: '', type: '' })
   const setFilter = (k, v) => setFilters(prev => ({ ...prev, [k]: v }))
@@ -230,6 +312,37 @@ export default function SprintBoard({
     (!filters.type || f.type === filters.type)
   ), [features, filters])
 
+  // Select-all covers what the filters actually show, not the whole backlog.
+  const allSelected = filteredFeatures.length > 0 && filteredFeatures.every(f => selectedIds.includes(f.id))
+  const toggleSelectAll = () => setSelectedIds(allSelected ? [] : filteredFeatures.map(f => f.id))
+
+  const handleMoveToSprint = async () => {
+    if (!moveTargetId || selectedIds.length === 0) return
+    setMovingToSprint(true)
+    try {
+      const { moved, sprint } = await moveIssuesToSprint(moveTargetId, selectedIds)
+      setSelectedIds([])
+      setSheetMsg({ kind: 'info', text: `Moved ${moved} feature${moved === 1 ? '' : 's'} to ${sprint.name}.` })
+      refreshIssues()
+    } catch (e) {
+      setSheetMsg({ kind: 'error', text: e.message || 'Move failed.' })
+    } finally {
+      setMovingToSprint(false)
+    }
+  }
+
+  // Per-row send — the dropdown on a backlog row, for one feature at a time.
+  const moveOneToSprint = useCallback(async (issueId, sprintId) => {
+    try {
+      const { sprint } = await moveIssuesToSprint(sprintId, [issueId])
+      setSelectedIds(prev => prev.filter(id => id !== issueId))
+      setSheetMsg({ kind: 'info', text: `Moved to ${sprint.name}.` })
+      refreshIssues()
+    } catch (e) {
+      setSheetMsg({ kind: 'error', text: e.message || 'Move failed.' })
+    }
+  }, [refreshIssues])
+
   const progress = useMemo(() => {
     const total = features.length
     if (!total) return { total: 0, done: 0, passed: 0, percent: 0, openBugs: 0, criticalBugs: 0 }
@@ -237,8 +350,9 @@ export default function SprintBoard({
     const passed = features.filter(f => featureCompletion(f) === 100).length
     // Sprint % = average of each feature's lifecycle completion (QA-driven).
     const percent = Math.round(features.reduce((s, f) => s + featureCompletion(f), 0) / total)
-    const openBugs = features.reduce((s, f) => s + (f.open_bugs || 0), 0)
-    const criticalBugs = features.reduce((s, f) => s + (f.critical_bugs || 0), 0)
+    // Child bugs on features, plus the rows that are themselves bugs.
+    const openBugs = features.reduce((s, f) => s + (f.open_bugs || 0) + (isOpenBugRow(f) ? 1 : 0), 0)
+    const criticalBugs = features.reduce((s, f) => s + (f.critical_bugs || 0) + (isOpenBugRow(f) && f.is_critical ? 1 : 0), 0)
     return { total, done, passed, percent, openBugs, criticalBugs }
   }, [features])
 
@@ -437,6 +551,7 @@ export default function SprintBoard({
                 style={{ backgroundColor: 'var(--c-surface)', color: 'var(--c-text-secondary)', border: '1px solid var(--c-border)' }}
               >{activeSprint.status === 'active' ? 'Mark complete' : 'Reactivate'}</button>
               <ChangelogButton sprint={activeSprint} features={features} onGetChangelog={onGetChangelog} onRequestIssueSummary={onRequestIssueSummary} onGetIssueLastResponse={onGetIssueLastResponse} onGenerateChangelog={onGenerateChangelog} />
+              {!isTester && <StatusMailButton sprint={activeSprint} />}
               {!isTester && (
                 <button
                   onClick={() => { if (confirm(`Delete sprint "${activeSprint.name}"? Features are kept (unlinked).`)) { onDeleteSprint(activeSprint.id); setActiveSprintId('__all__') } }}
@@ -475,6 +590,44 @@ export default function SprintBoard({
                 <X size={11} /> Clear ({activeFilterCount}) · {filteredFeatures.length}/{features.length}
               </button>
             )}
+          </div>
+        )}
+
+        {/* Backlog rollover — carry parked features (and their subtasks) into a sprint */}
+        {isBacklogView && features.length > 0 && !isTester && (
+          <div className="flex items-center gap-2 flex-wrap">
+            <label className="flex items-center gap-1.5 text-[11px] cursor-pointer" style={{ color: 'var(--c-text-secondary)' }}>
+              <input type="checkbox" checked={allSelected} onChange={toggleSelectAll} className="cursor-pointer" />
+              Select all ({filteredFeatures.length})
+            </label>
+            <span className="text-[11px] font-mono" style={{ color: 'var(--c-text-muted)' }}>{selectedIds.length} selected</span>
+            <span className="text-[11px]" style={{ color: 'var(--c-text-muted)' }}>→</span>
+            <select
+              value={moveTargetId}
+              onChange={(e) => setMoveTargetId(e.target.value)}
+              aria-label="Sprint to move the selected features into"
+              className="text-[11px] px-2 py-1 rounded cursor-pointer outline-none"
+              style={{ backgroundColor: 'var(--c-surface)', color: 'var(--c-text)', border: '1px solid var(--c-border)' }}
+            >
+              {sprints.length === 0 && <option value="">No sprints yet</option>}
+              {sprints.map(s => (
+                <option key={s.id} value={s.id}>{s.name}{s.id === nextSprint?.id ? ' (next)' : ''}</option>
+              ))}
+            </select>
+            <button
+              onClick={handleMoveToSprint}
+              disabled={movingToSprint || selectedIds.length === 0 || !moveTargetId}
+              title="Move the selected backlog features into the chosen sprint"
+              className="text-[11px] px-2 py-1 rounded cursor-pointer flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"
+              style={{ backgroundColor: 'var(--c-accent)', color: '#fff' }}
+            >{movingToSprint ? <Loader2 size={12} className="animate-spin" /> : <ArrowRight size={12} />} Move to sprint</button>
+          </div>
+        )}
+
+        {onAddMember && (
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-[11px] font-medium" style={{ color: 'var(--c-text-muted)' }}>Roster:</span>
+            <AddMemberControl onAdd={onAddMember} />
           </div>
         )}
 
@@ -524,6 +677,8 @@ export default function SprintBoard({
               <FeatureRow
                 key={f.id} f={f} idx={idx} members={members} isTester={isTester}
                 expanded={expandedId === f.id} isBacklogView={isBacklogView}
+                selected={selectedIds.includes(f.id)} onSelect={toggleSelected}
+                sprints={sprints} onMoveToSprint={moveOneToSprint}
                 onToggle={() => setExpandedId(expandedId === f.id ? null : f.id)}
                 onUpdate={onUpdateIssue} onDelete={onDeleteIssue} onCreateIssue={onCreateIssue}
                 onStartSession={handleStartSession} busyStart={busyStart === f.id}
@@ -605,7 +760,7 @@ export default function SprintBoard({
 }
 
 // ── Feature row ──────────────────────────────────────────────────────────────
-function FeatureRow({ f, idx, members, isTester, expanded, isBacklogView, onToggle, onUpdate, onDelete, onCreateIssue, onStartSession, busyStart, onGoToSession, model, refreshIssues }) {
+function FeatureRow({ f, idx, members, isTester, expanded, isBacklogView, selected, onSelect, sprints, onMoveToSprint, onToggle, onUpdate, onDelete, onCreateIssue, onStartSession, busyStart, onGoToSession, model, refreshIssues }) {
   const dev = devStatusMeta(f.dev_status)
   const upd = (patch) => onUpdate(f.id, patch)
   const cellBorder = { borderBottom: '1px solid var(--c-border)', borderRight: '1px solid var(--c-border)' }
@@ -619,6 +774,16 @@ function FeatureRow({ f, idx, members, isTester, expanded, isBacklogView, onTogg
       <tr className="group" style={{ verticalAlign: 'middle', backgroundColor: rowBg }}>
         <td className="px-2 py-2 whitespace-nowrap" style={cellBorder}>
           <div className="flex items-center gap-1">
+            {/* Backlog rows are selectable so several can be carried into a sprint at once. */}
+            {isBacklogView && !isTester && (
+              <input
+                type="checkbox"
+                checked={selected}
+                onChange={() => onSelect(f.id)}
+                aria-label={`Select "${f.title}" to move to a sprint`}
+                className="cursor-pointer"
+              />
+            )}
             {/* Testers can edit columns but can't start or open sessions from the board. */}
             {isTester ? null : f.session_id ? (
               <button onClick={() => onGoToSession(f.session_id)} title="Open dev session" className="p-1 rounded cursor-pointer hover:bg-[var(--c-surface-2)]" style={{ color: 'var(--c-accent)' }}><MessageSquare size={15} /></button>
@@ -652,8 +817,23 @@ function FeatureRow({ f, idx, members, isTester, expanded, isBacklogView, onTogg
           {/* QA Pass → mark the feature Done (100%) automatically */}
           <StatusSelect value={f.qa_status} options={QA_STATUS} onChange={(v) => upd(v === 'pass' ? { qa_status: v, dev_status: 'done' } : { qa_status: v })} />
         </td>
-        <td className="px-2 py-2 text-center font-mono text-[12px]" style={{ ...cellBorder, color: (f.open_bugs || 0) > 0 ? '#fbbf24' : 'var(--c-text-muted)' }}>{f.open_bugs || 0}</td>
-        <td className="px-2 py-2 text-center font-mono text-[12px]" style={{ ...cellBorder, color: (f.critical_bugs || 0) > 0 ? '#f87171' : 'var(--c-text-muted)' }}>{f.critical_bugs || 0}</td>
+        {/* A Bug-type row counts as one open bug itself, on top of any child bugs. */}
+        <td className="px-2 py-2 text-center font-mono text-[12px]" style={{ ...cellBorder, color: ((f.open_bugs || 0) + (isOpenBugRow(f) ? 1 : 0)) > 0 ? '#fbbf24' : 'var(--c-text-muted)' }}>
+          {(f.open_bugs || 0) + (isOpenBugRow(f) ? 1 : 0)}
+          {isOpenBugRow(f) && <span title="This row is itself a bug" style={{ color: 'var(--c-text-muted)' }}> ●</span>}
+        </td>
+        <td className="px-2 py-2 text-center font-mono text-[12px]" style={{ ...cellBorder, color: ((f.critical_bugs || 0) + (isOpenBugRow(f) && f.is_critical ? 1 : 0)) > 0 ? '#f87171' : 'var(--c-text-muted)' }}>
+          {f.type === 'bug' ? (
+            // Severity of the bug this row represents — click to flip.
+            <button
+              onClick={() => upd({ is_critical: f.is_critical ? 0 : 1 })}
+              disabled={isTester}
+              title={f.is_critical ? 'Critical — click to clear' : 'Mark this bug critical'}
+              className="text-[10px] font-medium px-1.5 py-0.5 rounded-full cursor-pointer disabled:cursor-not-allowed"
+              style={{ backgroundColor: f.is_critical ? '#f8717122' : 'var(--c-surface-2)', color: f.is_critical ? '#f87171' : 'var(--c-text-muted)' }}
+            >{f.is_critical ? 'Critical' : 'Normal'}</button>
+          ) : (f.critical_bugs || 0)}
+        </td>
         <td className="px-2 py-2" style={cellBorder}>
           {(() => { const pct = featureCompletion(f); const c = completionColor(pct); return (
             <div className="flex items-center gap-2 min-w-[78px]" title="Auto: QA Pass / Dev Done 100% · Dev Completed 70% · open bug 50% (40% if critical)">
@@ -669,7 +849,23 @@ function FeatureRow({ f, idx, members, isTester, expanded, isBacklogView, onTogg
           <div className="flex items-center gap-1">
             {!isTester && (
               isBacklogView
-                ? <button onClick={() => upd({ is_backlog: 0 })} title="Restore from backlog to its sprint" className="p-1 rounded cursor-pointer hover:bg-[var(--c-surface-2)]" style={{ color: '#4ade80' }}><ArchiveRestore size={14} /></button>
+                // Supersedes the old restore-to-its-own-sprint icon: the list includes the
+                // sprint it came from, so "put it back" is still one pick.
+                ? (
+                  <select
+                    value=""
+                    onChange={(e) => { if (e.target.value) { onMoveToSprint(f.id, e.target.value) } }}
+                    title="Send this feature to a sprint"
+                    aria-label={`Send "${f.title}" to a sprint`}
+                    className="text-[11px] px-1.5 py-0.5 rounded cursor-pointer outline-none"
+                    style={{ backgroundColor: 'var(--c-surface-2)', color: '#4ade80', border: '1px solid var(--c-border)' }}
+                  >
+                    <option value="" style={{ color: 'var(--c-text)', backgroundColor: 'var(--c-surface)' }}>Send to…</option>
+                    {(sprints || []).map(s => (
+                      <option key={s.id} value={s.id} style={{ color: 'var(--c-text)', backgroundColor: 'var(--c-surface)' }}>{s.name}</option>
+                    ))}
+                  </select>
+                )
                 : <button onClick={() => upd({ is_backlog: 1 })} title="Move to backlog" className="p-1 rounded cursor-pointer hover:bg-[var(--c-surface-2)] opacity-0 group-hover:opacity-100" style={{ color: 'var(--c-text-muted)' }}><Archive size={14} /></button>
             )}
             {!isTester && <button onClick={() => { if (confirm('Delete this feature?')) onDelete(f.id) }} title="Delete" className="p-1 rounded cursor-pointer hover:bg-[var(--c-surface-2)] opacity-0 group-hover:opacity-100" style={{ color: '#f87171' }}><Trash2 size={14} /></button>}
@@ -734,6 +930,7 @@ function FeatureDetail({ f, isTester, members, onUpdate, onCreateIssue, onGoToSe
   return (
     <div className="px-6 py-4 flex flex-col gap-6">
       <DescriptionBlock f={f} onUpdate={onUpdate} />
+      <AttachmentsBlock f={f} isTester={isTester} onUpdate={onUpdate} />
       <SubtasksPanel f={f} isTester={isTester} members={members} devMembers={devMembers} testerMembers={testerMembers} onUpdate={onUpdate} onCreateIssue={onCreateIssue} onGoToSession={onGoToSession} model={model} refreshIssues={refreshIssues} />
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <BugsPanel f={f} isTester={isTester} devMembers={devMembers} testerMembers={testerMembers} onGoToSession={onGoToSession} model={model} refreshIssues={refreshIssues} />
@@ -786,8 +983,10 @@ function SubtasksPanel({ f, isTester, members, devMembers = [], testerMembers = 
         <div className="flex flex-col gap-1">
           {subs.length === 0 && <div className="text-[11px]" style={{ color: 'var(--c-text-muted)' }}>No subtasks yet.</div>}
           {subs.map(s => (
-            <div key={s.id} className="flex items-center gap-2 px-2 py-1.5 rounded" style={{ backgroundColor: 'var(--c-bg)', border: '1px solid var(--c-border)' }}>
-              <span className="flex-1 text-xs" style={{ color: 'var(--c-text)' }}>{s.title}</span>
+            <div key={s.id} className="flex items-center gap-2 px-2 py-1.5 rounded flex-wrap" style={{ backgroundColor: 'var(--c-bg)', border: '1px solid var(--c-border)' }}>
+              <span className="flex-1 min-w-[140px] text-xs" style={{ color: 'var(--c-text)' }}>{s.title}</span>
+              <AttachmentChips items={parseAttachments(s)} />
+              {!isTester && <AttachButton title="Attach files to this subtask" onPicked={(added) => added.length && setOwner(s, { attachments: [...parseAttachments(s), ...added] })} />}
               <PillSelect value={s.assigned_to || ''} onChange={(v) => setOwner(s, { assigned_to: v || null })} options={devMembers} fg={ASSIGNEE_PILL} placeholder="Dev" disabled={isTester} />
               <PillSelect value={s.qa_owner || ''} onChange={(v) => setOwner(s, { qa_owner: v || '' })} options={testerMembers} fg={QA_OWNER_PILL} placeholder="QA" />
               <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full" style={{ backgroundColor: devStatusMeta(s.dev_status).color + '22', color: devStatusMeta(s.dev_status).color }}>{devStatusMeta(s.dev_status).label}</span>
@@ -807,6 +1006,65 @@ function SubtasksPanel({ f, isTester, members, devMembers = [], testerMembers = 
 }
 
 const parseAttachments = (b) => { try { const a = JSON.parse(b.attachments || '[]'); return Array.isArray(a) ? a : [] } catch { return [] } }
+
+// ── Issue attachments (features, tasks and subtasks — same shape bugs already use) ──
+// Upload each picked file, then hand back the [{ name, key, contentType }] entries.
+async function uploadAll(fileList) {
+  const files = Array.from(fileList || [])
+  const uploaded = await Promise.all(files.map(f => uploadAttachment(f).catch(() => null)))
+  return uploaded.filter(Boolean)
+}
+
+function AttachButton({ onPicked, size = 12, title = 'Attach files' }) {
+  const [busy, setBusy] = useState(false)
+  const pick = async (e) => {
+    const { files } = e.target
+    if (!files?.length) return
+    setBusy(true)
+    try { await onPicked(await uploadAll(files)) } finally { setBusy(false); e.target.value = '' }
+  }
+  return (
+    <label title={title} className="p-1 rounded cursor-pointer hover:bg-[var(--c-surface-2)] inline-flex" style={{ color: 'var(--c-text-muted)' }}>
+      {busy ? <Loader2 size={size} className="animate-spin" /> : <Paperclip size={size} />}
+      <input type="file" multiple className="hidden" onChange={pick} aria-label={title} />
+    </label>
+  )
+}
+
+function AttachmentChips({ items, onRemove }) {
+  if (!items.length) return null
+  return (
+    <div className="flex flex-wrap gap-1">
+      {items.map((a, i) => (
+        <span key={a.key || i} className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full" style={{ backgroundColor: 'var(--c-surface-2)', color: 'var(--c-accent)' }}>
+          <a href={attachmentUrl(a.key)} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 hover:underline">
+            <Paperclip size={10} />{a.name}
+          </a>
+          {onRemove && <button onClick={() => onRemove(i)} title="Remove" className="cursor-pointer" style={{ color: 'var(--c-text-muted)' }}><X size={10} /></button>}
+        </span>
+      ))}
+    </div>
+  )
+}
+
+// Attachments on a feature/task, shown in the expanded row alongside the description.
+function AttachmentsBlock({ f, isTester, onUpdate }) {
+  const items = parseAttachments(f)
+  const save = (next) => onUpdate({ attachments: next })
+  return (
+    <div>
+      <div className="flex items-center gap-2 mb-2">
+        <Paperclip size={14} style={{ color: 'var(--c-accent)' }} />
+        <span className="text-xs font-semibold" style={{ color: 'var(--c-text)' }}>Attachments</span>
+        <span className="text-[10px] font-mono" style={{ color: 'var(--c-text-muted)' }}>{items.length}</span>
+        {!isTester && <AttachButton size={13} onPicked={(added) => added.length && save([...items, ...added])} title="Attach files to this task" />}
+      </div>
+      {items.length === 0
+        ? <div className="text-[11px]" style={{ color: 'var(--c-text-muted)' }}>No attachments yet.</div>
+        : <AttachmentChips items={items} onRemove={isTester ? null : (i) => save(items.filter((_, j) => j !== i))} />}
+    </div>
+  )
+}
 
 function BugsPanel({ f, isTester, devMembers = [], testerMembers = [], onGoToSession, model, refreshIssues }) {
   const [bugs, setBugs] = useState([])
@@ -1017,11 +1275,12 @@ function QuickAddFeature({ sprintId, members, onCreate }) {
   const [type, setType] = useState('feature')
   const [assignedTo, setAssignedTo] = useState('')
   const [qaOwner, setQaOwner] = useState('')
+  const [pendingAtt, setPendingAtt] = useState([]) // uploaded and staged for the new task
 
   const submit = async () => {
     if (!title.trim()) return
-    await onCreate({ title: title.trim(), description: description.trim(), deadline: deadline || null, platform, type, assignedTo: assignedTo || null, qaOwner, priority: 'medium' })
-    setTitle(''); setDescription(''); setDeadline(''); setPlatform(''); setQaOwner(''); setAssignedTo('')
+    await onCreate({ title: title.trim(), description: description.trim(), deadline: deadline || null, platform, type, assignedTo: assignedTo || null, qaOwner, priority: 'medium', attachments: pendingAtt })
+    setTitle(''); setDescription(''); setDeadline(''); setPlatform(''); setQaOwner(''); setAssignedTo(''); setPendingAtt([])
   }
 
   return (
@@ -1031,7 +1290,9 @@ function QuickAddFeature({ sprintId, members, onCreate }) {
       <div className="flex-1 min-w-[220px] flex flex-col gap-1.5">
         <input value={title} onChange={e => setTitle(e.target.value)} onKeyDown={e => e.key === 'Enter' && submit()} placeholder="Title — new feature / story…" className="w-full text-xs px-2 py-1.5 rounded outline-none" style={{ backgroundColor: 'var(--c-surface)', color: 'var(--c-text)', border: '1px solid var(--c-border)' }} />
         <textarea value={description} onChange={e => setDescription(e.target.value)} placeholder="Description (optional)… (Shift+Enter for newline)" rows={2} className="w-full text-xs px-2 py-1.5 rounded outline-none resize-y leading-relaxed" style={{ backgroundColor: 'var(--c-surface)', color: 'var(--c-text-secondary)', border: '1px solid var(--c-border)', minHeight: 56 }} />
+        <AttachmentChips items={pendingAtt} onRemove={(i) => setPendingAtt(prev => prev.filter((_, j) => j !== i))} />
       </div>
+      <AttachButton size={14} title="Attach files to this task" onPicked={(added) => added.length && setPendingAtt(prev => [...prev, ...added])} />
       <select value={type} onChange={e => setType(e.target.value)} className="text-xs px-2 py-1.5 rounded outline-none cursor-pointer" style={{ backgroundColor: 'var(--c-surface)', color: 'var(--c-text)', border: '1px solid var(--c-border)' }}>
         {TYPES.map(t => <option key={t.v} value={t.v}>{t.label}</option>)}
       </select>
@@ -1105,6 +1366,73 @@ function ChangelogButton({ sprint, features, onGetChangelog, onRequestIssueSumma
             <div className="flex justify-end gap-2">
               <button onClick={() => setOpen(false)} disabled={busy} className="text-xs px-3 py-1.5 rounded cursor-pointer disabled:opacity-40" style={{ color: 'var(--c-text-muted)' }}>Cancel</button>
               <button onClick={generate} disabled={busy} className="text-xs px-3 py-1.5 rounded cursor-pointer font-medium disabled:opacity-40" style={{ backgroundColor: 'var(--c-accent)', color: '#fff' }}>{busy ? 'Working…' : 'Generate'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  )
+}
+
+// Sprint status email — daily 6 AM IST to stakeholders, plus preview + manual send here.
+function StatusMailButton({ sprint }) {
+  const [open, setOpen] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [preview, setPreview] = useState(null)
+  const [lastSentAt, setLastSentAt] = useState(null)
+  const [sentJustNow, setSentJustNow] = useState(false)
+  const [error, setError] = useState('')
+
+  const loadPreview = async () => {
+    setOpen(true)
+    setBusy(true)
+    setError('')
+    setSentJustNow(false)
+    try {
+      const [p, last] = await Promise.all([previewSprintStatus(sprint.id), getSprintStatusLastSent(sprint.id)])
+      setPreview(p)
+      setLastSentAt(last?.lastSentAt || null)
+    } catch (e) { setError(e.message || 'Failed to load preview') } finally { setBusy(false) }
+  }
+
+  const send = async () => {
+    setBusy(true)
+    setError('')
+    try {
+      await sendSprintStatus(sprint.id)
+      setSentJustNow(true)
+      setLastSentAt(new Date().toISOString())
+    } catch (e) { setError(e.message || 'Failed to send') } finally { setBusy(false) }
+  }
+
+  return (
+    <>
+      <button onClick={loadPreview} className="text-[11px] px-2 py-1 rounded cursor-pointer flex items-center gap-1" style={{ backgroundColor: 'var(--c-surface)', color: 'var(--c-text-secondary)', border: '1px solid var(--c-border)' }}>
+        <Mail size={12} /> Status Mail
+      </button>
+      {open && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }} onClick={() => !busy && setOpen(false)}>
+          <div className="rounded-lg p-5 max-w-lg w-full mx-4 max-h-[85vh] flex flex-col" style={{ backgroundColor: 'var(--c-surface)', border: '1px solid var(--c-border)' }} onClick={e => e.stopPropagation()}>
+            <div className="flex items-center gap-2 mb-1">
+              <Mail size={16} style={{ color: 'var(--c-accent)' }} />
+              <span className="text-sm font-semibold" style={{ color: 'var(--c-text)' }}>Sprint Status Email</span>
+            </div>
+            <p className="text-[11px] mb-3" style={{ color: 'var(--c-text-muted)' }}>
+              Sent automatically every day at 6:00 AM IST to: <strong>{preview?.recipients?.join(', ') || '…'}</strong>
+              {lastSentAt && <> · last sent {new Date(lastSentAt).toLocaleString()}</>}
+              . Edit recipients in Settings (<code>sprint_status_recipients</code>).
+            </p>
+            {busy && !preview && <div className="text-[11px] mb-3 flex items-center gap-2" style={{ color: 'var(--c-text-muted)' }}><Loader2 size={12} className="animate-spin" /> Loading preview…</div>}
+            {error && <p className="text-[11px] mb-3" style={{ color: '#ef4444' }}>{error}</p>}
+            {sentJustNow && <p className="text-[11px] mb-3" style={{ color: '#22c55e' }}>Sent.</p>}
+            {preview && (
+              <div className="flex-1 overflow-y-auto rounded-lg mb-3" style={{ border: '1px solid var(--c-border)' }}>
+                <iframe title="Sprint status preview" srcDoc={preview.html} className="w-full" style={{ height: 420, border: 'none', backgroundColor: '#fff' }} />
+              </div>
+            )}
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setOpen(false)} disabled={busy} className="text-xs px-3 py-1.5 rounded cursor-pointer disabled:opacity-40" style={{ color: 'var(--c-text-muted)' }}>Close</button>
+              <button onClick={send} disabled={busy || !preview} className="text-xs px-3 py-1.5 rounded cursor-pointer font-medium disabled:opacity-40" style={{ backgroundColor: 'var(--c-accent)', color: '#fff' }}>{busy ? 'Sending…' : 'Send now'}</button>
             </div>
           </div>
         </div>

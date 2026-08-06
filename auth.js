@@ -95,7 +95,7 @@ export function verifyJwt(token) {
 // ── Express middleware ────────────────────────────────────────
 
 export function requireAuth(req, res, next) {
-    const token = req.cookies?.wa_token || req.headers.authorization?.replace('Bearer ', '');
+    const token = req.cookies?.[config.COOKIE_NAME] || req.headers.authorization?.replace('Bearer ', '');
     if (!token) return _deny(req, res);
     const payload = verifyJwt(token);
     if (!payload) return _deny(req, res);
@@ -104,7 +104,7 @@ export function requireAuth(req, res, next) {
 }
 
 export function optionalAuth(req, res, next) {
-    const token = req.cookies?.wa_token || req.headers.authorization?.replace('Bearer ', '');
+    const token = req.cookies?.[config.COOKIE_NAME] || req.headers.authorization?.replace('Bearer ', '');
     if (token) { const p = verifyJwt(token); if (p) req.user = p; }
     next();
 }

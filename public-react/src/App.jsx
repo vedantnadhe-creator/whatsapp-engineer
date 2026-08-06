@@ -1,14 +1,15 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { BrowserRouter, Routes, Route, useParams, useNavigate, useLocation } from 'react-router-dom'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import SharePage from './pages/SharePage'
 import TerminalPage from './pages/TerminalPage'
-import { useSessions, useStats, useCostStats, useSessionMessages, useModels, usePhones, useUsers, useCron, useAccessRequests, useIssues, useAutonomous, useSprints, useTeamMembers, useAction, useAgents, runAgent, startSession, sendMessage, stopSession, forkSession, testForkSession, mergeSessions, toggleBookmark, updateSessionSprint, getSprintChangelog, requestIssueSummary, getIssueLastResponse, generateSprintChangelog, uploadFile, transcribeAudio, requestAccess, getClaudePrompt, saveClaudePrompt, getLearnings, saveLearnings, getAdminSettings, saveAdminSetting, renameSession, deleteSession, sessionToIssue, apiFetch } from './hooks/useApi'
+import { useSessions, useStats, useCostStats, useSessionMessages, useModels, usePhones, useUsers, useCron, useAccessRequests, useIssues, useAutonomous, useSprints, useTeamMembers, useAction, useAgents, runAgent, runAgentOrchestrated, getAgentSprint, setAgentSprint, getSessionChildren, startSession, sendMessage, stopSession, forkSession, testForkSession, testSession, mergeSessions, toggleBookmark, updateSessionSprint, getSprintChangelog, requestIssueSummary, getIssueLastResponse, generateSprintChangelog, uploadFile, transcribeAudio, requestAccess, getClaudePrompt, saveClaudePrompt, getLearnings, saveLearnings, getAdminSettings, saveAdminSetting, renameSession, deleteSession, sessionToIssue, apiFetch } from './hooks/useApi'
 import useWebSocket from './hooks/useWebSocket'
 import Sidebar from './components/Sidebar'
 import Workspace from './components/Workspace'
 import SprintBoard from './components/SprintBoard'
 import AgentsView from './components/AgentsView'
+import AgentRunPage from './components/AgentRunPage'
 import CostView from './components/CostView'
 import Login from './pages/Login'
 import ShareSessionModal from './components/ShareSessionModal'
@@ -23,6 +24,7 @@ function Dashboard() {
   const location = useLocation()
 
   const [page, setPage] = useState(1)
+  const [sessionFilter, setSessionFilter] = useState('all') // 'all' | 'mine' | 'saved' | 'pl:<id>'
   const [activeSession, setActiveSession] = useState(urlSessionId ? { id: urlSessionId } : null)
   const [isNewSession, setIsNewSession] = useState(!urlSessionId)
   const [adminPanel, setAdminPanel] = useState(null)
@@ -42,10 +44,16 @@ function Dashboard() {
   // Work mode is driven by the user's ROLE (set in Settings → Users), not a manual toggle:
   // designer → design, tester → tester, everyone else → developer.
   const [workMode, setWorkMode] = useState('developer')
+  // Agent Run Screen — when set, the App renders AgentRunPage for this agent.
+  const [agentRun, setAgentRun] = useState(null);
+  // Latest WS message (used by AgentRunPage to react to child spawns + master
+  // stream events). We pass the whole message; AgentRunPage filters by type.
+  const [websocketMessage, setWebsocketMessage] = useState(null);
 
   const { stats, refresh: refreshStats } = useStats()
   const { cost, loading: costLoading, refresh: refreshCost } = useCostStats()
-  const { sessions, total, totalPages, showAllSessions, refresh: refreshSessions } = useSessions(page, sessionSearch)
+  // Sidebar tab — 'all' | 'mine' | 'saved' | 'pl:<id>'. All four are resolved by the API.
+  const { sessions, total, totalPages, showAllSessions, refresh: refreshSessions } = useSessions(page, sessionSearch, sessionFilter)
   const { messages, refresh: refreshMessages } = useSessionMessages(activeSession?.id)
   const { models } = useModels()
   const { phones, refresh: refreshPhones, addPhone, removePhone } = usePhones()
@@ -55,7 +63,7 @@ function Dashboard() {
   const { issues, refresh: refreshIssues, createIssue, updateIssue, deleteIssue, getStagePrompt, advanceStage } = useIssues()
   const { status: autonomousStatus, refresh: refreshAutonomous, start: startAutonomous, stop: stopAutonomous, toggleSelfDecisions } = useAutonomous()
   const { sprints, refresh: refreshSprints, createSprint, updateSprint, deleteSprint } = useSprints()
-  const { members } = useTeamMembers()
+  const { members, refresh: refreshMembers } = useTeamMembers()
   const { agents, refresh: refreshAgents, loading: agentsLoading } = useAgents()
   const { connected: wsConnected, typing: wsTyping, on: wsOn } = useWebSocket()
 
@@ -120,6 +128,7 @@ function Dashboard() {
       wsOn('issue_created', () => { refreshIssues() }),
       wsOn('issue_updated', () => { refreshIssues() }),
       wsOn('issue_deleted', () => { refreshIssues() }),
+      wsOn('issues_moved', () => { refreshIssues() }),
       // Autonomous engine
       wsOn('autonomous_update', () => { refreshAutonomous() }),
       // Assignment notifications
@@ -145,20 +154,44 @@ function Dashboard() {
         if (activeSession?.id === sessionId) { setActiveSession(null); setIsNewSession(true); navigate('/') }
         refreshSessions()
       }),
+      // Agent Run Screen: master session spawned a worker child.
+      wsOn('agent_child_spawned', (msg) => {
+        if (msg?.masterSessionId) setWebsocketMessage({ type: 'agent_child_spawned', ...msg, ts: Date.now() });
+      }),
+      // Agent Run Screen: master streamed an assistant delta / done.
+      wsOn('session_message', (msg) => {
+        if (msg?.type && String(msg.type).startsWith('assistant_')) {
+          setWebsocketMessage({ type: 'session_message', ...msg, ts: Date.now() });
+        }
+      }),
     ]
     return () => unsubs.forEach(fn => fn())
   }, [activeSession?.id, wsOn, refreshMessages, refreshSessions, refreshStats, refreshIssues, refreshAutonomous, refreshSprints])
 
-  // Fallback polling — slower interval (30s) since WebSocket handles most updates
+  // Fallback polling — WebSocket handles most updates, but this catches anything
+  // missed (dropped socket, throttled server, background tab). Faster while a
+  // session is actively running so "thinking" stays visible even if a WS push is lost.
   useEffect(() => {
     const interval = setInterval(() => {
       refreshStats()
       refreshSessions()
       if (activeSession?.id) refreshMessages()
       if (view === 'sprint') { refreshIssues() }
-    }, 30000)
+    }, activeSession?.status === 'running' ? 8000 : 30000)
     return () => clearInterval(interval)
-  }, [activeSession?.id, view])
+  }, [activeSession?.id, activeSession?.status, view])
+
+  // WebSocket reconnect catch-up — a reconnect (network blip, server restart) can
+  // silently drop whatever was broadcast while disconnected. Refetch once reconnected
+  // instead of leaving the UI stuck on pre-drop state.
+  const wasConnected = useRef(wsConnected)
+  useEffect(() => {
+    if (wsConnected && !wasConnected.current) {
+      refreshSessions()
+      if (activeSession?.id) refreshMessages()
+    }
+    wasConnected.current = wsConnected
+  }, [wsConnected, activeSession?.id, refreshSessions, refreshMessages])
 
   const handleSelectSession = useCallback((session) => {
     setActiveSession(session)
@@ -174,8 +207,8 @@ function Dashboard() {
     navigate('/')
   }, [navigate])
 
-  const _startSession = useCallback(async (text, model, imageTokens = [], sprintId = null, type = null, labels = [], name = null) => {
-    const result = await startSession(text, model, imageTokens, sprintId, type, labels, name, workMode)
+  const _startSession = useCallback(async (text, model, imageTokens = [], sprintId = null, type = null, labels = [], name = null, repo = null, parentIssueId = null) => {
+    const result = await startSession(text, model, imageTokens, sprintId, type, labels, name, workMode, repo, parentIssueId)
     if (result.sessionId) {
       const newSession = {
         id: result.sessionId,
@@ -277,6 +310,21 @@ function Dashboard() {
     return result
   }, [activeSession?.id, activeSession?.task, navigate, refreshSessions, refreshMessages])
   const [handleTestFork, testForking] = useAction(_testFork)
+
+  // Reticle Verify "Test": spawn an Ollama/minimax-m3 verification session that
+  // runtime-checks this session's frontend work (DEV dev-server, pre-deploy) and open it.
+  const _testSession = useCallback(async () => {
+    if (!activeSession?.id) return
+    const result = await testSession(activeSession.id)
+    if (result?.sessionId) {
+      setActiveSession({ id: result.sessionId, task: `Reticle Verify — ${activeSession.id}`, status: 'running', model: result.model, is_mine: true })
+      setIsNewSession(false)
+      navigate(`/s/${result.sessionId}`)
+      setTimeout(() => { refreshSessions(); refreshMessages() }, 1500)
+    }
+    return result
+  }, [activeSession?.id, navigate, refreshSessions, refreshMessages])
+  const [handleTestSession, testingSession] = useAction(_testSession)
 
   // Merge: combine 2+ sessions (each compacted) into one new session.
   const [mergePrimaryId, setMergePrimaryId] = useState(null)
@@ -408,6 +456,10 @@ function Dashboard() {
         } : null}
         searchQuery={sessionSearch}
         onSearchChange={(v) => { setSessionSearch(v); setPage(1); }}
+        sessionFilter={sessionFilter}
+        onSessionFilterChange={(v) => { setSessionFilter(v); setPage(1); }}
+        totalSessions={total}
+        onSessionsChanged={refreshSessions}
       />
       )}
       <div className="flex-1 min-w-0 min-h-0 h-full overflow-hidden">
@@ -429,6 +481,17 @@ function Dashboard() {
             agents={agents}
             loading={agentsLoading}
             onRunAgent={async (agentId, note) => {
+              // Every agent now runs as ONE normal Claude Code session (it uses
+              // its own native Task subagents in the background — no separate
+              // worker sessions). The legacy master/worker Agent Run Screen is
+              // only used for agents that explicitly opt out of single-session
+              // mode (none currently); prod-deployment is run_mode:single-session.
+              const meta = agents.find((a) => a.id === agentId);
+              if (meta?.workers?.length && meta?.run_mode !== 'single-session') {
+                setAgentRun(meta);
+                setView('agent-run');
+                return { success: true, orchestrated: true };
+              }
               const result = await runAgent(agentId, note)
               if (result?.sessionId) {
                 setActiveSession({ id: result.sessionId })
@@ -439,6 +502,12 @@ function Dashboard() {
               }
               return result
             }}
+          />
+        ) : view === 'agent-run' && agentRun ? (
+          <AgentRunPage
+            agent={agentRun}
+            onBack={() => { setAgentRun(null); setView('agents'); }}
+            websocketMessage={websocketMessage}
           />
         ) : view === 'sprint' ? (
           <SprintBoard
@@ -453,6 +522,7 @@ function Dashboard() {
             onUpdateSprint={updateSprint}
             onDeleteSprint={deleteSprint}
             members={members}
+            onAddMember={user?.isAdmin ? async (displayName, role) => { await addUser({ displayName, role }); refreshMembers(); } : null}
             user={user}
             model={selectedModel}
             onGoToSession={(sessionId) => {
@@ -490,6 +560,7 @@ function Dashboard() {
             isNewSession={isNewSession}
             onStartSession={handleStartSession}
             user={user}
+            onTest={handleTestSession}
             onTestFork={handleTestFork}
             testForking={testForking}
             onUploadFile={uploadFile}
@@ -500,6 +571,7 @@ function Dashboard() {
             onForkSession={handleForkSession}
             onAdvanceStage={handleAdvanceStage}
             sprints={sprints}
+            issues={issues}
             typing={wsTyping?.sessionId === activeSession?.id}
             wsConnected={wsConnected}
             forkTriggerId={forkTriggerId}

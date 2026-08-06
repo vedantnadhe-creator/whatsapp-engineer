@@ -255,6 +255,11 @@ class SessionStore {
             "ALTER TABLE sessions ADD COLUMN parent_session_id TEXT",
             // Bug report attachments: JSON array of { name, key, contentType } stored in S3.
             "ALTER TABLE bugs ADD COLUMN attachments TEXT DEFAULT '[]'",
+            // Same shape on issues, so a feature/task/subtask can carry specs and screenshots.
+            "ALTER TABLE issues ADD COLUMN attachments TEXT DEFAULT '[]'",
+            // Severity for a row whose Type is Bug (the row IS the bug, not a container
+            // of child bugs). Drives the sprint's critical-bug total.
+            "ALTER TABLE issues ADD COLUMN is_critical INTEGER DEFAULT 0",
             // Per-bug ownership: dev who fixes it, QA who raised/verifies it.
             "ALTER TABLE bugs ADD COLUMN assigned_to TEXT",
             "ALTER TABLE bugs ADD COLUMN qa_owner TEXT",
@@ -566,6 +571,120 @@ class SessionStore {
         ).get(userId, pattern, pattern, pattern).count;
     }
 
+    // ── Saved (bookmarked) sessions ───────────────────────────────
+    // Paginated server-side, like "Mine", so the Saved tab gets a full page of saved
+    // sessions instead of whatever happens to be bookmarked inside one page of "All".
+    getBookmarkedSessions(userId, limit = 20, offset = 0) {
+        return this.db.prepare(
+            `SELECT s.*,
+                    u.display_name as owner_name,
+                    u.email as owner_email,
+                    CASE WHEN s.owner_id = ? THEN 1 ELSE 0 END as is_mine,
+                    CASE WHEN sc.user_id IS NOT NULL THEN 1 ELSE 0 END as has_access
+             FROM sessions s
+             JOIN bookmarks b ON b.session_id = s.id AND b.user_id = ?
+             LEFT JOIN users u ON s.owner_id = u.id
+             LEFT JOIN session_collaborators sc ON sc.session_id = s.id AND sc.user_id = ?
+             ORDER BY s.updated_at DESC LIMIT ? OFFSET ?`
+        ).all(userId, userId, userId, limit, offset);
+    }
+
+    countBookmarkedSessions(userId) {
+        return this.db.prepare(
+            `SELECT COUNT(*) as count FROM bookmarks b
+             JOIN sessions s ON s.id = b.session_id WHERE b.user_id = ?`
+        ).get(userId).count;
+    }
+
+    searchBookmarkedSessions(userId, q, limit = 20, offset = 0) {
+        const pattern = this._searchPattern(q);
+        return this.db.prepare(
+            `SELECT s.*,
+                    u.display_name as owner_name,
+                    u.email as owner_email,
+                    CASE WHEN s.owner_id = ? THEN 1 ELSE 0 END as is_mine,
+                    CASE WHEN sc.user_id IS NOT NULL THEN 1 ELSE 0 END as has_access
+             FROM sessions s
+             JOIN bookmarks b ON b.session_id = s.id AND b.user_id = ?
+             LEFT JOIN users u ON s.owner_id = u.id
+             LEFT JOIN session_collaborators sc ON sc.session_id = s.id AND sc.user_id = ?
+             WHERE s.name LIKE ? ESCAPE '\\'
+                OR s.task LIKE ? ESCAPE '\\'
+                OR s.id LIKE ? ESCAPE '\\'
+             ORDER BY s.updated_at DESC LIMIT ? OFFSET ?`
+        ).all(userId, userId, userId, pattern, pattern, pattern, limit, offset);
+    }
+
+    countSearchBookmarkedSessions(userId, q) {
+        const pattern = this._searchPattern(q);
+        return this.db.prepare(
+            `SELECT COUNT(*) as count FROM sessions s
+             JOIN bookmarks b ON b.session_id = s.id AND b.user_id = ?
+             WHERE s.name LIKE ? ESCAPE '\\'
+                OR s.task LIKE ? ESCAPE '\\'
+                OR s.id LIKE ? ESCAPE '\\'`
+        ).get(userId, pattern, pattern, pattern).count;
+    }
+
+    // ── Playlist sessions ─────────────────────────────────────────
+    // Same server-side paging as Mine/Saved. The playlists join is scoped by user_id, so
+    // a playlist id belonging to someone else matches nothing rather than leaking rows.
+    getPlaylistSessions(userId, playlistId, limit = 20, offset = 0) {
+        return this.db.prepare(
+            `SELECT s.*,
+                    u.display_name as owner_name,
+                    u.email as owner_email,
+                    CASE WHEN s.owner_id = ? THEN 1 ELSE 0 END as is_mine,
+                    CASE WHEN sc.user_id IS NOT NULL THEN 1 ELSE 0 END as has_access
+             FROM sessions s
+             JOIN playlist_items pi ON pi.session_id = s.id AND pi.playlist_id = ?
+             JOIN playlists p ON p.id = pi.playlist_id AND p.user_id = ?
+             LEFT JOIN users u ON s.owner_id = u.id
+             LEFT JOIN session_collaborators sc ON sc.session_id = s.id AND sc.user_id = ?
+             ORDER BY s.updated_at DESC LIMIT ? OFFSET ?`
+        ).all(userId, playlistId, userId, userId, limit, offset);
+    }
+
+    countPlaylistSessions(userId, playlistId) {
+        return this.db.prepare(
+            `SELECT COUNT(*) as count FROM sessions s
+             JOIN playlist_items pi ON pi.session_id = s.id AND pi.playlist_id = ?
+             JOIN playlists p ON p.id = pi.playlist_id AND p.user_id = ?`
+        ).get(playlistId, userId).count;
+    }
+
+    searchPlaylistSessions(userId, playlistId, q, limit = 20, offset = 0) {
+        const pattern = this._searchPattern(q);
+        return this.db.prepare(
+            `SELECT s.*,
+                    u.display_name as owner_name,
+                    u.email as owner_email,
+                    CASE WHEN s.owner_id = ? THEN 1 ELSE 0 END as is_mine,
+                    CASE WHEN sc.user_id IS NOT NULL THEN 1 ELSE 0 END as has_access
+             FROM sessions s
+             JOIN playlist_items pi ON pi.session_id = s.id AND pi.playlist_id = ?
+             JOIN playlists p ON p.id = pi.playlist_id AND p.user_id = ?
+             LEFT JOIN users u ON s.owner_id = u.id
+             LEFT JOIN session_collaborators sc ON sc.session_id = s.id AND sc.user_id = ?
+             WHERE s.name LIKE ? ESCAPE '\\'
+                OR s.task LIKE ? ESCAPE '\\'
+                OR s.id LIKE ? ESCAPE '\\'
+             ORDER BY s.updated_at DESC LIMIT ? OFFSET ?`
+        ).all(userId, playlistId, userId, userId, pattern, pattern, pattern, limit, offset);
+    }
+
+    countSearchPlaylistSessions(userId, playlistId, q) {
+        const pattern = this._searchPattern(q);
+        return this.db.prepare(
+            `SELECT COUNT(*) as count FROM sessions s
+             JOIN playlist_items pi ON pi.session_id = s.id AND pi.playlist_id = ?
+             JOIN playlists p ON p.id = pi.playlist_id AND p.user_id = ?
+             WHERE s.name LIKE ? ESCAPE '\\'
+                OR s.task LIKE ? ESCAPE '\\'
+                OR s.id LIKE ? ESCAPE '\\'`
+        ).get(playlistId, userId, pattern, pattern, pattern).count;
+    }
+
     getAllSessions(limit = 20, offset = 0) {
         return this.db.prepare(
             `SELECT s.*, u.display_name as owner_name, u.email as owner_email
@@ -603,6 +722,14 @@ class SessionStore {
 
     addMessage(sessionId, role, content) {
         this.db.prepare('INSERT INTO messages (session_id, role, content) VALUES (?, ?, ?)').run(sessionId, role, content);
+    }
+
+    // Children of a master session — used by the Agent Run Screen to show
+    // every worker session under its parent. Returns {id, name, status, ...}.
+    listSessionsByParent(parentSessionId) {
+        return this.db.prepare(
+            'SELECT id, name, status, type, labels, created_at FROM sessions WHERE parent_session_id = ? ORDER BY created_at ASC'
+        ).all(parentSessionId);
     }
 
     upsertLastAssistantMessage(sessionId, content) {
@@ -759,12 +886,12 @@ class SessionStore {
 
     // ── Issues ─────────────────────────────────────────────────
 
-    createIssue({ title, description = '', priority = 'medium', labels = [], createdBy = null, forkSessionId = null, sprintId = null, assignedTo = null, type = 'task', category = 'issue', mode = 'developer', platform = '', qaOwner = '', parentIssueId = null, sessionId = null, deadline = null }) {
+    createIssue({ title, description = '', priority = 'medium', labels = [], createdBy = null, forkSessionId = null, sprintId = null, assignedTo = null, type = 'task', category = 'issue', mode = 'developer', platform = '', qaOwner = '', parentIssueId = null, sessionId = null, deadline = null, attachments = [] }) {
         const id = `ISS-${Date.now().toString(36)}${Math.floor(Math.random() * 1000)}`;
         const maxOrder = this.db.prepare("SELECT COALESCE(MAX(sort_order), 0) as m FROM issues WHERE status = 'todo'").get().m;
         this.db.prepare(
-            `INSERT INTO issues (id, title, description, priority, labels, created_by, sort_order, fork_session_id, sprint_id, assigned_to, type, category, mode, platform, qa_owner, parent_issue_id, session_id, deadline) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-        ).run(id, title, description, priority, JSON.stringify(labels), createdBy, maxOrder + 1, forkSessionId, sprintId, assignedTo, type, category, mode === 'design' ? 'design' : 'developer', platform, qaOwner, parentIssueId, sessionId, deadline);
+            `INSERT INTO issues (id, title, description, priority, labels, created_by, sort_order, fork_session_id, sprint_id, assigned_to, type, category, mode, platform, qa_owner, parent_issue_id, session_id, deadline, attachments) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ).run(id, title, description, priority, JSON.stringify(labels), createdBy, maxOrder + 1, forkSessionId, sprintId, assignedTo, type, category, mode === 'design' ? 'design' : 'developer', platform, qaOwner, parentIssueId, sessionId, deadline, JSON.stringify(Array.isArray(attachments) ? attachments : []));
         return this.getIssue(id);
     }
 
@@ -817,8 +944,8 @@ class SessionStore {
         const fields = [];
         const values = [];
         for (const [key, val] of Object.entries(updates)) {
-            if (key === 'labels') {
-                fields.push('labels = ?');
+            if (key === 'labels' || key === 'attachments') {
+                fields.push(`${key} = ?`);
                 values.push(JSON.stringify(val));
             } else {
                 fields.push(`${key} = ?`);
@@ -829,6 +956,21 @@ class SessionStore {
         values.push(id);
         this.db.prepare(`UPDATE issues SET ${fields.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(...values);
         return this.getIssue(id);
+    }
+
+    // Sprint rollover — carry features into a sprint and un-park them from the backlog.
+    // Subtasks only inherit sprint_id at create time, so they are moved with their parent;
+    // otherwise a carried-over feature's children stay behind and the sheet/changelog for
+    // both sprints goes wrong. One parameterised statement, so it is atomic.
+    moveIssuesToSprint(issueIds, sprintId) {
+        const ids = [...new Set((issueIds || []).filter(Boolean).map(String))];
+        if (ids.length === 0) return [];
+        const slots = ids.map(() => '?').join(',');
+        this.db.prepare(
+            `UPDATE issues SET sprint_id = ?, is_backlog = 0, updated_at = CURRENT_TIMESTAMP
+             WHERE id IN (${slots}) OR parent_issue_id IN (${slots})`
+        ).run(sprintId, ...ids, ...ids);
+        return ids.map(id => this.getIssue(id)).filter(Boolean);
     }
 
     deleteIssue(id) { this.db.prepare('DELETE FROM issues WHERE id = ?').run(id); }
@@ -998,8 +1140,16 @@ class SessionStore {
     }
 
     // Sprint progress — completion % across its features plus rollup counts.
+    // A row whose Type is Bug IS a bug, so it counts toward the sprint's bug totals until
+    // it is resolved — alongside the child bugs filed against features. Deliberately kept
+    // out of featureCompletion(): a bug counting itself as an open bug would cap its own
+    // completion at 50% and could never reach done.
+    isOpenBugRow(issue) {
+        return issue?.type === 'bug' && this.featureCompletion(issue) < 100;
+    }
+
     getSprintProgress(sprintId) {
-        const rows = this.db.prepare('SELECT dev_status, dev_percent, qa_status, open_bugs, critical_bugs FROM issues WHERE sprint_id = ?').all(sprintId);
+        const rows = this.db.prepare('SELECT type, is_critical, dev_status, dev_percent, qa_status, open_bugs, critical_bugs FROM issues WHERE sprint_id = ?').all(sprintId);
         const total = rows.length;
         const done = rows.filter(r => r.dev_status === 'done').length;
         const inProgress = rows.filter(r => r.dev_status === 'in_progress' || r.dev_status === 'dev_completed').length;
@@ -1007,8 +1157,9 @@ class SessionStore {
         // Sprint % = average of each feature's lifecycle completion (QA-driven), not raw Dev%.
         const avgPercent = total ? Math.round(rows.reduce((s, r) => s + this.featureCompletion(r), 0) / total) : 0;
         const passed = rows.filter(r => this.featureCompletion(r) === 100).length;
-        const openBugs = rows.reduce((s, r) => s + (r.open_bugs || 0), 0);
-        const criticalBugs = rows.reduce((s, r) => s + (r.critical_bugs || 0), 0);
+        // Child bugs filed against features, plus the rows that are themselves bugs.
+        const openBugs = rows.reduce((s, r) => s + (r.open_bugs || 0) + (this.isOpenBugRow(r) ? 1 : 0), 0);
+        const criticalBugs = rows.reduce((s, r) => s + (r.critical_bugs || 0) + (this.isOpenBugRow(r) && r.is_critical ? 1 : 0), 0);
         return { total, done, inProgress, todo, passed, percent: avgPercent, openBugs, criticalBugs };
     }
 

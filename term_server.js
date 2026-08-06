@@ -33,6 +33,7 @@ import config from './config.js';
 import { verifyJwt } from './auth.js';
 import { createExtractor } from './term_extract.js';
 import { isOllamaModel, ollamaModelName, ollamaEnv, stripLeakedOllamaEnv } from './ollama_models.js';
+import { isGrokModel, grokModelName, grokEnv, stripLeakedGrokEnv } from './grok_models.js';
 import { isHeadroomEnabled, headroomEnv, probeHeadroom } from './headroom.js';
 
 // Claude Code persists per-folder trust in ~/.claude.json. We pre-accept it for
@@ -352,24 +353,27 @@ export function attachTerminalServer(store) {
             args.push('--session-id', claudeId);
             mode = 'new';
         }
-        // Ollama fallback: an `ollama:` model routes this session through the local
-        // Ollama server (strip the tag for --model, inject the Anthropic-override env).
+        // Ollama/Grok fallback: a tagged model routes this session through the right
+        // local proxy (strip the tag for --model, inject the Anthropic-override env).
         const useOllama = isOllamaModel(model);
-        if (model && model !== 'default') args.push('--model', useOllama ? ollamaModelName(model) : model);
+        const useGrok = isGrokModel(model);
+        if (model && model !== 'default') args.push('--model', useOllama ? ollamaModelName(model) : useGrok ? grokModelName(model) : model);
 
         ensureTrusted(workingDir); // pre-accept folder trust so no dialog blocks the session
 
-        // Headroom: route Claude (non-Ollama) sessions through the compression proxy
-        // when the admin toggle is on AND the proxy is reachable (else leave direct).
-        const useHeadroom = !useOllama && isHeadroomEnabled(store) && headroomReachable;
+        // Headroom: route Claude (non-Ollama, non-Grok) sessions through the compression
+        // proxy when the admin toggle is on AND the proxy is reachable (else leave direct).
+        const useHeadroom = !useOllama && !useGrok && isHeadroomEnabled(store) && headroomReachable;
 
-        // Build the child env: Ollama → repoint at Ollama; Headroom → repoint at the
-        // compression proxy; otherwise strip any Ollama-routing env that leaked in
-        // from the parent process so a real model hits real Anthropic (not Ollama).
+        // Build the child env: Ollama/Grok → repoint at the right proxy; Headroom →
+        // repoint at the compression proxy; otherwise strip any Ollama/Grok-routing
+        // env that leaked in from the parent process so a real model hits real
+        // Anthropic (not a local proxy).
         const childEnv = { ...process.env, TERM: 'xterm-256color' };
-        if (useOllama) Object.assign(childEnv, ollamaEnv());
-        else if (useHeadroom) Object.assign(childEnv, headroomEnv());
-        else stripLeakedOllamaEnv(childEnv);
+        if (useOllama) { Object.assign(childEnv, ollamaEnv()); stripLeakedGrokEnv(childEnv); }
+        else if (useGrok) { Object.assign(childEnv, grokEnv()); stripLeakedOllamaEnv(childEnv); }
+        else if (useHeadroom) { Object.assign(childEnv, headroomEnv()); stripLeakedOllamaEnv(childEnv); stripLeakedGrokEnv(childEnv); }
+        else { stripLeakedOllamaEnv(childEnv); stripLeakedGrokEnv(childEnv); }
 
         const proc = pty.spawn(bin, args, {
             name: 'xterm-256color',
@@ -443,7 +447,7 @@ export function attachTerminalServer(store) {
 
     wss.on('connection', (ws, req) => {
         const cookies = parseCookies(req.headers.cookie || '');
-        const token = cookies.wa_token || (req.headers.authorization || '').replace('Bearer ', '');
+        const token = cookies[config.COOKIE_NAME] || (req.headers.authorization || '').replace('Bearer ', '');
         const user = token ? verifyJwt(token) : null;
         if (!user) {
             try { ws.send(JSON.stringify({ type: 'error', message: 'Unauthorized' })); } catch (_) {}

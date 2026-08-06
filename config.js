@@ -15,6 +15,20 @@ const config = {
     // proxy is reachable, Claude sessions route through it (compress → Anthropic).
     HEADROOM_BASE_URL: process.env.HEADROOM_BASE_URL || 'http://localhost:8787',
 
+    // xAI Grok fallback (per-session model switch). xAI's API is OpenAI-schema, not
+    // Anthropic-schema, so unlike Ollama it can't be pointed at directly — selecting
+    // a `grok:` model routes that session through grok_proxy.js, a local translation
+    // proxy mounted inside this app's own Express server.
+    GROK_API_KEY: process.env.GROK_API_KEY || '',
+    GROK_API_BASE_URL: process.env.GROK_API_BASE_URL || 'https://api.x.ai/v1',
+    // ponytail: exact xAI model slug for "Grok 4.5" unconfirmed as of writing — override
+    // via env once the real slug is known from api.x.ai's model list.
+    GROK_MODEL: process.env.GROK_MODEL || 'grok-4.5',
+    // Shared secret the proxy checks on incoming requests (not the real xAI key —
+    // that's injected server-side and never reaches the spawned `claude` process).
+    GROK_PROXY_TOKEN: process.env.GROK_PROXY_TOKEN || 'grok-local-proxy-token',
+    GROK_PROXY_PORT: parseInt(process.env.PORT || '18790'),
+
     // Gemini API
     GEMINI_API_KEY: process.env.GEMINI_API_KEY || '',
     GEMINI_MODEL: process.env.GEMINI_MODEL || 'gemini-3-flash-preview',
@@ -85,5 +99,15 @@ const config = {
     ADMIN_NAME: process.env.ADMIN_NAME || 'Admin',
     ADMIN_PASSWORD: process.env.ADMIN_PASSWORD || '',
 };
+
+// Session cookie name, namespaced per instance.
+// Cookies are scoped by host and ignore the port, so several instances of this app
+// on the same machine share one browser cookie jar — a login on :18793 used to
+// overwrite the :18790 login. BASE_PATH is what distinguishes the instances, so
+// derive the name from it. The path stays '/' on purpose: the /ws and /term
+// WebSocket upgrades are mounted at the root, not under BASE_PATH, so a
+// path-scoped cookie would never reach them.
+const basePathSlug = config.BASE_PATH.replace(/[^a-zA-Z0-9]/g, '');
+config.COOKIE_NAME = basePathSlug ? `wa_token_${basePathSlug}` : 'wa_token';
 
 export default config;

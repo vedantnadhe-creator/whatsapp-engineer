@@ -46,21 +46,41 @@ else
     echo "No GITHUB_KB_URL configured. Skipping Knowledge Base sync."
 fi
 
-echo "Stopping old instances..."
-pkill -f "node index.js" 2>/dev/null || true
+# ── Instance isolation ────────────────────────────────────────
+# Several checkouts of this repo run side by side (whatsapp-engineer,
+# whatsapp-engineer-qweasd, ...). Each is identified by its dashboard PORT, so we
+# only stop the process that is listening on THIS instance's port AND running out
+# of THIS directory. The old blanket `pkill -f "node index.js"` matched every
+# checkout's command line and killed all of them.
+INSTANCE=$(basename "$PWD")
+PORT=${PORT:-18790}
+LOG="/tmp/wa-engineer-${INSTANCE}.log"
+
+echo "Instance: $INSTANCE  (port $PORT)"
+echo "Stopping old instance of this checkout..."
+for pid in $(lsof -ti tcp:"$PORT" -sTCP:LISTEN 2>/dev/null); do
+    owner=$(readlink -f "/proc/$pid/cwd" 2>/dev/null)
+    if [ "$owner" = "$(readlink -f "$PWD")" ]; then
+        kill "$pid" 2>/dev/null && echo "  stopped old PID $pid"
+    else
+        echo "ERROR: port $PORT is held by PID $pid running from '${owner:-unknown}'."
+        echo "       Refusing to kill another instance. Set a free PORT= in $PWD/.env and re-run."
+        exit 1
+    fi
+done
 sleep 1
 
-touch /tmp/wa-engineer.log
-chmod 666 /tmp/wa-engineer.log
+touch "$LOG"
+chmod 666 "$LOG"
 
 echo "Starting daemon..."
-nohup node index.js > /tmp/wa-engineer.log 2>&1 &
+nohup node index.js > "$LOG" 2>&1 &
 echo "Started PID=$!"
 
 sleep 3
 echo ""
 echo "=== Last 20 log lines ==="
-tail -20 /tmp/wa-engineer.log
+tail -20 "$LOG"
 echo "========================="
 echo ""
-echo "To monitor logs live, run: tail -f /tmp/wa-engineer.log"
+echo "To monitor logs live, run: tail -f $LOG"

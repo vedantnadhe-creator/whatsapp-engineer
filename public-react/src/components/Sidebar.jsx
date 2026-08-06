@@ -589,9 +589,13 @@ function SidebarContent({
   onChangeWorkMode,
   searchQuery = '',
   onSearchChange,
+  sessionFilter = 'all',
+  onSessionFilterChange,
+  totalSessions = 0,
+  onSessionsChanged,
 }) {
   const [adminOpen, setAdminOpen] = useState(false);
-  const [sessionFilter, setSessionFilter] = useState('all'); // 'all' | 'mine' | 'saved' | 'pl:<id>'
+  const setSessionFilter = onSessionFilterChange || (() => {});
   const { theme, toggle } = useTheme();
 
   // Playlists — personal session groupings.
@@ -620,15 +624,14 @@ function SidebarContent({
     if (isInPlaylist(pl, sessionId)) await removeFromPlaylist(pl.id, sessionId);
     else await addToPlaylist(pl.id, sessionId);
     refreshPlaylists();
+    // Membership now decides what the API returns for a playlist tab, so the list
+    // has to be re-fetched — it can no longer be re-filtered locally.
+    if (sessionFilter === 'pl:' + pl.id) onSessionsChanged?.();
   };
 
-  const filteredSessions = sessionFilter === 'mine'
-    ? (sessions || []).filter((s) => s.is_mine)
-    : sessionFilter === 'saved'
-    ? (sessions || []).filter((s) => s.bookmarked)
-    : activePlaylist
-    ? (sessions || []).filter((s) => isInPlaylist(activePlaylist, s.id))
-    : (sessions || []);
+  // Every tab — All / Mine / Saved / a playlist — is filtered and paged by the API,
+  // so the list arrives ready to render.
+  const filteredSessions = sessions || [];
 
   return (
     <div
@@ -791,11 +794,14 @@ function SidebarContent({
           className="flex px-3 py-1.5 gap-1"
           style={{ borderBottom: '1px solid var(--c-border)' }}
         >
+          {/* Counts come from the API's total for the active tab — the inactive tabs'
+              totals aren't known without extra requests, so they show no number rather
+              than a wrong one taken from the current page. */}
           {[
-            { key: 'all', label: `All (${(sessions || []).length})` },
-            ...(showAllSessions ? [{ key: 'mine', label: `Mine (${(sessions || []).filter(s => s.is_mine).length})` }] : []),
-            { key: 'saved', label: `Saved (${(sessions || []).filter(s => s.bookmarked).length})` },
-          ].map(({ key, label }) => (
+            { key: 'all', label: 'All' },
+            ...(showAllSessions ? [{ key: 'mine', label: 'Mine' }] : []),
+            { key: 'saved', label: 'Saved' },
+          ].map(({ key, label: base }) => ({ key, label: sessionFilter === key ? `${base} (${totalSessions})` : base })).map(({ key, label }) => (
             <button
               key={key}
               onClick={() => setSessionFilter(key)}

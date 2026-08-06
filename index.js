@@ -31,7 +31,7 @@ process.on('uncaughtException', (err) => {
     }
     // Port already in use — previous process still running
     if (msg.includes('EADDRINUSE')) {
-        console.error(`[Process] Port already in use. Kill the old process first: lsof -ti:18790 | xargs kill`);
+        console.error(`[Process] Port already in use. Kill the old process first: lsof -ti:${process.env.PORT || 18790} | xargs kill`);
         process.exit(1);
     }
     console.error('[Process] Fatal error — exiting.');

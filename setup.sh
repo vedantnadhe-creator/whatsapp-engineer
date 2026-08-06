@@ -342,17 +342,21 @@ start_service() {
 
     if $should_start; then
         bash ./start.sh
-        ok "Started! Run: tail -f /tmp/wa-engineer.log"
+        local inst_port
+        inst_port=$(grep -E '^PORT=' .env 2>/dev/null | tail -1 | cut -d= -f2 | tr -d '\r')
+        inst_port=${inst_port:-18790}
+        local inst_log="/tmp/wa-engineer-$(basename "$PWD").log"
+        ok "Started! Run: tail -f $inst_log"
         echo ""
         echo -e "${GREEN}${BOLD}Setup complete!${NC}"
-        echo -e "  Dashboard: ${BLUE}http://localhost:18790${NC}"
+        echo -e "  Dashboard: ${BLUE}http://localhost:${inst_port}${NC}"
         echo ""
         echo -e "${YELLOW}${BOLD}  Admin Login Credentials:${NC}"
         echo -e "    Email:    ${GREEN}${ADMIN_EMAIL}${NC}"
         echo -e "    Password: ${GREEN}${ADMIN_PASSWORD}${NC}"
         echo -e "    ${YELLOW}(Save these! Change after first login)${NC}"
         echo ""
-        echo -e "  Logs:      tail -f /tmp/wa-engineer.log"
+        echo -e "  Logs:      tail -f $inst_log"
         echo -e "  Database:  ${BLUE}${DB_BACKEND_VAL:-sqlite}${NC}"
         echo ""
     else
