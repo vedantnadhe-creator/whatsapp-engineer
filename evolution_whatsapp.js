@@ -31,11 +31,30 @@ export default class EvolutionWhatsApp extends EventEmitter {
 
     async connect() {
         if (!this.enabled) throw new Error('Evolution is not configured: set EVOLUTION_API_URL and EVOLUTION_INSTANCE');
-        const state = await this._request(`/instance/connectionState/${encodeURIComponent(config.EVOLUTION_INSTANCE)}`, { method: 'GET' });
+        let state;
+        try {
+            state = await this._request(`/instance/connectionState/${encodeURIComponent(config.EVOLUTION_INSTANCE)}`, { method: 'GET' });
+        } catch (err) {
+            // First boot: create the named Baileys instance so the admin QR button
+            // works without a separate Evolution dashboard setup step.
+            if (!String(err.message).includes('Evolution API 404')) throw err;
+            await this._request('/instance/create', {
+                method: 'POST',
+                body: JSON.stringify({ instanceName: config.EVOLUTION_INSTANCE, number: this.botNumber || undefined, qrcode: true, integration: 'WHATSAPP-BAILEYS', groupsIgnore: false }),
+            });
+            state = await this._request(`/instance/connectionState/${encodeURIComponent(config.EVOLUTION_INSTANCE)}`, { method: 'GET' });
+        }
         const instance = state?.instance || state;
         this.botNumber = cleanId(instance?.owner || instance?.ownerJid || instance?.number || this.botNumber);
         this.sock = { connected: String(instance?.state || instance?.connectionStatus || '').toLowerCase() === 'open' };
         console.log(`[Evolution] Instance ${config.EVOLUTION_INSTANCE}: ${instance?.state || instance?.connectionStatus || 'unknown'}${this.botNumber ? ` (${this.botNumber})` : ''}`);
+        if (config.EVOLUTION_WEBHOOK_URL) {
+            await this._request(`/webhook/set/${encodeURIComponent(config.EVOLUTION_INSTANCE)}`, {
+                method: 'POST',
+                body: JSON.stringify({ enabled: true, url: config.EVOLUTION_WEBHOOK_URL, webhookByEvents: true, webhookBase64: false, events: ['MESSAGES_UPSERT'] }),
+            });
+            console.log('[Evolution] MESSAGES_UPSERT webhook registered.');
+        }
         if (this.sock.connected) this.emit('ready');
         return state;
     }

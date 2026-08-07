@@ -63,6 +63,9 @@ const config = {
     EVOLUTION_API_URL: process.env.EVOLUTION_API_URL || '',
     EVOLUTION_API_KEY: process.env.EVOLUTION_API_KEY || '',
     EVOLUTION_INSTANCE: process.env.EVOLUTION_INSTANCE || '',
+    // Public callback Evolution uses for message events. This app will register it
+    // on startup when configured, including after an instance is freshly created.
+    EVOLUTION_WEBHOOK_URL: process.env.EVOLUTION_WEBHOOK_URL || '',
     // The number that will scan the QR, country code included. Required for reliable
     // @mention matching because Evolution webhooks do not always include the owner.
     EVOLUTION_BOT_NUMBER: process.env.EVOLUTION_BOT_NUMBER || '',
