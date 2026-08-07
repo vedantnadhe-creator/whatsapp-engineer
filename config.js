@@ -57,6 +57,18 @@ const config = {
     // Bot aliases for group @mentions
     BOT_ALIASES: (process.env.BOT_ALIASES || 'Koach,PLBot').split(',').filter(Boolean),
 
+    // Evolution API is the production WhatsApp transport. The legacy Baileys bridge
+    // remains selectable only for existing deployments that have not migrated yet.
+    WHATSAPP_PROVIDER: (process.env.WHATSAPP_PROVIDER || 'evolution').toLowerCase(),
+    EVOLUTION_API_URL: process.env.EVOLUTION_API_URL || '',
+    EVOLUTION_API_KEY: process.env.EVOLUTION_API_KEY || '',
+    EVOLUTION_INSTANCE: process.env.EVOLUTION_INSTANCE || '',
+    // The number that will scan the QR, country code included. Required for reliable
+    // @mention matching because Evolution webhooks do not always include the owner.
+    EVOLUTION_BOT_NUMBER: process.env.EVOLUTION_BOT_NUMBER || '',
+    // Optional shared secret for Evolution's webhook request header/query.
+    EVOLUTION_WEBHOOK_SECRET: process.env.EVOLUTION_WEBHOOK_SECRET || '',
+
     // Session defaults
     DEFAULT_WORKING_DIR: process.env.DEFAULT_WORKING_DIR || '/home/ubuntu',
     MAX_MESSAGE_LENGTH: 4000,

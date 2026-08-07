@@ -99,6 +99,17 @@ export function startDashboard(store, messageHandler, port = 18790, wa = null, e
     app.use(cors({ origin: true, credentials: true }));
     app.use(express.json({ strict: false }));
     app.use(cookieParser());
+    // Evolution calls this URL directly. It is intentionally before the JWT layer;
+    // authenticate it with a deployment secret when one is configured.
+    app.post('/api/evolution/webhook', (req, res) => {
+        const secret = config.EVOLUTION_WEBHOOK_SECRET;
+        const supplied = req.get('x-evolution-secret') || req.query.secret || '';
+        const suppliedBuf = Buffer.from(supplied);
+        const secretBuf = Buffer.from(secret);
+        if (secret && (suppliedBuf.length !== secretBuf.length || !crypto.timingSafeEqual(suppliedBuf, secretBuf))) return res.status(401).json({ error: 'Invalid Evolution webhook secret' });
+        try { wa?.handleWebhook?.(req.body); res.status(200).json({ received: true }); }
+        catch (err) { console.error('[Evolution webhook]', err.message); res.status(500).json({ error: 'Webhook processing failed' }); }
+    });
     // Grok translation proxy for `grok:` sessions — token-authed, not cookie/JWT-authed
     // (the spawned `claude` process has no dashboard session, just the shared secret
     // grok_models.js injects via ANTHROPIC_AUTH_TOKEN).
@@ -171,6 +182,17 @@ a{color:#60a5fa;text-decoration:none}</style></head>
     app.post('/api/auth/logout', (req, res) => {
         res.clearCookie(config.COOKIE_NAME, { path: '/' });
         res.json({ success: true });
+    });
+
+    // Admin-only QR handoff. Evolution's QR is short lived, so fetch it only when
+    // the operator clicks Pair WhatsApp after a restart — never persist it to disk.
+    app.get('/api/whatsapp/evolution/qr', requireAuth, requireAdmin, async (_req, res) => {
+        try {
+            if (!wa?.getQr) return res.status(400).json({ error: 'Evolution WhatsApp provider is not active' });
+            const qr = await wa.getQr();
+            if (!qr.qr && !qr.pairingCode) return res.status(409).json({ error: 'Evolution did not return a QR. The instance may already be connected.' });
+            res.json(qr);
+        } catch (err) { res.status(502).json({ error: err.message }); }
     });
 
     app.get('/api/me', requireAuth, (req, res) => {

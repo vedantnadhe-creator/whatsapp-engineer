@@ -376,6 +376,9 @@ export function SettingsPanel({ settings = {}, onSave }) {
   const [savingModels, setSavingModels] = useState(false)
   const [headroomOn, setHeadroomOn] = useState(settings.headroom_enabled === 'true')
   const [headroomStatus, setHeadroomStatus] = useState(null) // { reachable } | null
+  const [whatsAppQr, setWhatsAppQr] = useState(null)
+  const [whatsAppQrError, setWhatsAppQrError] = useState('')
+  const [loadingWhatsAppQr, setLoadingWhatsAppQr] = useState(false)
 
   useEffect(() => {
     setShowAll(settings.show_all_sessions === 'true')
@@ -423,6 +426,13 @@ export function SettingsPanel({ settings = {}, onSave }) {
 
   const removeModel = async (name) => {
     await persistModels(ollamaModels.filter(m => m !== name))
+  }
+
+  const loadWhatsAppQr = async () => {
+    setLoadingWhatsAppQr(true); setWhatsAppQrError('')
+    try { setWhatsAppQr(await apiFetch('/api/whatsapp/evolution/qr')) }
+    catch (err) { setWhatsAppQr(null); setWhatsAppQrError(err.message || 'Could not get the QR code') }
+    finally { setLoadingWhatsAppQr(false) }
   }
 
   return (
@@ -505,6 +515,24 @@ export function SettingsPanel({ settings = {}, onSave }) {
             ))}
           </div>
         )}
+      </div>
+
+      <div className="py-3 px-1" style={{ borderTop: '1px solid var(--c-border)' }}>
+        <p className="text-sm font-medium text-text-primary mb-1">WhatsApp pairing</p>
+        <p className="text-xs text-text-muted mb-3">After restarting, click this once and scan with the WhatsApp number that will be tagged in your sprint group. The sprint agent only reacts to real @mentions in allowed groups.</p>
+        <button onClick={loadWhatsAppQr} disabled={loadingWhatsAppQr}
+          className="text-xs px-3 py-1.5 rounded-md font-medium cursor-pointer transition-colors disabled:opacity-60 flex items-center gap-1"
+          style={{ backgroundColor: 'var(--c-accent)', color: '#fff' }}>
+          {loadingWhatsAppQr ? <Loader2 size={12} className="animate-spin" /> : <Phone size={12} />}
+          {loadingWhatsAppQr ? 'Getting QR…' : 'Pair WhatsApp'}
+        </button>
+        {whatsAppQr?.qr && (
+          <div className="mt-3 inline-block rounded-lg p-3" style={{ backgroundColor: '#fff' }}>
+            <img src={String(whatsAppQr.qr).startsWith('data:') ? whatsAppQr.qr : `data:image/png;base64,${whatsAppQr.qr}`} alt="WhatsApp pairing QR" className="w-56 h-56 object-contain" />
+          </div>
+        )}
+        {whatsAppQr?.pairingCode && <p className="text-xs mt-2 text-text-secondary">Pairing code: <code>{whatsAppQr.pairingCode}</code></p>}
+        {whatsAppQrError && <p className="text-xs mt-2" style={{ color: '#ef4444' }}>{whatsAppQrError}</p>}
       </div>
 
       <ClaudeAuthSection />

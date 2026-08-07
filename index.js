@@ -10,6 +10,8 @@ import './polyfill.js';
 import fs from 'fs';
 import path from 'path';
 import WhatsAppBridge from './whatsapp.js';
+import EvolutionWhatsApp from './evolution_whatsapp.js';
+import SprintAgent from './sprint_agent.js';
 import Orchestrator from './orchestrator.js';
 import ClaudeManager from './claude_manager.js';
 import config from './config.js';
@@ -81,10 +83,13 @@ if (config.ADMIN_EMAIL) {
     }
 }
 
-const wa = config.WHATSAPP_ENABLED !== false ? new WhatsAppBridge(store) : null;
+const wa = config.WHATSAPP_ENABLED !== false
+    ? (config.WHATSAPP_PROVIDER === 'evolution' ? new EvolutionWhatsApp(store) : new WhatsAppBridge(store))
+    : null;
 const orchestrator = config.WHATSAPP_ENABLED !== false ? new Orchestrator(store) : null;
 const claude = new ClaudeManager(store);
 const cronManager = new CronManager(claude, wa);
+const sprintAgent = new SprintAgent(store);
 
 // ── Helpers ──────────────────────────────────────────────────
 
@@ -250,6 +255,14 @@ claude.on('session_error', async ({ sessionId, error }) => {
 
 export async function handleIncomingMessage({ isWeb: explicitIsWeb, phone, text, pushName, groupJid, imagePath = null, ownerId = null, model = null, workingDir = null, mode = null, editAccess = undefined }) {
     try {
+        // Evolution only emits marked group messages here. Keep sprint actions separate
+        // from coding-session classification so a task such as "add ... to Sprint 36"
+        // edits the board immediately and never starts an unrelated coding session.
+        if (arguments[0]?.sprintCommand) {
+            const reply = await sprintAgent.handle({ text, phone, pushName });
+            await wa?.sendMessage(groupJid, reply);
+            return { sprintAgent: true };
+        }
         const isWeb = explicitIsWeb || pushName === 'Web Dashboard';
         // Use groupJid as the session owner if in a group, otherwise use personal phone
         const threadKey = groupJid || phone;
@@ -540,6 +553,7 @@ const allowedPhoneRows = await store.getAllowedPhones();
 const allowedPhones = Array.isArray(allowedPhoneRows) ? allowedPhoneRows.map(r => r.phone) : [];
 console.log(`📱 Allowed phones: ${allowedPhones.length > 0 ? allowedPhones.join(', ') : 'OPEN (no filter)'}`);
 console.log(`🧠 Gemini model: ${config.GEMINI_MODEL}`);
+console.log(`📲 WhatsApp provider: ${config.WHATSAPP_PROVIDER}`);
 console.log(`🔧 Claude binary: ${config.CLAUDE_BIN}`);
 
 // Start dashboard immediately — works with or without WhatsApp
