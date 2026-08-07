@@ -261,11 +261,30 @@ class ClaudeManager extends EventEmitter {
         // Older rows have no provider. Treat an old Codex row as a one-time handoff
         // rather than risking a Claude UUID being passed to `codex exec resume`.
         const sourceProvider = session.provider || (isCodexModel(session.model) ? null : 'claude');
+        // Codex reports thread.started before the first Responses request completes.
+        // If that request then fails (for example during an auth outage), the stored
+        // thread id points at a thread with no successful turn. Resuming it can exit
+        // immediately forever, so recover into a fresh Codex thread using our stored
+        // conversation context.
+        const recoverFailedCodex = sourceProvider === 'codex'
+            && targetProvider === 'codex'
+            && session.status === 'failed';
+        // A completed/failed Codex thread can be restored from its stored dashboard
+        // transcript even when its native thread id was lost (for example after an
+        // interrupted dashboard process). Never pass a null id to `codex exec resume`:
+        // start a fresh Codex thread with the handoff context instead.
+        const recoverMissingCodexThread = sourceProvider === 'codex'
+            && targetProvider === 'codex'
+            && !session.claude_session_id
+            && session.status !== 'running';
 
         this.store.addMessage(sessionId, 'user', followUp);
-        if (sourceProvider !== targetProvider) {
+        if (sourceProvider !== targetProvider || recoverFailedCodex || recoverMissingCodexThread) {
             const context = this._buildForkContext(session, this.store.getMessages(sessionId, 30));
-            const prompt = `${context}\n\n---\n\nYou are taking over this existing task from ${sourceProvider || 'another'} coding agent. The transcript above is the handoff context; inspect the working directory to verify its current state. Continue the work and answer the user's latest message:\n\n${followUp}`;
+            const transition = (recoverFailedCodex || recoverMissingCodexThread)
+                ? 'You are recovering this task after its previous Codex turn was interrupted before the dashboard could preserve its native thread.'
+                : `You are taking over this existing task from ${sourceProvider || 'another'} coding agent.`;
+            const prompt = `${context}\n\n---\n\n${transition} The transcript above is the handoff context; inspect the working directory to verify its current state. Continue the work and answer the user's latest message:\n\n${followUp}`;
             this.store.updateSession(sessionId, {
                 claude_session_id: null,
                 status: 'running',
@@ -273,9 +292,11 @@ class ClaudeManager extends EventEmitter {
                 model,
                 provider: targetProvider,
             });
-            console.log(`[Session] Handing off ${sessionId} from ${sourceProvider || 'legacy'} to ${targetProvider} with transcript context.`);
+            console.log((recoverFailedCodex || recoverMissingCodexThread)
+                ? `[Session] Recovering interrupted Codex session ${sessionId} with transcript context.`
+                : `[Session] Handing off ${sessionId} from ${sourceProvider || 'legacy'} to ${targetProvider} with transcript context.`);
             this._spawnNew(sessionId, prompt, session.working_dir, imagePath, model);
-            return { sessionId, handedOff: true };
+            return { sessionId, handedOff: !(recoverFailedCodex || recoverMissingCodexThread), recovered: recoverFailedCodex || recoverMissingCodexThread };
         }
 
         // Same-provider continuation: its native resume ID is valid.
@@ -554,12 +575,14 @@ class ClaudeManager extends EventEmitter {
         else if (provider === 'grok') { Object.assign(env, grokEnv()); stripLeakedOllamaEnv(env); }
         else if (provider === 'codex') {
             // Codex is its own binary: it must NOT inherit the Anthropic proxy routing,
-            // and CODEX_API_KEY is deliberately left unset so the CLI uses the signed-in
-            // ChatGPT plan credentials in $CODEX_HOME/auth.json.
+            // or stale API-key overrides from the dashboard daemon. The CLI must use
+            // the credential stored in the dedicated $CODEX_HOME/auth.json profile.
             stripLeakedOllamaEnv(env);
             stripLeakedGrokEnv(env);
             delete env.ANTHROPIC_BASE_URL;
             delete env.ANTHROPIC_AUTH_TOKEN;
+            delete env.CODEX_API_KEY;
+            delete env.OPENAI_API_KEY;
             Object.assign(env, codexEnv());
         }
         else { stripLeakedOllamaEnv(env); stripLeakedGrokEnv(env); }

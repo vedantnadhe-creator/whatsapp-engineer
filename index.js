@@ -401,7 +401,13 @@ export async function handleIncomingMessage({ isWeb: explicitIsWeb, phone, text,
                     store.closeThread(threadKey);
                 }
 
-                if (!target.claude_session_id) {
+                // A running session without an id is genuinely still starting. A
+                // completed/stopped Codex session may instead have lost its native
+                // id during a dashboard interruption; ClaudeManager can recover it
+                // into a fresh thread using the stored transcript, so do not drop
+                // the user's message in that case.
+                const canRecoverCodexThread = target.provider === 'codex' && target.status !== 'running';
+                if (!target.claude_session_id && !canRecoverCodexThread) {
                     if (!isWeb) await wa.sendMessage(replyTo, `⏳ Session *${target.id}* is still initializing. Try again in a moment.`);
                     return { sessionId: target.id };
                 }
