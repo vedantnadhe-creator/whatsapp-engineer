@@ -11,7 +11,15 @@ const config = {
     // Auth is the CLI's own (`codex login` → $CODEX_HOME/auth.json). We never set
     // CODEX_API_KEY, so a ChatGPT plan subscription is used when one is signed in.
     CODEX_BIN: process.env.CODEX_BIN || '/home/ubuntu/.local/bin/codex',
-    CODEX_HOME: process.env.CODEX_HOME || '/home/ubuntu/.codex',
+    // The dashboard runs in a restricted service environment where ~/.codex is
+    // read-only. Keep Codex auth and MCP configuration in a writable, private
+    // service home instead. Run `CODEX_HOME=/home/ubuntu/.olibot-codex codex
+    // login` once after purchasing the ChatGPT plan.
+    // Do not inherit the host's CODEX_HOME here. The dashboard process can itself
+    // be launched from Codex, which sets that variable to the operator's personal
+    // home and would silently drop OliBot's configured MCP servers. A dedicated
+    // OLIBOT_CODEX_HOME is available for an intentional service override.
+    CODEX_HOME: process.env.OLIBOT_CODEX_HOME || '/home/ubuntu/.olibot-codex',
 
     // Ollama fallback (per-session model switch). Ollama exposes an
     // Anthropic-compatible API; selecting an `ollama:` model routes that session here.

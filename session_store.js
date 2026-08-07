@@ -27,6 +27,7 @@ class SessionStore {
                 status TEXT DEFAULT 'running',
                 thread_open INTEGER DEFAULT 1,
                 working_dir TEXT,
+                provider TEXT,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 cost_usd REAL DEFAULT 0
@@ -193,6 +194,9 @@ class SessionStore {
         `);
 
         const safeMigrations = [
+            // Execution provider is separate from the selected model so a session
+            // can safely hand off between Claude and Codex (their resume IDs differ).
+            "ALTER TABLE sessions ADD COLUMN provider TEXT",
             "ALTER TABLE sessions ADD COLUMN thread_open INTEGER DEFAULT 1",
             "ALTER TABLE sessions ADD COLUMN subscribers TEXT DEFAULT '[]'",
             "ALTER TABLE sessions ADD COLUMN owner_id TEXT",
@@ -271,11 +275,11 @@ class SessionStore {
         try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_issues_sprint ON issues(sprint_id)'); } catch (_) { }
     }
 
-    createSession(id, userPhone, task, claudeSessionId, workingDir, ownerId = null, model = 'claude-opus-4-8') {
+    createSession(id, userPhone, task, claudeSessionId, workingDir, ownerId = null, model = 'claude-opus-4-8', provider = 'claude') {
         this.db.prepare(
-            `INSERT OR REPLACE INTO sessions (id, user_phone, owner_id, task, claude_session_id, status, working_dir, thread_open, model)
-             VALUES (?, ?, ?, ?, ?, 'running', ?, 1, ?)`
-        ).run(id, String(userPhone), ownerId, task, claudeSessionId, workingDir, model);
+            `INSERT OR REPLACE INTO sessions (id, user_phone, owner_id, task, claude_session_id, status, working_dir, thread_open, model, provider)
+             VALUES (?, ?, ?, ?, ?, 'running', ?, 1, ?, ?)`
+        ).run(id, String(userPhone), ownerId, task, claudeSessionId, workingDir, model, provider);
     }
 
     getSession(id) {

@@ -95,7 +95,7 @@ class ClaudeManager extends EventEmitter {
     async startSession(userPhone, task, workingDir, imagePath = null, ownerId = null, model = 'claude-opus-4-8', opts = {}) {
         const sessionId = `WA-${Date.now().toString(36)}`;
         const dir = workingDir || config.DEFAULT_WORKING_DIR;
-        this.store.createSession(sessionId, userPhone, task, null, dir, ownerId, model);
+        this.store.createSession(sessionId, userPhone, task, null, dir, ownerId, model, isCodexModel(model) ? 'codex' : 'claude');
         this.store.addMessage(sessionId, 'user', task);
         // Apply role-driven mode/edit-access BEFORE spawning so _roleAugment (tester
         // persona + read-only gating) takes effect on the very first turn.
@@ -123,7 +123,7 @@ class ClaudeManager extends EventEmitter {
         const parentMessages = this.store.getMessages(parentSessionId, 50);
         const contextSummary = this._buildForkContext(parent, parentMessages);
 
-        this.store.createSession(sessionId, userPhone, task, null, dir, ownerId, sessionModel);
+        this.store.createSession(sessionId, userPhone, task, null, dir, ownerId, sessionModel, isCodexModel(sessionModel) ? 'codex' : 'claude');
 
         // Build a user-visible summary for the forked session
         const visibleSummary = this._buildVisibleSummary(parent, parentMessages);
@@ -155,7 +155,7 @@ class ClaudeManager extends EventEmitter {
         const dir = parents[0].working_dir || config.DEFAULT_WORKING_DIR;
         const sessionModel = model || parents[0].model || 'claude-opus-4-8';
 
-        this.store.createSession(sessionId, userPhone, task, null, dir, ownerId, sessionModel);
+        this.store.createSession(sessionId, userPhone, task, null, dir, ownerId, sessionModel, isCodexModel(sessionModel) ? 'codex' : 'claude');
 
         // Compact each parent and combine into one context + one visible summary.
         const contextBlocks = [];
@@ -256,12 +256,32 @@ class ClaudeManager extends EventEmitter {
         if (!session.claude_session_id) throw new Error(`Session ${sessionId} has no Claude ID yet`);
         if (this.isRunning(sessionId)) throw new Error(`Session ${sessionId} is currently running.`);
 
+        const model = modelOverride || session.model || 'claude-opus-4-8';
+        const targetProvider = isCodexModel(model) ? 'codex' : 'claude';
+        // Older rows have no provider. Treat an old Codex row as a one-time handoff
+        // rather than risking a Claude UUID being passed to `codex exec resume`.
+        const sourceProvider = session.provider || (isCodexModel(session.model) ? null : 'claude');
+
         this.store.addMessage(sessionId, 'user', followUp);
-        // Mid-session model switch: persist the override so this resume — and every later message — uses it.
-        const updates = { status: 'running', thread_open: 1 };
+        if (sourceProvider !== targetProvider) {
+            const context = this._buildForkContext(session, this.store.getMessages(sessionId, 30));
+            const prompt = `${context}\n\n---\n\nYou are taking over this existing task from ${sourceProvider || 'another'} coding agent. The transcript above is the handoff context; inspect the working directory to verify its current state. Continue the work and answer the user's latest message:\n\n${followUp}`;
+            this.store.updateSession(sessionId, {
+                claude_session_id: null,
+                status: 'running',
+                thread_open: 1,
+                model,
+                provider: targetProvider,
+            });
+            console.log(`[Session] Handing off ${sessionId} from ${sourceProvider || 'legacy'} to ${targetProvider} with transcript context.`);
+            this._spawnNew(sessionId, prompt, session.working_dir, imagePath, model);
+            return { sessionId, handedOff: true };
+        }
+
+        // Same-provider continuation: its native resume ID is valid.
+        const updates = { status: 'running', thread_open: 1, provider: targetProvider };
         if (modelOverride && modelOverride !== session.model) updates.model = modelOverride;
         this.store.updateSession(sessionId, updates);
-        const model = modelOverride || session.model || 'claude-opus-4-8';
         this._spawnResume(sessionId, session.claude_session_id, followUp, session.working_dir, session.cost_usd || 0, imagePath, model);
         return { sessionId };
     }
@@ -286,7 +306,7 @@ class ClaudeManager extends EventEmitter {
     async planSession(userPhone, task, workingDir, model = 'claude-opus-4-8') {
         const sessionId = `WA-plan-${Date.now().toString(36)}`;
         const dir = workingDir || config.DEFAULT_WORKING_DIR;
-        this.store.createSession(sessionId, userPhone, task, null, dir, null, model);
+        this.store.createSession(sessionId, userPhone, task, null, dir, null, model, isCodexModel(model) ? 'codex' : 'claude');
         this.store.addMessage(sessionId, 'user', task);
         this._spawnPlan(sessionId, task, dir, model);
         return { sessionId };
