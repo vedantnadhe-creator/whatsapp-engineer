@@ -91,10 +91,21 @@ export function buildCodexArgs({ model, prompt, threadId = null, workingDir, can
     // both --sandbox and --cd with exit code 2. It inherits the PTY's working
     // directory, and retains the original session's sandbox, so pass those options
     // only when creating a new thread.
-    if (!isResume) {
-        args.push('--sandbox', codexSandbox(canEdit));
-        // Never pause for interactive approval — there is no TTY to answer the prompt,
-        // so the turn would hang forever. The sandbox above is what constrains it.
+    if (canEdit) {
+        // This is Codex's equivalent of Claude's
+        // --dangerously-skip-permissions: automation must never wait for an
+        // approval prompt, and developers get unrestricted command/file access.
+        // It is supported by both `exec` and `exec resume`.
+        // Do not use this for read-only tester sessions below.
+        args.push('--dangerously-bypass-approvals-and-sandbox');
+    } else if (!isResume) {
+            // A dashboard session has no interactive TTY to answer approval prompts.
+            // Testers remain genuinely read-only even while prompts are suppressed.
+            args.push('--sandbox', codexSandbox(false));
+            args.push('-c', 'approval_policy="never"');
+    } else {
+        // `exec resume` does not accept --sandbox; it retains the read-only sandbox
+        // chosen at thread creation. Keep approval prompts disabled for the PTY.
         args.push('-c', 'approval_policy="never"');
     }
     if (model) args.push('--model', model);
