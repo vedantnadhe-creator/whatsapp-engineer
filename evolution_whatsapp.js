@@ -49,9 +49,12 @@ export default class EvolutionWhatsApp extends EventEmitter {
         this.sock = { connected: String(instance?.state || instance?.connectionStatus || '').toLowerCase() === 'open' };
         console.log(`[Evolution] Instance ${config.EVOLUTION_INSTANCE}: ${instance?.state || instance?.connectionStatus || 'unknown'}${this.botNumber ? ` (${this.botNumber})` : ''}`);
         if (config.EVOLUTION_WEBHOOK_URL) {
+            // Evolution v2 wants the settings nested under `webhook` (a flat body is a 400),
+            // and `byEvents` must stay false: it would append `/messages-upsert` to the URL,
+            // landing after our `?secret=` query string and failing the secret check.
             await this._request(`/webhook/set/${encodeURIComponent(config.EVOLUTION_INSTANCE)}`, {
                 method: 'POST',
-                body: JSON.stringify({ enabled: true, url: config.EVOLUTION_WEBHOOK_URL, webhookByEvents: true, webhookBase64: false, events: ['MESSAGES_UPSERT'] }),
+                body: JSON.stringify({ webhook: { enabled: true, url: config.EVOLUTION_WEBHOOK_URL, byEvents: false, base64: false, events: ['MESSAGES_UPSERT'] } }),
             });
             console.log('[Evolution] MESSAGES_UPSERT webhook registered.');
         }
@@ -82,6 +85,11 @@ export default class EvolutionWhatsApp extends EventEmitter {
     handleWebhook(payload) {
         const event = String(payload?.event || payload?.type || '').toLowerCase();
         if (event && !event.includes('message')) return;
+        // Evolution stamps every event with `sender` = the instance's own JID. Trust it
+        // over the boot-time snapshot so re-pairing to a different number takes effect
+        // without a restart (and mention matching never silently breaks).
+        const owner = cleanId(payload?.sender);
+        if (owner) this.botNumber = owner;
         const data = payload?.data || payload;
         const key = data?.key || {};
         if (key.fromMe) return;

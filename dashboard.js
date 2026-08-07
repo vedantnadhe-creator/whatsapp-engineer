@@ -113,6 +113,12 @@ export function startDashboard(store, messageHandler, port = 18790, wa = null, e
         try { wa?.handleWebhook?.(req.body); res.status(200).json({ received: true }); }
         catch (err) { console.error('[Evolution webhook]', err.message); res.status(500).json({ error: 'Webhook processing failed' }); }
     });
+    // The webhook is POST-only, so pasting its URL into a browser used to hit the SPA's
+    // /api catch-all and read as `{"error":"Not found"}` — i.e. "the site is broken".
+    // Answer GET with a liveness probe instead. No secret is echoed back.
+    app.get('/api/evolution/webhook', (_req, res) => {
+        res.json({ ok: true, method: 'POST', instance: config.EVOLUTION_INSTANCE, botNumber: wa?.botNumber || null, connected: Boolean(wa?.sock?.connected) });
+    });
     // Grok translation proxy for `grok:` sessions — token-authed, not cookie/JWT-authed
     // (the spawned `claude` process has no dashboard session, just the shared secret
     // grok_models.js injects via ANTHROPIC_AUTH_TOKEN).
