@@ -51,16 +51,19 @@ export { pendingImages };
 // Broken Ollama models are separately redirected (safeOllamaModel) so no session
 // can crash on invalid tool_use IDs.
 //   business_analyst → Ollama only, default minimax-m3
-//   tester           → Haiku only (2026-07-30; cheapest Claude tier for QA runs)
+//   tester           → Haiku or GPT Luna (fast, lower-cost QA options)
 // Only MODELS are restricted here — the tester QA persona, read-only edit gating
 // and sprint-only view are separate and unchanged.
 const TESTER_MODEL = 'haiku';
+const TESTER_CODEX_MODEL = 'codex:gpt-5.6-luna';
 const ROLE_MODEL_POLICY = {
     // Was Ollama-only for cost containment; Ollama left the dropdown on 2026-08-06,
     // which would have left BAs with an empty list, so they now share the tester's
     // cheapest-Claude-tier policy.
     business_analyst: { allow: (m) => m === TESTER_MODEL, fallback: TESTER_MODEL },
-    tester: { allow: (m) => m === TESTER_MODEL, fallback: TESTER_MODEL },
+    // Testers can switch between the fast Claude and Codex options. The API filters
+    // the picker and enforces this same allow-list for starts, resumes, and forks.
+    tester: { allow: (m) => m === TESTER_MODEL || m === TESTER_CODEX_MODEL, fallback: TESTER_MODEL },
 };
 function resolveModelForRole(role, model) {
     const safe = safeCodexModel(safeGrokModel(safeOllamaModel(model)));
@@ -381,7 +384,7 @@ a{color:#60a5fa;text-decoration:none}</style></head>
 
         // Restricted roles see ONLY the models their policy allows (same policy the
         // routes enforce, so the dropdown can never offer something that would be
-        // coerced server-side). Business Analyst → Ollama; Tester → Haiku.
+        // coerced server-side). Business Analyst → Haiku; Tester → Haiku or GPT Luna.
         const policy = ROLE_MODEL_POLICY[req.user.role];
         if (policy) {
             const allowed = all.filter(m => policy.allow(m.id) && !m.disabled);
