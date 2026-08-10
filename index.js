@@ -262,13 +262,14 @@ claude.on('session_error', async ({ sessionId, error }) => {
 
 // ── WhatsApp message handler ──────────────────────────────────
 
-export async function handleIncomingMessage({ isWeb: explicitIsWeb, phone, text, pushName, groupJid, imagePath = null, ownerId = null, model = null, workingDir = null, mode = null, editAccess = undefined }) {
+export async function handleIncomingMessage({ isWeb: explicitIsWeb, phone, text, pushName, groupJid, chatJid = null, imagePath = null, ownerId = null, model = null, workingDir = null, mode = null, editAccess = undefined }) {
     try {
-        // Evolution only emits @mentioned group messages here. They all feed the one
-        // sprint board session, which replies to the group itself — so this never
-        // reaches the orchestrator and never spawns a per-group coding session.
+        // Evolution only emits sprint messages here — DMs from allowed teammates, plus
+        // @mentions in groups when those are enabled. They all feed the one sprint board
+        // session, which answers in that same chat, so this never reaches the
+        // orchestrator and never spawns a per-chat coding session.
         if (arguments[0]?.sprintCommand) {
-            await sprintSession.handle({ text, phone, pushName, groupJid });
+            await sprintSession.handle({ text, phone, pushName, groupJid, chatJid: chatJid || groupJid || phone });
             return { sprintAgent: true };
         }
         const isWeb = explicitIsWeb || pushName === 'Web Dashboard';

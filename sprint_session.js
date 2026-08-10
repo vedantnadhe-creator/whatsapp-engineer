@@ -1,8 +1,9 @@
 // One long-lived Claude Code session backs the WhatsApp sprint board agent.
 //
-// Every @mention, in any group, is another turn in THAT one session — never a new
-// one — so the agent keeps the whole board conversation in context. Turns are
-// serialized because `claude.resumeSession` refuses to run while a turn is live.
+// Every message — a personal chat by default, or a group @mention when those are
+// enabled — is another turn in THAT one session, never a new one, so the agent keeps
+// the whole board conversation in context. Turns are serialized because
+// `claude.resumeSession` refuses to run while a turn is live.
 //
 // The agent reaches the board only through the dashboard's own HTTP API with a
 // scoped bot token, so edits flow through the running dashboard (and its websocket
@@ -35,7 +36,7 @@ export default class SprintSession {
         this.workspace = config.SPRINT_AGENT_DIR;
         this.model = config.SPRINT_AGENT_MODEL;
         this.tokenPath = path.join(process.cwd(), '.sprint-api-token');
-        this.pending = new Map(); // sessionId → group JID still awaiting this turn's answer
+        this.pending = new Map(); // sessionId → chat JID still awaiting this turn's answer
         this.queue = Promise.resolve();
 
         claude.on('result', ({ sessionId, content }) => this._deliver(sessionId, content));
@@ -45,18 +46,20 @@ export default class SprintSession {
         });
     }
 
-    /** Queue a tagged group message as the next turn of the single sprint session. */
+    /** Queue an incoming WhatsApp message as the next turn of the single sprint session. */
     handle(message) {
         const next = this.queue.then(() => this._turn(message)).catch(err => {
             console.error('[SprintSession]', err.message);
-            return this.send(message.groupJid, `⚠️ Sprint agent could not handle that: ${err.message}`).catch(() => { });
+            const target = message.chatJid || message.groupJid || message.phone;
+            return this.send(target, `⚠️ Sprint agent could not handle that: ${err.message}`).catch(() => { });
         });
         this.queue = next.then(() => { }, () => { });
         return next;
     }
 
-    async _turn({ text, phone, pushName, groupJid }) {
-        const turn = `[WhatsApp • ${pushName || 'Teammate'} • ${phone} • group ${groupJid}]\n${text}`;
+    async _turn({ text, phone, pushName, groupJid, chatJid }) {
+        const target = chatJid || groupJid || phone;
+        const turn = `[WhatsApp • ${pushName || 'Teammate'} • ${phone} • ${groupJid ? `group ${groupJid}` : 'direct chat'}]\n${text}`;
         this._apiToken(); // re-mint every turn so the 30-day JWT never goes stale mid-life
         const existing = this._session();
 
@@ -65,7 +68,7 @@ export default class SprintSession {
             // throwing "session is currently running" at the group.
             if (this.claude.isRunning(existing.id)) await this._waitForEnd(existing.id);
             this.mute(existing.id);
-            this.pending.set(existing.id, groupJid);
+            this.pending.set(existing.id, target);
             await this.claude.resumeSession(existing.id, turn);
             await this._waitForEnd(existing.id);
             return existing.id;
@@ -82,7 +85,7 @@ export default class SprintSession {
         );
         this.store.setSetting(SESSION_SETTING, sessionId);
         this.mute(sessionId);
-        this.pending.set(sessionId, groupJid);
+        this.pending.set(sessionId, target);
         console.log(`[SprintSession] Started sprint board session ${sessionId} (${this.model}).`);
         await this._waitForEnd(sessionId);
         return sessionId;
@@ -171,13 +174,14 @@ export default class SprintSession {
     _primer() {
         return `You are the PluginLive **sprint board agent** for the OliBot dashboard.
 
-You are ONE long-lived session shared by everybody. Each message you receive is a WhatsApp message from a teammate who @mentioned you in a group, prefixed with who sent it and from which group. Your reply is forwarded to that group verbatim.
+You are ONE long-lived session shared by everybody. Each message you receive is a WhatsApp message from a teammate — usually a personal chat, sometimes a group — prefixed with who sent it and which chat it came from. Your reply is forwarded back to that same chat verbatim.
 
 ## How to reply
 - Under 6 short lines. No preamble, no headings, no code fences, no bullet walls.
 - WhatsApp formatting only: *bold*, _italic_.
 - ✅ when you changed something, ⚠️ when you could not.
-- Say what changed and include the issue id, so the group has a record.
+- Say what changed and include the issue id, so there is a record.
+- Different teammates share this one session — answer the person in front of you, and never repeat what someone else asked in another chat.
 - Never mention curl, tokens, files, endpoints or session ids.
 
 ## Scope — the sprint board, nothing else

@@ -103,24 +103,33 @@ export default class EvolutionWhatsApp extends EventEmitter {
         if (id) { this._processed.add(id); setTimeout(() => this._processed.delete(id), 5 * 60_000); }
         const jid = key.remoteJid || data?.remoteJid || data?.chatId || '';
         const isGroup = jid.endsWith('@g.us');
-        if (!isGroup) return; // this automation is intentionally group + mention only
-        if (config.ALLOWED_GROUPS.length && !config.ALLOWED_GROUPS.includes(jid)) return;
+        // Personal chat is the product: a DM from a known teammate IS the request, no tag.
+        // Groups stay off unless SPRINT_AGENT_GROUPS is on, and there a tag is still required
+        // so the bot never answers ordinary group chatter.
+        if (isGroup && !config.SPRINT_AGENT_GROUPS) return;
+        if (isGroup && config.ALLOWED_GROUPS.length && !config.ALLOWED_GROUPS.includes(jid)) return;
         const msg = data?.message || data;
         const text = messageText(msg).trim();
-        const mentioned = msg?.extendedTextMessage?.contextInfo?.mentionedJid || data?.contextInfo?.mentionedJid || [];
-        const mentionMatchesBot = this.botNumber && mentioned.some(j => cleanId(j) === this.botNumber);
-        // Do not treat a plain word/name as a mention: the product is tag-only by design.
-        if (!mentionMatchesBot) return;
-        const sender = cleanId(key.participant || data?.participant || data?.sender || '');
+        if (isGroup) {
+            const mentioned = msg?.extendedTextMessage?.contextInfo?.mentionedJid || data?.contextInfo?.mentionedJid || [];
+            // Do not treat a plain word/name as a mention: groups are tag-only by design.
+            if (!(this.botNumber && mentioned.some(j => cleanId(j) === this.botNumber))) return;
+        }
+        // In a DM the chat JID *is* the sender; `payload.sender` is our own number, never theirs.
+        const sender = cleanId(isGroup ? (key.participant || data?.participant || '') : jid);
         if (!sender) return;
         // Stay silent rather than replying to strangers, but log it: "the bot ignored me"
         // is otherwise indistinguishable from a broken webhook.
         if (!this._allowed(sender)) {
-            console.warn(`[Evolution] Ignored sprint mention from ${sender} — not in the allowed phones list.`);
+            console.warn(`[Evolution] Ignored sprint message from ${sender} — not in the allowed phones list.`);
             return;
         }
-        const command = text.replace(/@\S+/g, '').trim();
+        const command = (isGroup ? text.replace(/@\S+/g, '') : text).trim();
         if (!command) return;
-        this.emit('message', { phone: sender, text: command, pushName: data?.pushName || data?.pushname || 'Group member', groupJid: jid, raw: payload, sprintCommand: true });
+        this.emit('message', {
+            phone: sender, text: command,
+            pushName: data?.pushName || data?.pushname || (isGroup ? 'Group member' : 'Teammate'),
+            groupJid: isGroup ? jid : null, chatJid: jid, raw: payload, sprintCommand: true,
+        });
     }
 }
