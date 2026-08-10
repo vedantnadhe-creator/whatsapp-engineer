@@ -115,9 +115,19 @@ export default class EvolutionWhatsApp extends EventEmitter {
             // Do not treat a plain word/name as a mention: groups are tag-only by design.
             if (!(this.botNumber && mentioned.some(j => cleanId(j) === this.botNumber))) return;
         }
-        // In a DM the chat JID *is* the sender; `payload.sender` is our own number, never theirs.
-        const sender = cleanId(isGroup ? (key.participant || data?.participant || '') : jid);
-        if (!sender) return;
+        // WhatsApp now addresses most chats by `@lid` — a linked-identity id that is NOT a
+        // phone number — and carries the real number alongside in `*Alt`/`*Pn`. Read those
+        // first: a bare `@lid` fails the allowed-phones gate for every teammate, and is not
+        // a number we could reply to either. In a DM the chat itself is the sender
+        // (`payload.sender` is our own number, never theirs).
+        const senderJid = isGroup
+            ? (key.participantAlt || key.participantPn || key.participant || data?.participant || '')
+            : (key.remoteJidAlt || key.senderPn || jid);
+        const sender = cleanId(senderJid);
+        if (!sender || senderJid.endsWith('@lid')) {
+            if (senderJid) console.warn(`[Evolution] Ignored sprint message from ${senderJid} — no phone number in the payload.`);
+            return;
+        }
         // Stay silent rather than replying to strangers, but log it: "the bot ignored me"
         // is otherwise indistinguishable from a broken webhook.
         if (!this._allowed(sender)) {
@@ -129,7 +139,8 @@ export default class EvolutionWhatsApp extends EventEmitter {
         this.emit('message', {
             phone: sender, text: command,
             pushName: data?.pushName || data?.pushname || (isGroup ? 'Group member' : 'Teammate'),
-            groupJid: isGroup ? jid : null, chatJid: jid, raw: payload, sprintCommand: true,
+            // Reply to the group JID, or to the teammate's *number* — never the `@lid`.
+            groupJid: isGroup ? jid : null, chatJid: isGroup ? jid : sender, raw: payload, sprintCommand: true,
         });
     }
 }

@@ -33,7 +33,7 @@ assert.strictEqual(captured.length, 1, 'a DM from an allowed teammate should tri
 assert.strictEqual(captured[0].text, 'what are all the bugs in sprint 37');
 assert.strictEqual(captured[0].phone, MATE, 'in a DM the chat JID is the sender');
 assert.strictEqual(captured[0].groupJid, null);
-assert.strictEqual(captured[0].chatJid, `${MATE}@s.whatsapp.net`, 'the reply must go back to that chat');
+assert.strictEqual(captured[0].chatJid, MATE, 'the reply must go back to that chat');
 assert.strictEqual(wa.botNumber, BOT, 'botNumber should be learned from payload.sender');
 
 // 2. A DM from a stranger is dropped: the session it would drive has shell access, so
@@ -58,17 +58,48 @@ assert.strictEqual(captured.length, 1, 'repeated message id must be dropped');
 wa.handleWebhook(upsert({ id: 'E', text: '   ' }));
 assert.strictEqual(captured.length, 1, 'empty text must not start a turn');
 
-// 7. With groups switched on, a tag is still required and the sender is the participant,
+// 7. Real WhatsApp traffic is `@lid`-addressed: the chat/participant id is a linked
+//    identity, and the phone only appears in remoteJidAlt/participantAlt. Reading the
+//    `@lid` instead would fail the allowed-phones gate for every teammate.
+wa.handleWebhook({
+    event: 'messages.upsert', sender: `${BOT}@s.whatsapp.net`,
+    data: {
+        key: { remoteJid: '141356097925155@lid', fromMe: false, id: 'H', participant: '', remoteJidAlt: `${MATE}@s.whatsapp.net`, addressingMode: 'lid' },
+        pushName: 'Tester', message: { conversation: 'sprint status' },
+    },
+});
+assert.strictEqual(captured.length, 2, 'a lid-addressed DM should resolve to the real number');
+assert.strictEqual(captured[1].phone, MATE);
+assert.strictEqual(captured[1].chatJid, MATE, 'replies must go to the number, not the @lid');
+
+// 8. A lid with no phone alongside is dropped rather than treated as a phone number.
+wa.handleWebhook({
+    event: 'messages.upsert', sender: `${BOT}@s.whatsapp.net`,
+    data: {
+        key: { remoteJid: '141356097925155@lid', fromMe: false, id: 'I', addressingMode: 'lid' },
+        pushName: 'Tester', message: { conversation: 'sprint status' },
+    },
+});
+assert.strictEqual(captured.length, 2, 'an unresolvable @lid must not be treated as a phone');
+
+// 9. With groups switched on, a tag is still required and the sender is the participant,
 //    never the group JID.
 config.SPRINT_AGENT_GROUPS = true;
 wa.handleWebhook(upsert({ id: 'F', text: 'sprint status', jid: GROUP }));
-assert.strictEqual(captured.length, 1, 'untagged group chatter must stay ignored');
-wa.handleWebhook(upsert({ id: 'G', text: `@${BOT} sprint status`, mentions: [`${BOT}@s.whatsapp.net`], jid: GROUP }));
-assert.strictEqual(captured.length, 2, 'a tagged group message should trigger once groups are on');
-assert.strictEqual(captured[1].text, 'sprint status', 'the tag is stripped from the command');
-assert.strictEqual(captured[1].phone, MATE, 'the group sender is the participant');
-assert.strictEqual(captured[1].chatJid, GROUP, 'the group reply goes to the group');
+assert.strictEqual(captured.length, 2, 'untagged group chatter must stay ignored');
+wa.handleWebhook({
+    event: 'messages.upsert', sender: `${BOT}@s.whatsapp.net`,
+    data: {
+        key: { remoteJid: GROUP, fromMe: false, id: 'J', participant: '161924713029855@lid', participantAlt: `${MATE}@s.whatsapp.net`, addressingMode: 'lid' },
+        pushName: 'Tester',
+        message: { extendedTextMessage: { text: `@${BOT} sprint status`, contextInfo: { mentionedJid: [`${BOT}@s.whatsapp.net`] } } },
+    },
+});
+assert.strictEqual(captured.length, 3, 'a tagged group message should trigger once groups are on');
+assert.strictEqual(captured[2].text, 'sprint status', 'the tag is stripped from the command');
+assert.strictEqual(captured[2].phone, MATE, 'the group sender resolves through participantAlt');
+assert.strictEqual(captured[2].chatJid, GROUP, 'the group reply goes to the group');
 config.SPRINT_AGENT_GROUPS = false;
 
-console.log('OK — 7 Evolution sprint-trigger checks passed');
+console.log('OK — 9 Evolution sprint-trigger checks passed');
 process.exit(0);
