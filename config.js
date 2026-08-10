@@ -72,6 +72,12 @@ const config = {
     // Optional shared secret for Evolution's webhook request header/query.
     EVOLUTION_WEBHOOK_SECRET: process.env.EVOLUTION_WEBHOOK_SECRET || '',
 
+    // Sprint board agent — the single Claude Code session driven by group @mentions.
+    // Its own bare workspace keeps it away from the code repos: it may only reach the
+    // board through the dashboard API.
+    SPRINT_AGENT_DIR: process.env.SPRINT_AGENT_DIR || '/home/ubuntu/sprint-agent-workspace',
+    SPRINT_AGENT_MODEL: process.env.SPRINT_AGENT_MODEL || 'claude-sonnet-5',
+
     // Session defaults
     DEFAULT_WORKING_DIR: process.env.DEFAULT_WORKING_DIR || '/home/ubuntu',
     MAX_MESSAGE_LENGTH: 4000,

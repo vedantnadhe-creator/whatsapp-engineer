@@ -11,7 +11,7 @@ import fs from 'fs';
 import path from 'path';
 import WhatsAppBridge from './whatsapp.js';
 import EvolutionWhatsApp from './evolution_whatsapp.js';
-import SprintAgent from './sprint_agent.js';
+import SprintSession from './sprint_session.js';
 import Orchestrator from './orchestrator.js';
 import ClaudeManager from './claude_manager.js';
 import config from './config.js';
@@ -89,7 +89,6 @@ const wa = config.WHATSAPP_ENABLED !== false
 const orchestrator = config.WHATSAPP_ENABLED !== false ? new Orchestrator(store) : null;
 const claude = new ClaudeManager(store);
 const cronManager = new CronManager(claude, wa);
-const sprintAgent = new SprintAgent(store);
 
 // ── Helpers ──────────────────────────────────────────────────
 
@@ -155,6 +154,16 @@ async function broadcastToSubscribers(session, message, prefix = '') {
         }
     }
 }
+
+// The sprint board agent is ONE shared Claude Code session for every group, so it
+// owns its own reply routing: the default broadcast would try to text its thread key.
+const sprintSession = new SprintSession({
+    store,
+    claude,
+    send: (destination, text) => sendContent(destination, text),
+    mute: sessionId => webMutedSessions.add(sessionId),
+    port: parseInt(process.env.PORT || '18790', 10),
+});
 
 // ── Claude Code event handlers ────────────────────────────────
 
@@ -255,12 +264,11 @@ claude.on('session_error', async ({ sessionId, error }) => {
 
 export async function handleIncomingMessage({ isWeb: explicitIsWeb, phone, text, pushName, groupJid, imagePath = null, ownerId = null, model = null, workingDir = null, mode = null, editAccess = undefined }) {
     try {
-        // Evolution only emits marked group messages here. Keep sprint actions separate
-        // from coding-session classification so a task such as "add ... to Sprint 36"
-        // edits the board immediately and never starts an unrelated coding session.
+        // Evolution only emits @mentioned group messages here. They all feed the one
+        // sprint board session, which replies to the group itself — so this never
+        // reaches the orchestrator and never spawns a per-group coding session.
         if (arguments[0]?.sprintCommand) {
-            const reply = await sprintAgent.handle({ text, phone, pushName });
-            await wa?.sendMessage(groupJid, reply);
+            await sprintSession.handle({ text, phone, pushName, groupJid });
             return { sprintAgent: true };
         }
         const isWeb = explicitIsWeb || pushName === 'Web Dashboard';

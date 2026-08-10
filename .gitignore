@@ -66,3 +66,6 @@ Thumbs.db
 sessions.db-shm
 sessions.db-wal
 cron_jobs.json
+
+# Sprint board agent API token (minted at runtime from JWT_SECRET)
+.sprint-api-token
