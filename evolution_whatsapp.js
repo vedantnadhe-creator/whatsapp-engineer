@@ -19,7 +19,12 @@ export default class EvolutionWhatsApp extends EventEmitter {
     get enabled() { return Boolean(config.EVOLUTION_API_URL && config.EVOLUTION_INSTANCE); }
     _url(path) { return `${config.EVOLUTION_API_URL.replace(/\/$/, '')}${path}`; }
     _headers() { return { 'Content-Type': 'application/json', apikey: config.EVOLUTION_API_KEY }; }
-    _allowed(phone) { return config.ALLOWED_PHONES.length === 0 || this.store.isPhoneAllowed(phone); }
+    // A tagged group message drives a Claude Code session, so fail CLOSED: the sender
+    // must be a known teammate, not merely a member of some group this number is in.
+    // (The old `ALLOWED_PHONES.length === 0 ||` short-circuit let anyone in — harmless
+    // for the previous five-verb regex agent, not for a shell-capable session.)
+    // Numbers are managed in Settings → allowed phones, seeded from ALLOWED_PHONES.
+    _allowed(phone) { return this.store.isPhoneAllowed(phone); }
 
     async _request(path, options = {}) {
         const response = await fetch(this._url(path), { ...options, headers: { ...this._headers(), ...(options.headers || {}) } });
@@ -107,7 +112,13 @@ export default class EvolutionWhatsApp extends EventEmitter {
         // Do not treat a plain word/name as a mention: the product is tag-only by design.
         if (!mentionMatchesBot) return;
         const sender = cleanId(key.participant || data?.participant || data?.sender || '');
-        if (!sender || !this._allowed(sender)) return;
+        if (!sender) return;
+        // Stay silent rather than replying to strangers, but log it: "the bot ignored me"
+        // is otherwise indistinguishable from a broken webhook.
+        if (!this._allowed(sender)) {
+            console.warn(`[Evolution] Ignored sprint mention from ${sender} — not in the allowed phones list.`);
+            return;
+        }
         const command = text.replace(/@\S+/g, '').trim();
         if (!command) return;
         this.emit('message', { phone: sender, text: command, pushName: data?.pushName || data?.pushname || 'Group member', groupJid: jid, raw: payload, sprintCommand: true });

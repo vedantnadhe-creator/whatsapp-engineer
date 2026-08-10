@@ -97,12 +97,26 @@ export default class SprintSession {
         return session?.claude_session_id ? session : null;
     }
 
+    /**
+     * The stored assistant message carries a `<!--thinking-->` block of tool-call
+     * narration, which for this agent means its curl commands — token path included.
+     * The group must only ever see the answer, so strip it and redact any credential
+     * that still slipped through.
+     */
+    _clean(content) {
+        return String(content || '')
+            .replace(/<!--thinking-->[\s\S]*?<!--\/thinking-->/g, '')
+            .replace(/eyJ[\w-]{8,}\.[\w-]{8,}\.[\w-]+/g, '[redacted]')
+            .split(this.tokenPath).join('the board API')
+            .trim();
+    }
+
     async _deliver(sessionId, content) {
         const target = this.pending.get(sessionId);
         if (!target) return; // not this agent's turn, or already answered
         this.pending.delete(sessionId);
         try {
-            await this.send(target, content || '✅ Done.');
+            await this.send(target, this._clean(content) || '✅ Done.');
         } catch (err) {
             console.error(`[SprintSession] Reply to ${target} failed: ${err.message}`);
         }

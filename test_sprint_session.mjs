@@ -82,7 +82,9 @@ assert.ok(claude.started[0].prompt.includes('add bug Login broken to Sprint 37')
 assert.ok(claude.started[0].ownerId, 'board edits must be attributed to the bot user');
 assert.ok(muted.has(id), 'the shared session must not use the default WhatsApp broadcast');
 
-claude.finish(id, '✅ Added *Login broken* to *Sprint 37*.');
+// The stored message carries a thinking block of curl narration — the group must
+// only see the answer, never the token path or the token itself.
+claude.finish(id, `<!--thinking-->\nRunning: T=$(cat ${path.join(tmp, '.sprint-api-token')}); curl -s -H "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.abcdefghij.signature"\n<!--/thinking-->\n\n✅ Added *Login broken* to *Sprint 37*.`);
 await first;
 assert.deepStrictEqual(sent, [{ destination: GROUP_A, text: '✅ Added *Login broken* to *Sprint 37*.' }]);
 

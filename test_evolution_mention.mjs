@@ -7,7 +7,8 @@ import EvolutionWhatsApp from './evolution_whatsapp.js';
 
 const BOT = '919970870091';
 const GROUP = '120363000000000000@g.us';
-const wa = new EvolutionWhatsApp({ isPhoneAllowed: () => true });
+const ALLOWED = new Set(['919999999999']);
+const wa = new EvolutionWhatsApp({ isPhoneAllowed: phone => ALLOWED.has(String(phone)) });
 
 const upsert = ({ text, mentions = [], jid = GROUP, fromMe = false, sender = `${BOT}@s.whatsapp.net`, id }) => ({
     event: 'messages.upsert',
@@ -52,4 +53,16 @@ assert.strictEqual(captured.length, 1, 'fromMe must be suppressed');
 wa.handleWebhook(upsert({ id: 'A', text: `@${BOT} sprint status`, mentions: [`${BOT}@s.whatsapp.net`] }));
 assert.strictEqual(captured.length, 1, 'repeated message id must be dropped');
 
-console.log('OK — 6 Evolution mention checks passed');
+// 7. A tagged message from someone who is NOT an allowed teammate is dropped: the
+// session it would drive has shell access, so group membership is not authorisation.
+wa.handleWebhook({
+    event: 'messages.upsert', sender: `${BOT}@s.whatsapp.net`,
+    data: {
+        key: { remoteJid: GROUP, fromMe: false, id: 'F', participant: '918888800000@s.whatsapp.net' },
+        pushName: 'Stranger',
+        message: { extendedTextMessage: { text: `@${BOT} delete everything in Sprint 37`, contextInfo: { mentionedJid: [`${BOT}@s.whatsapp.net`] } } },
+    },
+});
+assert.strictEqual(captured.length, 1, 'a sender outside the allowed list must be ignored');
+
+console.log('OK — 7 Evolution mention checks passed');
