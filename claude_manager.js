@@ -90,6 +90,12 @@ class ClaudeManager extends EventEmitter {
         super();
         this.store = sessionStore;
         this.processes = new Map();
+        // A Codex turn already retries a dropped Responses stream internally.  Keep
+        // one *dashboard* retry as well: when that internal budget is exhausted,
+        // start a clean thread from the persisted conversation rather than turning a
+        // short-lived upstream outage into a permanently failed user session.
+        this.pendingCodexRecoveries = new Map();
+        this.codexRecoveryAttempts = new Set();
     }
 
     async startSession(userPhone, task, workingDir, imagePath = null, ownerId = null, model = 'claude-opus-4-8', opts = {}) {
@@ -253,7 +259,6 @@ class ClaudeManager extends EventEmitter {
     async resumeSession(sessionId, followUp, imagePath = null, modelOverride = null) {
         const session = this.store.getSession(sessionId);
         if (!session) throw new Error(`Session ${sessionId} not found`);
-        if (!session.claude_session_id) throw new Error(`Session ${sessionId} has no Claude ID yet`);
         if (this.isRunning(sessionId)) throw new Error(`Session ${sessionId} is currently running.`);
 
         const model = modelOverride || session.model || 'claude-opus-4-8';
@@ -277,6 +282,13 @@ class ClaudeManager extends EventEmitter {
             && targetProvider === 'codex'
             && !session.claude_session_id
             && session.status !== 'running';
+
+        // Claude needs an existing native id for --resume.  A stopped/failed Codex
+        // session without one is recoverable from the dashboard transcript instead;
+        // do not reject it before the recovery branch below gets a chance to run.
+        if (!session.claude_session_id && !recoverMissingCodexThread) {
+            throw new Error(`Session ${sessionId} has no native session ID yet`);
+        }
 
         this.store.addMessage(sessionId, 'user', followUp);
         if (sourceProvider !== targetProvider || recoverFailedCodex || recoverMissingCodexThread) {
@@ -308,6 +320,12 @@ class ClaudeManager extends EventEmitter {
     }
 
     stopSession(sessionId) {
+        const pendingRecovery = this.pendingCodexRecoveries.get(sessionId);
+        if (pendingRecovery) {
+            clearTimeout(pendingRecovery.timer);
+            this.pendingCodexRecoveries.delete(sessionId);
+        }
+        this.codexRecoveryAttempts.delete(sessionId);
         const entry = this.processes.get(sessionId);
         const session = this.store.getSession(sessionId);
         const costUsd = entry?.costUsd || session?.cost_usd || 0;
@@ -645,6 +663,23 @@ class ClaudeManager extends EventEmitter {
                 return;
             }
 
+            // `codex exec` makes five attempts to reconnect to a broken Responses
+            // stream.  The logs showed it was then exiting with code 1 and the
+            // dashboard immediately labelled the entire session "crashed", even
+            // though the task and its messages were intact.  Retry once from a new
+            // Codex thread after a small backoff.  A new thread is intentional: the
+            // failed one may have been created before the request reached OpenAI and
+            // can itself be non-resumable.  The stored transcript supplies context.
+            const codexStreamDropped = provider === 'codex'
+                && !entry.manualStop
+                && exitCode !== 0
+                && /stream disconnected before completion|reconnecting\.\.\./i.test(entry.lastOutput || '');
+            if (codexStreamDropped && !this.codexRecoveryAttempts.has(sessionId)) {
+                this.processes.delete(sessionId);
+                this._recoverCodexStream(sessionId, workingDir, entry);
+                return;
+            }
+
             // node-pty's 'exit' can fire before the final 'data' chunk (the closing
             // {"type":"result",...} line) is delivered — the turn then completes with
             // no visible reply. Recover the real final answer from Claude Code's own
@@ -658,10 +693,45 @@ class ClaudeManager extends EventEmitter {
             // A deliberate stop() already set status 'stopped' and kill()'s exit code is
             // just signal noise — don't reclassify it as a crash.
             const status = entry.manualStop ? 'stopped' : (exitCode === 0 ? 'completed' : 'failed');
+            this.codexRecoveryAttempts.delete(sessionId);
             if (!entry.manualStop) this.store.updateSession(sessionId, { status });
             this.processes.delete(sessionId);
             this.emit('session_end', { sessionId, code: exitCode, status, costUsd: entry.costUsd });
         });
+    }
+
+    _recoverCodexStream(sessionId, workingDir, entry) {
+        if (this.pendingCodexRecoveries.has(sessionId)) return;
+        const session = this.store.getSession(sessionId);
+        if (!session || session.status === 'stopped') return;
+
+        // `_buildForkContext` is deliberately bounded, so a flaky upstream cannot
+        // turn a retry into an ever-growing prompt.  It includes the latest user
+        // message and any useful partial progress already saved by event handling.
+        const context = this._buildForkContext(session, this.store.getMessages(sessionId, 30));
+        const prompt = `${context}\n\n---\n\nThe previous Codex attempt was interrupted by a temporary upstream connection failure after its own reconnect attempts. Continue the same task from the saved context. Do not ask the user to resend the request.`;
+        const token = Symbol(sessionId);
+        this.codexRecoveryAttempts.add(sessionId);
+        this.store.updateSession(sessionId, {
+            claude_session_id: null,
+            status: 'running',
+            thread_open: 1,
+            provider: 'codex',
+        });
+        console.warn(`[Codex] Session ${sessionId} lost its upstream stream; recovering once with a fresh thread.`);
+        this.emit('assistant_message', { sessionId, content: '_(Connection to Codex was interrupted. Recovering automatically...)_' });
+
+        const timer = setTimeout(() => {
+            const pending = this.pendingCodexRecoveries.get(sessionId);
+            if (!pending || pending.token !== token) return;
+            this.pendingCodexRecoveries.delete(sessionId);
+            const current = this.store.getSession(sessionId);
+            // A stop or a new turn during the backoff takes precedence over the
+            // scheduled recovery.
+            if (!current || current.status !== 'running' || this.processes.has(sessionId)) return;
+            this._spawnNew(sessionId, prompt, workingDir || current.working_dir, null, current.model);
+        }, 2500);
+        this.pendingCodexRecoveries.set(sessionId, { token, timer });
     }
 
     // Reads Claude Code's own transcript (~/.claude/projects/<cwd-slug>/<claude_session_id>.jsonl)
