@@ -69,3 +69,6 @@ cron_jobs.json
 
 # Sprint board agent API token (minted at runtime from JWT_SECRET)
 .sprint-api-token
+
+# Runtime backups written by the prod-deployment agent when it rewrites its config.
+agents/**/*.bak.*

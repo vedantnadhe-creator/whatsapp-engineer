@@ -9,6 +9,15 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
+// ── Sprint lifecycle ─────────────────────────────────────────────────────────
+// 'planning'  — created, not started. No status email goes out.
+// 'active'    — started/running. The only state the status mailer sends for.
+// 'completed' — stopped. Silent again; can be started back into 'active'.
+export const SPRINT_PLANNING = 'planning';
+export const SPRINT_ACTIVE = 'active';
+export const SPRINT_COMPLETED = 'completed';
+export const SPRINT_STATUSES = [SPRINT_PLANNING, SPRINT_ACTIVE, SPRINT_COMPLETED];
+
 class SessionStore {
     constructor() {
         this.db = new Database(config.DB_PATH);
@@ -1235,11 +1244,14 @@ class SessionStore {
 
     // ── Sprints ──────────────────────────────────────────────────
 
+    // A new sprint is created 'planning' — not started — and stays silent until
+    // someone starts it. The column default is the legacy 'active', so the status is
+    // written explicitly here rather than left to the schema.
     createSprint({ name, description = '', startDate = null, endDate = null, createdBy = null }) {
         const id = `SPR-${Date.now().toString(36)}`;
         this.db.prepare(
-            `INSERT INTO sprints (id, name, description, start_date, end_date, created_by) VALUES (?, ?, ?, ?, ?, ?)`
-        ).run(id, name, description, startDate, endDate, createdBy);
+            `INSERT INTO sprints (id, name, description, status, start_date, end_date, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)`
+        ).run(id, name, description, SPRINT_PLANNING, startDate, endDate, createdBy);
         return this.getSprint(id);
     }
 

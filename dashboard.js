@@ -26,6 +26,7 @@ import { listCodexModels, isCodexModel, safeCodexModel } from './codex_models.js
 import { mountGrokProxy } from './grok_proxy.js';
 import cron from 'node-cron';
 import { sendSprintStatusEmail, buildSprintStatusEmail } from './sprint_mailer.js';
+import { SPRINT_STATUSES, SPRINT_ACTIVE } from './session_store.js';
 import { probeHeadroom } from './headroom.js';
 import { runMasterAgent, SPAWN_TOOL } from './master_agent.js';
 
@@ -71,6 +72,16 @@ function resolveModelForRole(role, model) {
     if (policy && !policy.allow(safe)) return policy.fallback;
     return safe;
 }
+
+// Changelog section heading per issue type. Mirrors TYPES in SprintBoard.jsx /
+// sheet_schema.js; anything unrecognised reads as a plain Task.
+const CHANGELOG_TYPE_HEADING = {
+    epic: 'Epic',
+    feature: 'Feature',
+    task: 'Task',
+    bug: 'Bug Fix',
+    improvement: 'Improvement',
+};
 
 // Designers can now build real UI directly in a product FRONTEND repo (backend is
 // added by a developer later). Repos are resolved from an allowlist of the
@@ -1634,6 +1645,11 @@ Do NOT ask for confirmation — proceed through each step automatically. If any 
             for (const key of allowed) {
                 if (req.body[key] !== undefined) updates[key] = req.body[key];
             }
+            // Status drives the mailer, so it is the one field a typo must not reach the
+            // database through — an unknown value would silently stop the sprint mailing.
+            if (updates.status !== undefined && !SPRINT_STATUSES.includes(updates.status)) {
+                return res.status(400).json({ error: `status must be one of: ${SPRINT_STATUSES.join(', ')}` });
+            }
             const sprint = store.updateSprint(req.params.id, updates);
             if (!sprint) return res.status(404).json({ error: 'Sprint not found' });
             wsBroadcast('sprint_updated', { sprint });
@@ -1866,7 +1882,7 @@ Keep it to 3-5 bullet points, be specific about what changed. Do NOT start any n
             const { summaries = [] } = req.body; // [{ issueId, title, type, summary, sessionId }]
 
             let issueEntries = summaries.map(s => {
-                return `### ${s.type === 'bug' ? 'Bug Fix' : s.type === 'feature' ? 'Feature' : s.type === 'improvement' ? 'Improvement' : 'Task'}: ${s.title}
+                return `### ${CHANGELOG_TYPE_HEADING[s.type] || 'Task'}: ${s.title}
 - Issue: ${s.issueId}${s.sessionId ? ` | Session: ${s.sessionId}` : ''}
 - Summary:\n${s.summary || 'No summary available'}`;
             }).join('\n\n');
@@ -2302,11 +2318,17 @@ The user may ask follow-up questions about the changelog — answer based on the
         } catch (err) { res.status(500).json({ error: err.message }); }
     });
 
-    // Send it now (the manual button).
+    // Send it now (the manual button). Gated on the sprint being started, for the same
+    // reason the daily job is: a stakeholder mail about a sprint nobody is running yet
+    // (or one that was stopped weeks ago) is noise, and it is easy to fire by accident
+    // from the wrong sprint tab.
     app.post('/api/sprints/:id/send-status', requireAuth, async (req, res) => {
         try {
             const sprint = store.getSprint(req.params.id);
             if (!sprint) return res.status(404).json({ error: 'Sprint not found' });
+            if (sprint.status !== SPRINT_ACTIVE) {
+                return res.status(409).json({ error: `"${sprint.name}" is not running — start the sprint before sending its status email.` });
+            }
             const progress = store.getSprintProgress(sprint.id);
             const issues = store.getIssuesBySprint(sprint.id);
             const recipients = getStatusRecipients();
@@ -2321,11 +2343,16 @@ The user may ask follow-up questions about the changelog — answer based on the
         catch (err) { res.status(500).json({ error: err.message }); }
     });
 
-    // Daily 6:00 AM IST — status mail for every active sprint. Each sprint is sent
-    // independently so one bad address / sprint doesn't block the others.
+    // Daily 6:00 AM IST — status mail for every *started* sprint, and only those.
+    // Start/Stop on the board is what puts a sprint in or out of this list. Each sprint
+    // is sent independently so one bad address / sprint doesn't block the others.
     cron.schedule('0 6 * * *', async () => {
         console.log('[SprintMailer] Running daily 6 AM IST status send...');
-        const active = store.getAllSprints().filter(s => s.status === 'active');
+        const active = store.getAllSprints().filter(s => s.status === SPRINT_ACTIVE);
+        if (active.length === 0) {
+            console.log('[SprintMailer] No sprint is running — nothing to send.');
+            return;
+        }
         for (const sprint of active) {
             try {
                 const progress = store.getSprintProgress(sprint.id);

@@ -19,7 +19,7 @@ export const TABS = {
 // Allowed values, mirrored from SprintBoard.jsx so the sheet matches the board.
 export const DEV_STATUS = ['todo', 'in_progress', 'dev_completed', 'done'];
 export const QA_STATUS = ['', 'testing', 'pass', 'fail'];
-export const TYPES = ['feature', 'task', 'bug', 'improvement'];
+export const TYPES = ['epic', 'feature', 'task', 'bug', 'improvement'];
 export const BUG_SEVERITY = ['normal', 'critical'];
 export const BUG_STATUS = ['open', 'in_progress', 'fixed', 'wont_fix'];
 export const TC_STATUS = ['pending', 'pass', 'fail'];

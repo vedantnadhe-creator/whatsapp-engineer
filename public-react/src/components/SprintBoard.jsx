@@ -3,6 +3,7 @@ import {
   Plus, Play, MessageSquare, Bug, FlaskConical, Trash2, ChevronDown, ChevronRight,
   GitFork, Check, X, Loader2, FileText, RefreshCw, CornerDownRight, ArrowLeft, ArrowRight, Archive,
   Paperclip, ListTree, FileSpreadsheet, Download, Upload, ExternalLink, Sun, Moon, Mail,
+  Rows3, Columns3, Square,
 } from 'lucide-react'
 import { useTheme } from '../context/ThemeContext'
 import {
@@ -14,71 +15,15 @@ import {
   previewSprintStatus, sendSprintStatus, getSprintStatusLastSent,
 } from '../hooks/useApi'
 
-// Prefer a person's display name; fall back to the email's local part, never the raw email.
-// (/api/users returns camelCase `displayName`; other shapes use `display_name`.)
-const memberName = (m) => m?.display_name || m?.displayName || (m?.email ? m.email.split('@')[0] : '') || m?.id || ''
-
-// ── Option sets ────────────────────────────────────────────────────────────
-const DEV_STATUS = [
-  { v: 'todo', label: 'To Do', color: 'var(--c-text-muted)' },
-  { v: 'in_progress', label: 'In Progress', color: '#f59e0b' },
-  { v: 'dev_completed', label: 'Dev Completed', color: '#3b82f6' },
-  { v: 'done', label: 'Done', color: '#22c55e' },
-]
-const QA_STATUS = [
-  { v: '', label: '—', color: 'var(--c-text-muted)' },
-  { v: 'testing', label: 'Testing', color: '#f59e0b' },
-  { v: 'pass', label: 'Pass', color: '#22c55e' },
-  { v: 'fail', label: 'Fail', color: '#ef4444' },
-  { v: 'not_needed', label: 'Not needed', color: 'var(--c-text-muted)' },
-]
-const TYPES = [
-  { v: 'epic', label: 'Epic' },
-  { v: 'feature', label: 'Feature' },
-  { v: 'task', label: 'Task' },
-  { v: 'bug', label: 'Bug' },
-  { v: 'improvement', label: 'Improvement' },
-]
-const PLATFORM_SUGGESTIONS = ['ATS', 'Assessment', 'Both', 'Infra']
-
-const devStatusMeta = (v) => DEV_STATUS.find(s => s.v === v) || DEV_STATUS[0]
-const qaStatusMeta = (v) => QA_STATUS.find(s => s.v === (v || '')) || QA_STATUS[0]
-
-// Feature completion %, driven by the QA lifecycle (mirrors session_store.js featureCompletion):
-//   QA Pass / Done → 100 · Dev Completed (no open bugs) → 100 · Dev Completed + open QA bug → 50
-//   To Do / In Progress → 0
-function featureCompletion(f) {
-  if (!f) return 0
-  const open = f.open_bugs || 0
-  const qa = String(f.qa_status || '').toLowerCase()
-  // Open bugs cap completion — a feature with live bugs can never read "done".
-  if (open > 0) {
-    if (f.dev_status === 'todo') return 0
-    return (f.critical_bugs || 0) > 0 ? 40 : 50
-  }
-  if (qa === 'pass' || qa === 'passed' || qa === 'tested') return 100
-  if (f.dev_status === 'done') return 100
-  if (f.dev_status === 'dev_completed') return 70
-  return 0
-}
-const completionColor = (pct) => pct >= 100 ? '#4ade80' : pct >= 70 ? '#60a5fa' : pct >= 50 ? '#fbbf24' : 'var(--c-text-muted)'
-
-// A row whose Type is Bug IS a bug: it counts toward the sprint bug totals until resolved,
-// alongside the child bugs filed against features. Mirrors SessionStore.isOpenBugRow().
-// Kept out of featureCompletion() on purpose — self-counting would cap a bug at 50% forever.
-const isOpenBugRow = (f) => f?.type === 'bug' && featureCompletion(f) < 100
-
-// Pill foreground colors (dark theme) — backgrounds are derived as a translucent tint.
-const TYPE_PILL = {
-  epic: '#a78bfa',
-  feature: '#f472b6',
-  task: '#4ade80',
-  bug: '#f87171',
-  improvement: '#22d3ee',
-  story: '#60a5fa', // legacy fallback for older rows
-}
-const ASSIGNEE_PILL = '#4ade80'
-const QA_OWNER_PILL = '#cbd5e1'
+// Option sets and completion maths live in sprintMeta so the table and the Kanban
+// board share one definition of every status, type colour and percentage.
+import {
+  memberName, DEV_STATUS, QA_STATUS, TYPES, PLATFORM_SUGGESTIONS,
+  devStatusMeta, featureCompletion, completionColor, isOpenBugRow,
+  TYPE_PILL, ASSIGNEE_PILL, QA_OWNER_PILL,
+  sprintStatusMeta, isSprintRunning,
+} from './sprintMeta'
+import SprintKanban from './SprintKanban'
 
 // A <select> styled as a soft colored pill (tinted background, colored text) — works on the dark sheet.
 function PillSelect({ value, onChange, options, fg, placeholder = '—', disabled }) {
@@ -233,6 +178,14 @@ export default function SprintBoard({
 }) {
   const [activeSprintId, setActiveSprintId] = useState(null) // null = all
   const [expandedId, setExpandedId] = useState(null)
+  // 'table' = the dense spreadsheet view, 'board' = Kanban by dev status. Remembered
+  // per browser, like the theme, so a Kanban person isn't sent back to the grid daily.
+  const [view, setView] = useState(() => {
+    try { return localStorage.getItem('olibot-sprint-view') === 'board' ? 'board' : 'table' } catch { return 'table' }
+  })
+  useEffect(() => {
+    try { localStorage.setItem('olibot-sprint-view', view) } catch { /* private mode — the default is fine */ }
+  }, [view])
   const [showNewSprint, setShowNewSprint] = useState(false)
   const [newSprintName, setNewSprintName] = useState('')
   const [newSprintStart, setNewSprintStart] = useState('')
@@ -445,6 +398,15 @@ export default function SprintBoard({
     }
   }
 
+  // Rendered under whichever view is showing — adding a feature must not depend on
+  // being in the table.
+  const quickAdd = activeSprintId && activeSprintId !== '__all__' && !isBacklogView && !isTester ? (
+    <QuickAddFeature
+      sprintId={activeSprintId} members={members}
+      onCreate={async (data) => { await onCreateIssue({ ...data, sprintId: activeSprintId, category: 'issue' }); refreshIssues() }}
+    />
+  ) : null
+
   return (
     <div className="h-full flex flex-col" style={{ backgroundColor: 'var(--c-bg)', color: 'var(--c-text)' }}>
       {/* Header */}
@@ -478,7 +440,7 @@ export default function SprintBoard({
                 className="text-[11px] px-2 py-1 rounded cursor-pointer flex items-center gap-1"
                 style={{ backgroundColor: activeSprintId === s.id ? 'var(--c-surface-2)' : 'transparent', color: activeSprintId === s.id ? 'var(--c-text)' : 'var(--c-text-secondary)' }}
               >
-                <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: s.status === 'active' ? '#22c55e' : s.status === 'completed' ? 'var(--c-text-muted)' : '#f59e0b' }} />
+                <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: sprintStatusMeta(s.status).color }} title={sprintStatusMeta(s.status).label} />
                 {s.name}
               </button>
             ))}
@@ -525,6 +487,26 @@ export default function SprintBoard({
           )}
 
           <div className="flex-1" />
+          {/* Table ⇄ Kanban. Both render the same features and the same filters — the
+              board groups them by dev status instead of listing every column. */}
+          <div className="flex items-center rounded overflow-hidden" style={{ border: '1px solid var(--c-border)' }} role="group" aria-label="Sprint view">
+            {[
+              { v: 'table', label: 'Table', Icon: Rows3 },
+              { v: 'board', label: 'Board', Icon: Columns3 },
+            ].map((opt) => (
+              <button
+                key={opt.v}
+                onClick={() => setView(opt.v)}
+                aria-pressed={view === opt.v}
+                title={`${opt.label} view`}
+                className="text-[11px] px-2 py-1 cursor-pointer flex items-center gap-1"
+                style={{
+                  backgroundColor: view === opt.v ? 'var(--c-surface-2)' : 'var(--c-surface)',
+                  color: view === opt.v ? 'var(--c-text)' : 'var(--c-text-secondary)',
+                }}
+              ><opt.Icon size={12} /> {opt.label}</button>
+            ))}
+          </div>
           <button
             onClick={toggleTheme}
             title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
@@ -544,12 +526,11 @@ export default function SprintBoard({
                   style={{ color: activeSprint.end_date ? 'var(--c-text)' : 'var(--c-text-muted)' }}
                 />
               </label>
-              <button
-                onClick={() => onUpdateSprint(activeSprint.id, { status: activeSprint.status === 'active' ? 'completed' : 'active' })}
+              <SprintRunControl
+                sprint={activeSprint}
                 disabled={isTester}
-                className="text-[11px] px-2 py-1 rounded cursor-pointer disabled:opacity-40"
-                style={{ backgroundColor: 'var(--c-surface)', color: 'var(--c-text-secondary)', border: '1px solid var(--c-border)' }}
-              >{activeSprint.status === 'active' ? 'Mark complete' : 'Reactivate'}</button>
+                onChange={(status) => onUpdateSprint(activeSprint.id, { status })}
+              />
               <ChangelogButton sprint={activeSprint} features={features} onGetChangelog={onGetChangelog} onRequestIssueSummary={onRequestIssueSummary} onGetIssueLastResponse={onGetIssueLastResponse} onGenerateChangelog={onGenerateChangelog} />
               {!isTester && <StatusMailButton sprint={activeSprint} />}
               {!isTester && (
@@ -662,7 +643,31 @@ export default function SprintBoard({
         )}
       </div>
 
+      {/* Kanban — same features and filters as the table, grouped by dev status.
+          Its columns scroll internally, so it owns the remaining height instead of
+          living inside the table's single scroll area. */}
+      {view === 'board' && (
+        <div className="flex-1 min-h-0 flex flex-col" style={{ backgroundColor: 'var(--c-bg)' }}>
+          <SprintKanban
+            features={filteredFeatures}
+            members={members}
+            onUpdateIssue={onUpdateIssue}
+            onStartSession={handleStartSession}
+            onGoToSession={onGoToSession}
+            busyStart={busyStart}
+            onError={(text) => setSheetMsg({ kind: 'error', text })}
+          />
+          {features.length > 0 && filteredFeatures.length === 0 && (
+            <p className="px-4 pb-3 text-center text-xs" style={{ color: 'var(--c-text-muted)' }}>
+              No features match the filters. <button onClick={clearFilters} className="underline cursor-pointer" style={{ color: 'var(--c-accent)' }}>Clear filters</button>
+            </p>
+          )}
+          {quickAdd}
+        </div>
+      )}
+
       {/* Table */}
+      {view === 'table' && (
       <div className="flex-1 overflow-auto" style={{ backgroundColor: 'var(--c-bg)' }}>
         <table className="w-full border-collapse" style={{ minWidth: 1500, borderTop: '1px solid var(--c-border)', borderLeft: '1px solid var(--c-border)' }}>
           <thead className="sticky top-0 z-10">
@@ -698,14 +703,9 @@ export default function SprintBoard({
           </tbody>
         </table>
 
-        {/* Quick add */}
-        {activeSprintId && activeSprintId !== '__all__' && !isBacklogView && !isTester && (
-          <QuickAddFeature
-            sprintId={activeSprintId} members={members}
-            onCreate={async (data) => { await onCreateIssue({ ...data, sprintId: activeSprintId, category: 'issue' }); refreshIssues() }}
-          />
-        )}
+        {quickAdd}
       </div>
+      )}
 
       {/* Start-session composer — dev types what to do; the feature title is the session name */}
       {startFor && (
@@ -1375,7 +1375,43 @@ function ChangelogButton({ sprint, features, onGetChangelog, onRequestIssueSumma
 }
 
 // Sprint status email — daily 6 AM IST to stakeholders, plus preview + manual send here.
+// ── Sprint Start / Stop ──────────────────────────────────────────────────────
+// The one control that decides whether a sprint is "in": only a running sprint gets
+// the daily 6 AM status email, and only a running sprint can be mailed by hand. The
+// current state is spelled out next to the button so nobody has to infer it from the
+// verb on the button.
+function SprintRunControl({ sprint, disabled, onChange }) {
+  const running = isSprintRunning(sprint)
+  const meta = sprintStatusMeta(sprint.status)
+  return (
+    <div className="flex items-center rounded overflow-hidden" style={{ border: '1px solid var(--c-border)' }}>
+      <span
+        className="text-[11px] px-2 py-1 flex items-center gap-1.5"
+        style={{ backgroundColor: 'var(--c-surface)', color: 'var(--c-text-secondary)' }}
+        title={running
+          ? 'Running — this sprint gets the daily 6:00 AM status email'
+          : 'Not running — no status email goes out for this sprint'}
+      >
+        <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: meta.color }} />
+        {meta.label}
+      </span>
+      <button
+        onClick={() => onChange(running ? 'completed' : 'active')}
+        disabled={disabled}
+        title={running
+          ? 'Stop the sprint — stops its daily status email'
+          : 'Start the sprint — it starts getting the daily 6:00 AM status email'}
+        className="text-[11px] px-2 py-1 cursor-pointer flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"
+        style={{ backgroundColor: 'var(--c-surface-2)', color: running ? '#f87171' : '#4ade80' }}
+      >
+        {running ? <><Square size={11} /> Stop</> : <><Play size={11} /> Start</>}
+      </button>
+    </div>
+  )
+}
+
 function StatusMailButton({ sprint }) {
+  const running = isSprintRunning(sprint)
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [preview, setPreview] = useState(null)
@@ -1418,10 +1454,18 @@ function StatusMailButton({ sprint }) {
               <span className="text-sm font-semibold" style={{ color: 'var(--c-text)' }}>Sprint Status Email</span>
             </div>
             <p className="text-[11px] mb-3" style={{ color: 'var(--c-text-muted)' }}>
-              Sent automatically every day at 6:00 AM IST to: <strong>{preview?.recipients?.join(', ') || '…'}</strong>
+              {running
+                ? <>Sent automatically every day at 6:00 AM IST to: <strong>{preview?.recipients?.join(', ') || '…'}</strong></>
+                : <>Would go to: <strong>{preview?.recipients?.join(', ') || '…'}</strong></>}
               {lastSentAt && <> · last sent {new Date(lastSentAt).toLocaleString()}</>}
               . Edit recipients in Settings (<code>sprint_status_recipients</code>).
             </p>
+            {!running && (
+              <p className="text-[11px] mb-3 px-2.5 py-1.5 rounded" style={{ backgroundColor: 'var(--c-surface-2)', color: 'var(--c-text-secondary)', border: '1px solid var(--c-border)' }}>
+                <strong>{sprintStatusMeta(sprint.status).label}.</strong> No status email goes out for this sprint —
+                neither the daily 6:00 AM send nor this button. Start the sprint to enable it.
+              </p>
+            )}
             {busy && !preview && <div className="text-[11px] mb-3 flex items-center gap-2" style={{ color: 'var(--c-text-muted)' }}><Loader2 size={12} className="animate-spin" /> Loading preview…</div>}
             {error && <p className="text-[11px] mb-3" style={{ color: '#ef4444' }}>{error}</p>}
             {sentJustNow && <p className="text-[11px] mb-3" style={{ color: '#22c55e' }}>Sent.</p>}
@@ -1432,7 +1476,13 @@ function StatusMailButton({ sprint }) {
             )}
             <div className="flex justify-end gap-2">
               <button onClick={() => setOpen(false)} disabled={busy} className="text-xs px-3 py-1.5 rounded cursor-pointer disabled:opacity-40" style={{ color: 'var(--c-text-muted)' }}>Close</button>
-              <button onClick={send} disabled={busy || !preview} className="text-xs px-3 py-1.5 rounded cursor-pointer font-medium disabled:opacity-40" style={{ backgroundColor: 'var(--c-accent)', color: '#fff' }}>{busy ? 'Sending…' : 'Send now'}</button>
+              <button
+                onClick={send}
+                disabled={busy || !preview || !running}
+                title={running ? 'Send this status email now' : 'Start the sprint to send its status email'}
+                className="text-xs px-3 py-1.5 rounded cursor-pointer font-medium disabled:opacity-40 disabled:cursor-not-allowed"
+                style={{ backgroundColor: 'var(--c-accent)', color: '#fff' }}
+              >{busy ? 'Sending…' : 'Send now'}</button>
             </div>
           </div>
         </div>
