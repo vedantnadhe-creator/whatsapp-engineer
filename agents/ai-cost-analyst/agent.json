@@ -1,0 +1,11 @@
+{
+  "id": "ai-cost-analyst",
+  "name": "AI Cost Analyst",
+  "description": "Conversational PROD AI-spend analyst. Answers what a candidate, a corporate drive, an institute assessment or a whole module actually cost in AI — LLM, speech-to-text and text-to-speech — from the ai_usage ledger and the LiteLLM gateway. Read-only.",
+  "icon": "Database",
+  "model": "claude-opus-5",
+  "type": "task",
+  "workflow_file": "workflow.md",
+  "state_file": "state.json",
+  "version": 1
+}
