@@ -92,6 +92,10 @@ const config = {
     // Design workspace — design-mode sessions run here (separate CLAUDE.md + deploy flow)
     DESIGNS_DIR: process.env.DESIGNS_DIR || '/home/ubuntu/pluginlive-designs',
 
+    // Projects — one `project_<slug>.md` context doc per project lives here. Kept out
+    // of the code repos so a project doc never lands in someone's git diff.
+    PROJECTS_DIR: process.env.PROJECTS_DIR || '/home/ubuntu/olibot-projects',
+
     // Database backend: 'sqlite' (default) or 'supabase'
     DB_BACKEND: process.env.DB_BACKEND || 'sqlite',
 

@@ -28,6 +28,7 @@ import cron from 'node-cron';
 import { sendSprintStatusEmail, buildSprintStatusEmail } from './sprint_mailer.js';
 import { SPRINT_STATUSES, SPRINT_ACTIVE } from './session_store.js';
 import { probeHeadroom } from './headroom.js';
+import { slugify, writeProjectDoc, appendProjectSession, readProjectDoc } from './project_doc.js';
 import { runMasterAgent, SPAWN_TOOL } from './master_agent.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -255,14 +256,26 @@ a{color:#60a5fa;text-decoration:none}</style></head>
             const q = (req.query.q || '').toString().trim();
             const showAll = store.getSetting('show_all_sessions') === 'true';
             const isAdmin = req.user.isAdmin || req.user.is_admin;
-            // Sidebar tab: 'all' | 'mine' | 'saved' | 'pl:<playlistId>'. Each filters and
-            // paginates in SQL so a tab returns a full page of its own rows, rather than
-            // the leftovers of one page of "All".
+            // Sidebar tab: 'all' | 'mine' | 'saved' | 'pl:<playlistId>' | 'prj:<projectId>'.
+            // Each filters and paginates in SQL so a tab returns a full page of its own rows,
+            // rather than the leftovers of one page of "All".
             const rawFilter = String(req.query.filter || 'all');
             const playlistId = rawFilter.startsWith('pl:') ? rawFilter.slice(3) : null;
-            const filter = playlistId ? 'playlist' : (['mine', 'saved'].includes(rawFilter) ? rawFilter : 'all');
+            const projectId = rawFilter.startsWith('prj:') ? rawFilter.slice(4) : null;
+            const filter = playlistId ? 'playlist'
+                : projectId ? 'project'
+                    : (['mine', 'saved'].includes(rawFilter) ? rawFilter : 'all');
             let sessions, total;
-            if (filter === 'playlist') {
+            if (filter === 'project') {
+                // Projects are team-wide, so their rows are not scoped to the caller —
+                // opening a session still goes through that session's own access check.
+                sessions = q
+                    ? store.searchProjectSessions(req.user.id, projectId, q, limit, offset)
+                    : store.getProjectSessions(req.user.id, projectId, limit, offset);
+                total = q
+                    ? store.countSearchProjectSessions(projectId, q)
+                    : store.countProjectSessions(projectId);
+            } else if (filter === 'playlist') {
                 sessions = q
                     ? store.searchPlaylistSessions(req.user.id, playlistId, q, limit, offset)
                     : store.getPlaylistSessions(req.user.id, playlistId, limit, offset);
@@ -355,6 +368,111 @@ a{color:#60a5fa;text-decoration:none}</style></head>
         try {
             if (!store.removeFromPlaylist(req.user.id, req.params.id, req.params.sessionId)) return res.status(404).json({ error: 'Playlist not found' });
             res.json({ success: true });
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    // ── Projects (shared session groupings, each with a markdown context doc) ──
+    // Every signed-in user can see every project and file sessions into one; only the
+    // creator or an admin can rename or delete it.
+
+    const canManageProject = (user, project) => !!project && (project.created_by === user.id || user.isAdmin || user.is_admin);
+
+    app.get('/api/projects', requireAuth, (req, res) => {
+        try { res.json(store.getProjects()); }
+        catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    app.post('/api/projects', requireAuth, (req, res) => {
+        try {
+            const name = String(req.body?.name || '').trim().slice(0, 120);
+            const description = String(req.body?.description || '').trim().slice(0, 2000);
+            const sessionId = req.body?.sessionId ? String(req.body.sessionId) : null;
+            if (!name) return res.status(400).json({ error: 'name is required' });
+            const rootSession = sessionId ? store.getSession(sessionId) : null;
+            if (sessionId && !rootSession) return res.status(404).json({ error: 'Session not found' });
+
+            // The slug can be suffixed on collision, so the doc path is only known
+            // once the row exists.
+            let project = store.createProject({
+                name,
+                slug: slugify(name),
+                description,
+                rootSessionId: rootSession?.id || null,
+                createdBy: req.user.id,
+            });
+            if (rootSession) store.addToProject(project.id, rootSession.id, req.user.id);
+            try {
+                const docPath = writeProjectDoc(project, { rootSession, creatorName: req.user.displayName || req.user.email || '' });
+                project = store.updateProject(project.id, { docPath });
+            } catch (docErr) {
+                // A failed doc write must not lose the project — it is recreated on the
+                // next session added to it.
+                console.error(`[Projects] Could not write context doc for ${project.id}:`, docErr.message);
+            }
+            res.json(project);
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    app.put('/api/projects/:id', requireAuth, (req, res) => {
+        try {
+            const project = store.getProject(req.params.id);
+            if (!project) return res.status(404).json({ error: 'Project not found' });
+            if (!canManageProject(req.user, project)) return res.status(403).json({ error: 'Only the project creator or an admin can edit it' });
+            const changes = {};
+            if (req.body?.name !== undefined) {
+                const name = String(req.body.name).trim().slice(0, 120);
+                if (!name) return res.status(400).json({ error: 'name cannot be empty' });
+                changes.name = name;
+            }
+            if (req.body?.description !== undefined) changes.description = String(req.body.description).trim().slice(0, 2000);
+            // The slug (and therefore the doc filename) is intentionally left alone on
+            // rename, so links and paths already handed to sessions keep resolving.
+            res.json(store.updateProject(project.id, changes));
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    // Deletes the grouping only — the sessions and the context doc on disk are kept.
+    app.delete('/api/projects/:id', requireAuth, (req, res) => {
+        try {
+            const project = store.getProject(req.params.id);
+            if (!project) return res.status(404).json({ error: 'Project not found' });
+            if (!canManageProject(req.user, project)) return res.status(403).json({ error: 'Only the project creator or an admin can delete it' });
+            store.deleteProject(project.id);
+            res.json({ success: true });
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    app.post('/api/projects/:id/items', requireAuth, (req, res) => {
+        try {
+            const sessionId = String(req.body?.sessionId || '');
+            if (!sessionId) return res.status(400).json({ error: 'sessionId is required' });
+            const project = store.getProject(req.params.id);
+            if (!project) return res.status(404).json({ error: 'Project not found' });
+            const session = store.getSession(sessionId);
+            if (!session) return res.status(404).json({ error: 'Session not found' });
+            const alreadyIn = project.session_ids.includes(sessionId);
+            store.addToProject(project.id, sessionId, req.user.id);
+            if (!alreadyIn) {
+                try { appendProjectSession(project, session); }
+                catch (docErr) { console.error(`[Projects] Could not log session ${sessionId} in ${project.id}:`, docErr.message); }
+            }
+            res.json({ success: true });
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    app.delete('/api/projects/:id/items/:sessionId', requireAuth, (req, res) => {
+        try {
+            if (!store.removeFromProject(req.params.id, req.params.sessionId)) return res.status(404).json({ error: 'Project not found' });
+            res.json({ success: true });
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    // The project's context doc — the reference point shared by all its sessions.
+    app.get('/api/projects/:id/doc', requireAuth, (req, res) => {
+        try {
+            const project = store.getProject(req.params.id);
+            if (!project) return res.status(404).json({ error: 'Project not found' });
+            res.json({ ...readProjectDoc(project), name: project.name });
         } catch (err) { res.status(500).json({ error: err.message }); }
     });
 

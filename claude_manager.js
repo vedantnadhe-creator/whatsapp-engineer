@@ -9,6 +9,7 @@ import { isOllamaModel, ollamaModelName, ollamaEnv, stripLeakedOllamaEnv, safeOl
 import { isGrokModel, grokModelName, grokEnv, stripLeakedGrokEnv, safeGrokModel } from './grok_models.js';
 import { isCodexModel, codexModelName, codexEnv, safeCodexModel, buildCodexArgs } from './codex_models.js';
 import { translateCodexEvent } from './codex_events.js';
+import { projectContextBanner, appendProjectSession } from './project_doc.js';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -142,8 +143,18 @@ class ClaudeManager extends EventEmitter {
         if (opts.editAccess !== undefined) updates.edit_access = opts.editAccess ? 1 : 0;
         this.store.updateSession(sessionId, updates);
 
+        // A fork continues the parent's work, so it joins the parent's project(s), is
+        // logged in their context docs, and is pointed at them.
+        const projects = this.store.inheritProjects(parentSessionId, sessionId, ownerId);
+        for (const project of projects) {
+            // A doc that can't be written must not stop the fork from running.
+            try { appendProjectSession(project, this.store.getSession(sessionId)); }
+            catch (err) { console.error(`[Projects] Could not log fork ${sessionId} in ${project.id}:`, err.message); }
+        }
+        const projectBanner = projectContextBanner(projects);
+
         // Start a fresh session with parent context + new task (carry any attached file)
-        const forkPrompt = `${contextSummary}\n\n---\n\nNew task (forked from session ${parentSessionId}):\n${task}`;
+        const forkPrompt = `${projectBanner ? `${projectBanner}\n\n---\n\n` : ''}${contextSummary}\n\n---\n\nNew task (forked from session ${parentSessionId}):\n${task}`;
         this._spawnNew(sessionId, forkPrompt, dir, opts.imagePath || null, sessionModel);
         return { sessionId, forkedFrom: parentSessionId };
     }

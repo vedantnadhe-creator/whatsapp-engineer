@@ -24,7 +24,7 @@ function Dashboard() {
   const location = useLocation()
 
   const [page, setPage] = useState(1)
-  const [sessionFilter, setSessionFilter] = useState('all') // 'all' | 'mine' | 'saved' | 'pl:<id>'
+  const [sessionFilter, setSessionFilter] = useState('all') // 'all' | 'mine' | 'saved' | 'pl:<id>' | 'projects' | 'prj:<id>'
   const [activeSession, setActiveSession] = useState(urlSessionId ? { id: urlSessionId } : null)
   const [isNewSession, setIsNewSession] = useState(!urlSessionId)
   const [adminPanel, setAdminPanel] = useState(null)
@@ -52,7 +52,9 @@ function Dashboard() {
 
   const { stats, refresh: refreshStats } = useStats()
   const { cost, loading: costLoading, refresh: refreshCost } = useCostStats()
-  // Sidebar tab — 'all' | 'mine' | 'saved' | 'pl:<id>'. All four are resolved by the API.
+  // Sidebar tab — 'all' | 'mine' | 'saved' | 'pl:<id>' | 'prj:<id>'. All are resolved by
+  // the API. 'projects' is the browse state of the Projects tab: the sidebar shows the
+  // project list instead of sessions, and the API treats the filter as 'all'.
   const { sessions, total, totalPages, showAllSessions, refresh: refreshSessions } = useSessions(page, sessionSearch, sessionFilter)
   const { messages, refresh: refreshMessages } = useSessionMessages(activeSession?.id)
   const { models } = useModels()

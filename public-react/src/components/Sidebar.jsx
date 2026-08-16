@@ -36,9 +36,15 @@ import {
   FlaskConical,
   ListMusic,
   FolderPlus,
+  FolderGit2,
+  ChevronLeft,
 } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
-import { usePlaylists, createPlaylist, renamePlaylist, deletePlaylist, addToPlaylist, removeFromPlaylist } from '../hooks/useApi';
+import {
+  usePlaylists, createPlaylist, renamePlaylist, deletePlaylist, addToPlaylist, removeFromPlaylist,
+  useProjects, createProject, updateProject, deleteProject, addToProject, removeFromProject,
+} from '../hooks/useApi';
+import { ProjectList, ProjectFormModal, ProjectDocModal } from './Projects';
 
 const STATUS_COLORS = {
   running: 'var(--c-status-running)',
@@ -71,8 +77,9 @@ function formatTokens(n) {
   return String(n);
 }
 
-function SessionMenu({ session, onClose, onShare, onFork, onMerge, onAddToSprint, onToggleBookmark, onRename, onDelete, playlists = [], isInPlaylist, onTogglePlaylistItem }) {
+function SessionMenu({ session, onClose, onShare, onFork, onMerge, onAddToSprint, onToggleBookmark, onRename, onDelete, playlists = [], isInPlaylist, onTogglePlaylistItem, projects = [], isInProject, onToggleProjectItem, onCreateProjectFromSession }) {
   const [showPlaylists, setShowPlaylists] = useState(false);
+  const [showProjects, setShowProjects] = useState(false);
   const ref = useRef(null);
   const [copied, setCopied] = useState(false);
   const [renaming, setRenaming] = useState(false);
@@ -274,6 +281,51 @@ function SessionMenu({ session, onClose, onShare, onFork, onMerge, onAddToSprint
         {session.bookmarked ? 'Remove bookmark' : 'Bookmark'}
       </button>
 
+      {onToggleProjectItem && (
+        <>
+          <button
+            onClick={(e) => { e.stopPropagation(); setShowProjects((v) => !v); }}
+            className="flex w-full items-center gap-2 px-3 py-1.5 text-sm cursor-pointer"
+            style={itemStyle}
+            onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'var(--c-surface-2)')}
+            onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+          >
+            <FolderGit2 size={14} style={{ color: 'var(--c-text-secondary)' }} />
+            Add to project
+          </button>
+          {showProjects && (
+            <div style={{ borderTop: '1px solid var(--c-border)', borderBottom: '1px solid var(--c-border)', maxHeight: 180, overflowY: 'auto' }}>
+              {(projects || []).length === 0 && (
+                <div className="px-3 py-1.5 text-xs" style={{ color: 'var(--c-text-muted)' }}>No projects yet</div>
+              )}
+              {(projects || []).map((project) => (
+                <button
+                  key={project.id}
+                  onClick={(e) => { e.stopPropagation(); onToggleProjectItem(project, session.id); }}
+                  className="flex w-full items-center gap-2 px-3 py-1.5 text-sm cursor-pointer"
+                  style={itemStyle}
+                  onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'var(--c-surface-2)')}
+                  onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+                >
+                  <span style={{ width: 14, display: 'inline-flex' }}>{isInProject?.(project, session.id) ? <Check size={13} style={{ color: 'var(--c-accent)' }} /> : null}</span>
+                  <span className="truncate">{project.name}</span>
+                </button>
+              ))}
+            </div>
+          )}
+          <button
+            onClick={(e) => { e.stopPropagation(); onCreateProjectFromSession?.(session); onClose(); }}
+            className="flex w-full items-center gap-2 px-3 py-1.5 text-sm cursor-pointer"
+            style={{ color: 'var(--c-accent)' }}
+            onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'var(--c-surface-2)')}
+            onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+          >
+            <FolderPlus size={14} style={{ color: 'var(--c-accent)' }} />
+            New project from this
+          </button>
+        </>
+      )}
+
       {onTogglePlaylistItem && (
         <>
           <button
@@ -366,7 +418,7 @@ function SessionMenu({ session, onClose, onShare, onFork, onMerge, onAddToSprint
   );
 }
 
-function SessionItem({ session, isActive, onSelect, billingMode = 'api', onToggleBookmark, onShareSession, onForkSession, onMergeSession, onAddToSprintSession, onRenameSession, onDeleteSession, playlists = [], isInPlaylist, onTogglePlaylistItem }) {
+function SessionItem({ session, isActive, onSelect, billingMode = 'api', onToggleBookmark, onShareSession, onForkSession, onMergeSession, onAddToSprintSession, onRenameSession, onDeleteSession, playlists = [], isInPlaylist, onTogglePlaylistItem, projects = [], isInProject, onToggleProjectItem, onCreateProjectFromSession }) {
   const ownerLabel = session.owner_name || session.owner_email || null;
   const [menuOpen, setMenuOpen] = useState(false);
 
@@ -501,6 +553,10 @@ function SessionItem({ session, isActive, onSelect, billingMode = 'api', onToggl
           playlists={playlists}
           isInPlaylist={isInPlaylist}
           onTogglePlaylistItem={onTogglePlaylistItem}
+          projects={projects}
+          isInProject={isInProject}
+          onToggleProjectItem={onToggleProjectItem}
+          onCreateProjectFromSession={onCreateProjectFromSession}
         />
       )}
     </div>
@@ -629,8 +685,54 @@ function SidebarContent({
     if (sessionFilter === 'pl:' + pl.id) onSessionsChanged?.();
   };
 
-  // Every tab — All / Mine / Saved / a playlist — is filtered and paged by the API,
-  // so the list arrives ready to render.
+  // Projects — shared groupings of sessions around one piece of work. The tab has two
+  // states: browsing the projects ('projects'), and one project open ('prj:<id>'),
+  // which lists that project's sessions like any other tab.
+  const { projects, refresh: refreshProjects } = useProjects();
+  const [projectForm, setProjectForm] = useState(null); // { project } | { session } while open
+  const [docProject, setDocProject] = useState(null);
+  const browsingProjects = sessionFilter === 'projects';
+  const openProjectId = sessionFilter.startsWith('prj:') ? sessionFilter.slice(4) : null;
+  const openProject = openProjectId ? (projects || []).find(p => p.id === openProjectId) : null;
+  const canManageProject = (project) => project.created_by === user?.id || !!user?.isAdmin;
+  const isInProject = (project, sessionId) => (project.session_ids || []).includes(sessionId);
+
+  const onToggleProjectItem = async (project, sessionId) => {
+    if (isInProject(project, sessionId)) await removeFromProject(project.id, sessionId);
+    else await addToProject(project.id, sessionId);
+    await refreshProjects();
+    // Membership decides what the API returns for a project tab, so the list has to be
+    // re-fetched rather than re-filtered locally.
+    if (sessionFilter === 'prj:' + project.id) onSessionsChanged?.();
+  };
+
+  const submitProjectForm = async ({ name, description }) => {
+    if (projectForm?.project) {
+      await updateProject(projectForm.project.id, { name, description });
+      await refreshProjects();
+      return;
+    }
+    const created = await createProject({ name, description, sessionId: projectForm?.session?.id || null });
+    await refreshProjects();
+    if (created?.id) setSessionFilter('prj:' + created.id);
+  };
+
+  // The search box filters whatever the tab is showing — projects while browsing them,
+  // sessions everywhere else (where the API does the filtering).
+  const projectQuery = searchQuery.trim().toLowerCase();
+  const visibleProjects = projectQuery
+    ? (projects || []).filter(p => `${p.name} ${p.description || ''}`.toLowerCase().includes(projectQuery))
+    : (projects || []);
+
+  const doDeleteProject = async (project) => {
+    if (!window.confirm(`Delete project "${project.name}"? Its sessions and context doc are kept.`)) return;
+    await deleteProject(project.id);
+    if (sessionFilter === 'prj:' + project.id) setSessionFilter('projects');
+    refreshProjects();
+  };
+
+  // Every tab — All / Mine / Saved / a playlist / a project — is filtered and paged by
+  // the API, so the list arrives ready to render.
   const filteredSessions = sessions || [];
 
   return (
@@ -770,7 +872,7 @@ function SidebarContent({
               type="text"
               value={searchQuery}
               onChange={(e) => onSearchChange(e.target.value)}
-              placeholder="Search sessions…"
+              placeholder={browsingProjects ? 'Search projects…' : 'Search sessions…'}
               className="w-full bg-transparent outline-none px-2 py-1.5 text-sm"
               style={{ color: 'var(--c-text)' }}
             />
@@ -788,7 +890,7 @@ function SidebarContent({
         </div>
       )}
 
-      {/* Session filter: All / Mine — only shown when all sessions are visible */}
+      {/* Session filter: All / Mine / Saved / Projects */}
       {view === 'chat' && (
         <div
           className="flex px-3 py-1.5 gap-1"
@@ -796,19 +898,28 @@ function SidebarContent({
         >
           {/* Counts come from the API's total for the active tab — the inactive tabs'
               totals aren't known without extra requests, so they show no number rather
-              than a wrong one taken from the current page. */}
+              than a wrong one taken from the current page. Projects counts its projects,
+              which the sidebar already has in full. */}
           {[
             { key: 'all', label: 'All' },
             ...(showAllSessions ? [{ key: 'mine', label: 'Mine' }] : []),
             { key: 'saved', label: 'Saved' },
-          ].map(({ key, label: base }) => ({ key, label: sessionFilter === key ? `${base} (${totalSessions})` : base })).map(({ key, label }) => (
+          ].map(({ key, label }) => ({
+            key,
+            active: sessionFilter === key,
+            label: sessionFilter === key ? `${label} (${totalSessions})` : label,
+          })).concat({
+            key: 'projects',
+            active: browsingProjects || !!openProjectId,
+            label: `Projects (${(projects || []).length})`,
+          }).map(({ key, label, active }) => (
             <button
               key={key}
               onClick={() => setSessionFilter(key)}
               className="text-[10px] font-mono uppercase px-2 py-1 rounded cursor-pointer transition-colors"
               style={{
-                backgroundColor: sessionFilter === key ? 'var(--c-surface-2)' : 'transparent',
-                color: sessionFilter === key ? 'var(--c-text)' : 'var(--c-text-secondary)',
+                backgroundColor: active ? 'var(--c-surface-2)' : 'transparent',
+                color: active ? 'var(--c-text)' : 'var(--c-text-secondary)',
               }}
             >
               {label}
@@ -817,8 +928,37 @@ function SidebarContent({
         </div>
       )}
 
+      {/* One project open — its sessions are listed below */}
+      {view === 'chat' && openProjectId && (
+        <div className="flex items-center gap-1.5 px-2 py-1.5" style={{ borderBottom: '1px solid var(--c-border)' }}>
+          <button
+            onClick={() => setSessionFilter('projects')}
+            className="flex items-center gap-0.5 rounded px-1 py-0.5 text-[10px] font-mono uppercase cursor-pointer"
+            style={{ color: 'var(--c-text-secondary)' }}
+            title="Back to projects"
+          >
+            <ChevronLeft size={12} /> Projects
+          </button>
+          <FolderGit2 size={12} className="shrink-0" style={{ color: 'var(--c-accent)' }} />
+          <span className="min-w-0 flex-1 truncate text-xs font-medium" style={{ color: 'var(--c-text)' }} title={openProject?.name}>
+            {openProject?.name || openProjectId}
+          </span>
+          <span className="font-mono text-[10px]" style={{ color: 'var(--c-text-muted)' }}>{totalSessions}</span>
+          {openProject && (
+            <button
+              onClick={() => setDocProject(openProject)}
+              className="cursor-pointer p-1"
+              style={{ color: 'var(--c-text-secondary)' }}
+              title="Open the project context doc"
+            >
+              <FileText size={13} />
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Playlists — personal session groupings */}
-      {view === 'chat' && (
+      {view === 'chat' && !browsingProjects && !openProjectId && (
         <div className="flex items-center gap-1 flex-wrap px-3 py-1.5" style={{ borderBottom: '1px solid var(--c-border)' }}>
           <span className="flex items-center gap-1 text-[10px] font-mono uppercase mr-0.5" style={{ color: 'var(--c-text-muted)' }}>
             <ListMusic size={11} /> Lists
@@ -845,9 +985,19 @@ function SidebarContent({
         </div>
       )}
 
-      {/* Session list */}
+      {/* Session list — or the project browser, when the Projects tab is open */}
       <div className="flex-1 overflow-y-auto">
-        {filteredSessions.length > 0 ? (
+        {browsingProjects ? (
+          <ProjectList
+            projects={visibleProjects}
+            isSearching={!!projectQuery}
+            onOpen={(project) => setSessionFilter('prj:' + project.id)}
+            onNew={() => setProjectForm({})}
+            canManage={canManageProject}
+            onEdit={(project) => setProjectForm({ project })}
+            onDelete={doDeleteProject}
+          />
+        ) : filteredSessions.length > 0 ? (
           <>
             {filteredSessions.map((session) => (
               <SessionItem
@@ -866,6 +1016,10 @@ function SidebarContent({
                 playlists={playlists}
                 isInPlaylist={isInPlaylist}
                 onTogglePlaylistItem={onTogglePlaylistItem}
+                projects={projects}
+                isInProject={isInProject}
+                onToggleProjectItem={onToggleProjectItem}
+                onCreateProjectFromSession={(s) => setProjectForm({ session: s })}
               />
             ))}
             {hasMore && (
@@ -882,10 +1036,20 @@ function SidebarContent({
           </>
         ) : (
           <div className="px-4 py-8 text-center text-sm" style={{ color: 'var(--c-text-muted)' }}>
-            {sessionFilter === 'mine' ? 'No sessions by you yet' : sessionFilter === 'saved' ? 'No saved sessions yet' : activePlaylist ? 'This playlist is empty — add sessions from the ⋯ menu.' : 'No sessions yet'}
+            {sessionFilter === 'mine' ? 'No sessions by you yet' : sessionFilter === 'saved' ? 'No saved sessions yet' : openProjectId ? 'This project is empty — add sessions from the ⋯ menu.' : activePlaylist ? 'This playlist is empty — add sessions from the ⋯ menu.' : 'No sessions yet'}
           </div>
         )}
       </div>
+
+      {projectForm && (
+        <ProjectFormModal
+          project={projectForm.project || null}
+          sessionLabel={projectForm.session ? (projectForm.session.name || projectForm.session.task || projectForm.session.id) : null}
+          onClose={() => setProjectForm(null)}
+          onSubmit={submitProjectForm}
+        />
+      )}
+      {docProject && <ProjectDocModal project={docProject} onClose={() => setDocProject(null)} />}
 
       {/* Footer */}
       <div

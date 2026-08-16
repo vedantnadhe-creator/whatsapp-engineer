@@ -139,6 +139,30 @@ class SessionStore {
                 PRIMARY KEY (playlist_id, session_id)
             );
             CREATE INDEX IF NOT EXISTS idx_playlists_user ON playlists(user_id);
+            -- Projects: shared groupings of sessions around one piece of work (a feature,
+            -- a migration). Unlike playlists, a project is visible to the whole team and
+            -- carries a markdown context doc that every session in it can read and update.
+            CREATE TABLE IF NOT EXISTS projects (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                slug TEXT NOT NULL,
+                description TEXT DEFAULT '',
+                doc_path TEXT,
+                root_session_id TEXT,
+                created_by TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS project_items (
+                project_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                added_by TEXT,
+                added_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (project_id, session_id)
+            );
+            -- Slug is unique because it names the project's doc file on disk.
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_slug ON projects(slug);
+            CREATE INDEX IF NOT EXISTS idx_project_items_session ON project_items(session_id);
             CREATE TABLE IF NOT EXISTS sprints (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
@@ -996,6 +1020,8 @@ class SessionStore {
             this.db.prepare('DELETE FROM access_requests WHERE session_id = ?').run(sessionId);
             this.db.prepare('DELETE FROM bookmarks WHERE session_id = ?').run(sessionId);
             this.db.prepare('DELETE FROM playlist_items WHERE session_id = ?').run(sessionId);
+            this.db.prepare('DELETE FROM project_items WHERE session_id = ?').run(sessionId);
+            this.db.prepare('UPDATE projects SET root_session_id = NULL WHERE root_session_id = ?').run(sessionId);
             this.db.prepare('UPDATE issues SET session_id = NULL WHERE session_id = ?').run(sessionId);
             this.db.prepare('DELETE FROM sessions WHERE id = ?').run(sessionId);
         });
@@ -1240,6 +1266,165 @@ class SessionStore {
         if (!this._ownsPlaylist(userId, playlistId)) return false;
         this.db.prepare('DELETE FROM playlist_items WHERE playlist_id = ? AND session_id = ?').run(playlistId, sessionId);
         return true;
+    }
+
+    // ── Projects (shared session groupings) ──────────────────────
+    // Deliberately NOT scoped by user: a project is a team artifact, so every
+    // signed-in user sees every project and can file sessions into it. Reading a
+    // session's contents is still gated by the session's own access rules.
+
+    getProjects() {
+        const projects = this.db.prepare(
+            `SELECT p.*, u.display_name as creator_name
+             FROM projects p LEFT JOIN users u ON p.created_by = u.id
+             ORDER BY p.updated_at DESC`
+        ).all();
+        const items = this.db.prepare('SELECT project_id, session_id FROM project_items').all();
+        const byProject = new Map(projects.map(p => [p.id, []]));
+        for (const it of items) byProject.get(it.project_id)?.push(it.session_id);
+        return projects.map(p => ({ ...p, session_ids: byProject.get(p.id) || [] }));
+    }
+
+    getProject(id) {
+        const project = this.db.prepare(
+            `SELECT p.*, u.display_name as creator_name
+             FROM projects p LEFT JOIN users u ON p.created_by = u.id
+             WHERE p.id = ?`
+        ).get(id);
+        if (!project) return null;
+        const sessionIds = this.db.prepare('SELECT session_id FROM project_items WHERE project_id = ?').all(id).map(r => r.session_id);
+        return { ...project, session_ids: sessionIds };
+    }
+
+    // Slugs name the doc file on disk and are unique, so a clashing name gets a -2, -3… suffix.
+    _uniqueProjectSlug(base) {
+        const taken = (slug) => !!this.db.prepare('SELECT 1 FROM projects WHERE slug = ?').get(slug);
+        if (!taken(base)) return base;
+        for (let n = 2; n < 1000; n++) {
+            if (!taken(`${base}-${n}`)) return `${base}-${n}`;
+        }
+        return `${base}-${Date.now().toString(36)}`;
+    }
+
+    createProject({ name, slug, description = '', docPath = null, rootSessionId = null, createdBy = null }) {
+        const id = `PRJ-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+        const uniqueSlug = this._uniqueProjectSlug(slug);
+        this.db.prepare(
+            'INSERT INTO projects (id, name, slug, description, doc_path, root_session_id, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)'
+        ).run(id, name, uniqueSlug, description, docPath, rootSessionId, createdBy);
+        return this.getProject(id);
+    }
+
+    updateProject(id, changes = {}) {
+        const allowed = { name: 'name', description: 'description', docPath: 'doc_path', rootSessionId: 'root_session_id' };
+        const sets = [];
+        const values = [];
+        for (const [key, column] of Object.entries(allowed)) {
+            if (changes[key] !== undefined) {
+                sets.push(`${column} = ?`);
+                values.push(changes[key]);
+            }
+        }
+        if (!sets.length) return this.getProject(id);
+        sets.push('updated_at = CURRENT_TIMESTAMP');
+        this.db.prepare(`UPDATE projects SET ${sets.join(', ')} WHERE id = ?`).run(...values, id);
+        return this.getProject(id);
+    }
+
+    deleteProject(id) {
+        const tx = this.db.transaction((projectId) => {
+            this.db.prepare('DELETE FROM project_items WHERE project_id = ?').run(projectId);
+            this.db.prepare('DELETE FROM projects WHERE id = ?').run(projectId);
+        });
+        tx(id);
+    }
+
+    addToProject(projectId, sessionId, userId = null) {
+        if (!this.db.prepare('SELECT 1 FROM projects WHERE id = ?').get(projectId)) return false;
+        if (!this.db.prepare('SELECT 1 FROM sessions WHERE id = ?').get(sessionId)) return false;
+        const r = this.db.prepare(
+            'INSERT OR IGNORE INTO project_items (project_id, session_id, added_by) VALUES (?, ?, ?)'
+        ).run(projectId, sessionId, userId);
+        // Only bump updated_at when something was actually filed, so re-adding a
+        // session doesn't reshuffle the project list.
+        if (r.changes > 0) this.db.prepare('UPDATE projects SET updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(projectId);
+        return true;
+    }
+
+    removeFromProject(projectId, sessionId) {
+        if (!this.db.prepare('SELECT 1 FROM projects WHERE id = ?').get(projectId)) return false;
+        this.db.prepare('DELETE FROM project_items WHERE project_id = ? AND session_id = ?').run(projectId, sessionId);
+        return true;
+    }
+
+    // Projects a session belongs to — used to carry membership onto its forks and to
+    // point a running session at its context doc.
+    getSessionProjects(sessionId) {
+        return this.db.prepare(
+            `SELECT p.* FROM projects p
+             JOIN project_items pi ON pi.project_id = p.id
+             WHERE pi.session_id = ?
+             ORDER BY p.created_at`
+        ).all(sessionId);
+    }
+
+    // A fork continues the parent's work, so it lands in the same project(s).
+    inheritProjects(parentSessionId, childSessionId, userId = null) {
+        const projects = this.getSessionProjects(parentSessionId);
+        for (const project of projects) this.addToProject(project.id, childSessionId, userId);
+        return projects;
+    }
+
+    getProjectSessions(userId, projectId, limit = 20, offset = 0) {
+        return this.db.prepare(
+            `SELECT s.*,
+                    u.display_name as owner_name,
+                    u.email as owner_email,
+                    CASE WHEN s.owner_id = ? THEN 1 ELSE 0 END as is_mine,
+                    CASE WHEN sc.user_id IS NOT NULL THEN 1 ELSE 0 END as has_access
+             FROM sessions s
+             JOIN project_items pi ON pi.session_id = s.id AND pi.project_id = ?
+             LEFT JOIN users u ON s.owner_id = u.id
+             LEFT JOIN session_collaborators sc ON sc.session_id = s.id AND sc.user_id = ?
+             ORDER BY s.updated_at DESC LIMIT ? OFFSET ?`
+        ).all(userId, projectId, userId, limit, offset);
+    }
+
+    countProjectSessions(projectId) {
+        return this.db.prepare(
+            `SELECT COUNT(*) as count FROM sessions s
+             JOIN project_items pi ON pi.session_id = s.id AND pi.project_id = ?`
+        ).get(projectId).count;
+    }
+
+    searchProjectSessions(userId, projectId, q, limit = 20, offset = 0) {
+        const pattern = this._searchPattern(q);
+        return this.db.prepare(
+            `SELECT s.*,
+                    u.display_name as owner_name,
+                    u.email as owner_email,
+                    CASE WHEN s.owner_id = ? THEN 1 ELSE 0 END as is_mine,
+                    CASE WHEN sc.user_id IS NOT NULL THEN 1 ELSE 0 END as has_access
+             FROM sessions s
+             JOIN project_items pi ON pi.session_id = s.id AND pi.project_id = ?
+             LEFT JOIN users u ON s.owner_id = u.id
+             LEFT JOIN session_collaborators sc ON sc.session_id = s.id AND sc.user_id = ?
+             WHERE s.name LIKE ? ESCAPE '\\'
+                OR s.task LIKE ? ESCAPE '\\'
+                OR s.id LIKE ? ESCAPE '\\'
+             ORDER BY s.updated_at DESC LIMIT ? OFFSET ?`
+        ).all(userId, projectId, userId, pattern, pattern, pattern, limit, offset);
+    }
+
+    countSearchProjectSessions(projectId, q) {
+        const pattern = this._searchPattern(q);
+        return this.db.prepare(
+            `SELECT COUNT(*) as count FROM sessions s
+             JOIN project_items pi ON pi.session_id = s.id AND pi.project_id = ?
+             WHERE s.name LIKE ? ESCAPE '\\'
+                OR s.task LIKE ? ESCAPE '\\'
+                OR s.id LIKE ? ESCAPE '\\'`
+        ).get(projectId, pattern, pattern, pattern).count;
     }
 
     // ── Sprints ──────────────────────────────────────────────────

@@ -462,6 +462,30 @@ export async function removeFromPlaylist(id, sessionId) {
   return apiFetch(`/api/playlists/${id}/items/${sessionId}`, { method: 'DELETE' });
 }
 
+// ── Projects (shared session groupings with a markdown context doc) ──
+export function useProjects() {
+  const { data, loading, error, refresh } = useGet('/api/projects');
+  return { projects: data ?? [], loading, error, refresh };
+}
+export async function createProject({ name, description = '', sessionId = null }) {
+  return apiFetch('/api/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, description, sessionId }) });
+}
+export async function updateProject(id, changes) {
+  return apiFetch(`/api/projects/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(changes) });
+}
+export async function deleteProject(id) {
+  return apiFetch(`/api/projects/${id}`, { method: 'DELETE' });
+}
+export async function addToProject(id, sessionId) {
+  return apiFetch(`/api/projects/${id}/items`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId }) });
+}
+export async function removeFromProject(id, sessionId) {
+  return apiFetch(`/api/projects/${id}/items/${sessionId}`, { method: 'DELETE' });
+}
+export async function getProjectDoc(id) {
+  return apiFetch(`/api/projects/${id}/doc`);
+}
+
 export async function markSessionDone(sessionId) {
   return apiFetch(`/api/sessions/${sessionId}/mark-done`, { method: 'POST' });
 }
