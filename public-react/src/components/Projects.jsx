@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { X, FolderGit2, FileText, Trash2, Plus, Loader2, Pencil } from 'lucide-react';
-import { getProjectDoc } from '../hooks/useApi';
+import { getProjectDoc, addProjectNote } from '../hooks/useApi';
 
 // Projects — shared, team-visible groupings of sessions around one piece of work.
 // A project is seeded from a session (its "root"), every fork of a session in it
@@ -228,6 +228,9 @@ export function ProjectFormModal({ project = null, sessionLabel = null, onClose,
 export function ProjectDocModal({ project, onClose }) {
   const [doc, setDoc] = useState(null);
   const [error, setError] = useState(null);
+  const [note, setNote] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -235,7 +238,26 @@ export function ProjectDocModal({ project, onClose }) {
       .then((data) => { if (!cancelled) setDoc(data); })
       .catch((err) => { if (!cancelled) setError(err.message || 'Could not read the project doc'); });
     return () => { cancelled = true; };
-  }, [project.id]);
+  }, [project.id, reloadKey]);
+
+  // Deploys, PRDs, sprint moves and bugs land in the log on their own; this is for
+  // everything the dashboard cannot observe.
+  const submitNote = async (e) => {
+    e.preventDefault();
+    const text = note.trim();
+    if (!text || saving) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await addProjectNote(project.id, text);
+      setNote('');
+      setReloadKey((k) => k + 1);
+    } catch (err) {
+      setError(err.message || 'Could not add the note');
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
     <div
@@ -271,6 +293,26 @@ export function ProjectDocModal({ project, onClose }) {
             </pre>
           )}
         </div>
+        <form onSubmit={submitNote} className="flex items-center gap-2 px-5 py-3" style={{ borderTop: `1px solid ${colors.border}` }}>
+          <input
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            maxLength={400}
+            placeholder="Add an update — decisions, gotchas, anything not logged automatically"
+            className="flex-1 rounded-lg px-3 py-2 text-[13px] outline-none"
+            style={{ backgroundColor: colors.bg, border: `1px solid ${colors.border}`, color: colors.text }}
+            aria-label="Add a project update"
+          />
+          <button
+            type="submit"
+            disabled={saving || !note.trim()}
+            className="flex cursor-pointer items-center gap-1.5 rounded-lg px-3.5 py-2 text-[13px] font-medium text-white disabled:opacity-40"
+            style={{ backgroundColor: colors.accent }}
+          >
+            {saving && <Loader2 size={13} className="animate-spin" />}
+            Add
+          </button>
+        </form>
       </div>
     </div>
   );

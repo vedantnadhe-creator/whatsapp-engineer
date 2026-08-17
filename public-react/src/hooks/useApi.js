@@ -485,6 +485,9 @@ export async function removeFromProject(id, sessionId) {
 export async function getProjectDoc(id) {
   return apiFetch(`/api/projects/${id}/doc`);
 }
+export async function addProjectNote(id, text) {
+  return apiFetch(`/api/projects/${id}/notes`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) });
+}
 
 export async function markSessionDone(sessionId) {
   return apiFetch(`/api/sessions/${sessionId}/mark-done`, { method: 'POST' });

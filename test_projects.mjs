@@ -10,7 +10,8 @@ process.env.DB_PATH = path.join(tmp, 'test.db');
 process.env.PROJECTS_DIR = path.join(tmp, 'docs');
 
 const { default: SessionStore } = await import('./session_store.js');
-const { slugify, writeProjectDoc, appendProjectSession, readProjectDoc, projectContextBanner } = await import('./project_doc.js');
+const { slugify, writeProjectDoc, syncProjectSessions, appendProjectUpdate, readProjectDoc, projectContextBanner } = await import('./project_doc.js');
+const { logSessionEvent, logIssueEvent, extractMarkerUpdates, logMarkersFromOutput } = await import('./project_events.js');
 
 let failed = 0;
 const check = (label, actual, expected) => {
@@ -56,20 +57,46 @@ check('fork is now in the project', store.getProject(project.id).session_ids.sor
 check('sessions know their projects', store.getSessionProjects('S-fork').map(p => p.id), [project.id]);
 check('the banner points the fork at the doc', projectContextBanner(inherited).includes(inherited[0].slug), true);
 
-// The doc is the project's reference point — it must log every session.
+// The doc is the project's reference point — roster from the DB, events appended.
 const docPath = writeProjectDoc(store.getProject(project.id), { rootSession: store.getSession('S-root'), creatorName: 'Alex' });
 store.updateProject(project.id, { docPath });
-appendProjectSession(store.getProject(project.id), store.getSession('S-fork'));
-const doc = readProjectDoc(store.getProject(project.id));
-check('doc lives under PROJECTS_DIR', doc.path.startsWith(process.env.PROJECTS_DIR), true);
-check('doc logs the root session', doc.content.includes('S-root'), true);
-check('doc logs the fork', doc.content.includes('S-fork'), true);
-check('doc carries the description', doc.content.includes('ES out, PG in.'), true);
+const readDoc = () => readProjectDoc(store.getProject(project.id)).content;
+check('doc lives under PROJECTS_DIR', docPath.startsWith(process.env.PROJECTS_DIR), true);
+check('doc logs the root session', readDoc().includes('S-root'), true);
+check('doc carries the description', readDoc().includes('ES out, PG in.'), true);
+check('doc explains the marker to the agent', projectContextBanner([store.getProject(project.id)]).includes('[[PROJECT:'), true);
+
+// The roster is regenerated from the DB, so it can never drift.
+logSessionEvent(store, 'S-fork', 'Forked `S-fork` from `S-root` — Backfill the index', { roster: true });
+check('roster picks up the fork', readDoc().includes('S-fork'), true);
+check('roster shows session status', readDoc().includes('_(running)_'), true);
+check('the fork event is logged', readDoc().includes('Forked `S-fork`'), true);
+check('roster stays above the log', readDoc().indexOf('## Sessions') < readDoc().indexOf('## Updates'), true);
+
+// Repeated syncs must not duplicate the roster or eat the log.
+syncProjectSessions(store.getProject(project.id), [store.getSession('S-root'), store.getSession('S-fork')]);
+check('re-syncing does not duplicate a session', readDoc().split('`S-fork`').length - 1 >= 1, true);
+check('re-syncing keeps one Sessions heading', readDoc().split('## Sessions').length - 1, 1);
+check('re-syncing keeps the log', readDoc().includes('Forked `S-fork`'), true);
+
+// The same marker arrives on both assistant_message and result — log it once.
+check('marker vocabulary: UAT', extractMarkerUpdates('shipped [[UAT_DEPLOYED]]'), ['🚀 Deployed to UAT']);
+check('marker vocabulary: free note', extractMarkerUpdates('[[PROJECT: deployed to DEV]]'), ['deployed to DEV']);
+check('marker vocabulary: none', extractMarkerUpdates('just chatting'), []);
+logMarkersFromOutput(store, 'S-root', 'done [[PROJECT: deployed to DEV]]');
+logMarkersFromOutput(store, 'S-root', 'done [[PROJECT: deployed to DEV]]');
+check('a repeated marker is logged once', readDoc().split('deployed to DEV').length - 1, 1);
+
+// Sprint / QA events reach the project through the issue's sessions.
+const issue = store.createIssue({ title: 'Search cutover', createdBy: 'user-a', sessionId: 'S-root' });
+check('an issue event lands in the project', logIssueEvent(store, store.getIssue(issue.id), '📋 "Search cutover" → Dev Completed'), 1);
+check('…and is written to the doc', readDoc().includes('Dev Completed'), true);
+check('an issue with no project session logs nowhere', logIssueEvent(store, { id: 'X', session_id: 'S-other' }, 'ignored'), 0);
 
 // A deleted doc is rebuilt rather than silently skipped.
-fs.unlinkSync(doc.path);
-appendProjectSession(store.getProject(project.id), store.getSession('S-other'));
-check('a missing doc is recreated on the next append', readProjectDoc(store.getProject(project.id)).content.includes('S-other'), true);
+fs.unlinkSync(docPath);
+appendProjectUpdate(store.getProject(project.id), 'after the doc went missing');
+check('a missing doc is recreated on the next append', readDoc().includes('after the doc went missing'), true);
 
 // Deleting a session must not leave it filed in a project.
 store.deleteSession('S-fork');

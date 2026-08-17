@@ -28,7 +28,8 @@ import cron from 'node-cron';
 import { sendSprintStatusEmail, buildSprintStatusEmail } from './sprint_mailer.js';
 import { SPRINT_STATUSES, SPRINT_ACTIVE } from './session_store.js';
 import { probeHeadroom } from './headroom.js';
-import { slugify, writeProjectDoc, appendProjectSession, readProjectDoc } from './project_doc.js';
+import { slugify, writeProjectDoc, readProjectDoc } from './project_doc.js';
+import { logSessionEvent, logProjectEvent, logIssueEvent, logMarkersFromOutput, syncProjectRoster } from './project_events.js';
 import { runMasterAgent, SPAWN_TOOL } from './master_agent.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -453,8 +454,8 @@ a{color:#60a5fa;text-decoration:none}</style></head>
             const alreadyIn = project.session_ids.includes(sessionId);
             store.addToProject(project.id, sessionId, req.user.id);
             if (!alreadyIn) {
-                try { appendProjectSession(project, session); }
-                catch (docErr) { console.error(`[Projects] Could not log session ${sessionId} in ${project.id}:`, docErr.message); }
+                const who = req.user.displayName || req.user.email || 'someone';
+                logProjectEvent(store, project.id, `Session \`${sessionId}\` added by ${who} — ${String(session.name || session.task || '').replace(/\s+/g, ' ').slice(0, 140)}`, { roster: true });
             }
             res.json({ success: true });
         } catch (err) { res.status(500).json({ error: err.message }); }
@@ -463,6 +464,22 @@ a{color:#60a5fa;text-decoration:none}</style></head>
     app.delete('/api/projects/:id/items/:sessionId', requireAuth, (req, res) => {
         try {
             if (!store.removeFromProject(req.params.id, req.params.sessionId)) return res.status(404).json({ error: 'Project not found' });
+            const who = req.user.displayName || req.user.email || 'someone';
+            logProjectEvent(store, req.params.id, `Session \`${req.params.sessionId}\` removed by ${who}`, { roster: true });
+            res.json({ success: true });
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    // A note written by a person, from the doc viewer — the manual counterpart to
+    // the automatic triggers.
+    app.post('/api/projects/:id/notes', requireAuth, (req, res) => {
+        try {
+            const text = String(req.body?.text || '').trim().slice(0, 400);
+            if (!text) return res.status(400).json({ error: 'text is required' });
+            const who = req.user.displayName || req.user.email || 'someone';
+            if (!logProjectEvent(store, req.params.id, `${text} — _${who}_`)) {
+                return res.status(404).json({ error: 'Project not found' });
+            }
             res.json({ success: true });
         } catch (err) { res.status(500).json({ error: err.message }); }
     });
@@ -2134,6 +2151,13 @@ The user may ask follow-up questions about the changelog — answer based on the
             if (!issue) return res.status(404).json({ error: 'Issue not found' });
             wsBroadcast('issue_updated', { issue });
 
+            // Project doc: sprint moves and PRDs are milestones the next session needs.
+            if (updates.dev_status !== undefined) {
+                const label = { todo: 'To Do', in_progress: 'In Progress', dev_completed: 'Dev Completed', done: 'Done' }[updates.dev_status] || updates.dev_status;
+                logIssueEvent(store, issue, `📋 "${issue.title}" → ${label}`);
+            }
+            if (updates.prd_url) logIssueEvent(store, issue, `📄 PRD for "${issue.title}": ${updates.prd_url}`);
+
             // Notify assignee if assignment changed
             if (updates.assigned_to && updates.assigned_to !== oldIssue?.assigned_to) {
                 const assignee = store.getUserById(updates.assigned_to);
@@ -2248,7 +2272,9 @@ The user may ask follow-up questions about the changelog — answer based on the
             const { title, description, severity, attachments, assignedTo, qaOwner } = req.body;
             if (!title) return res.status(400).json({ error: 'title is required' });
             const bug = store.createBug({ issueId: req.params.id, title, description: description || '', severity: severity === 'critical' ? 'critical' : 'normal', createdBy: req.user.id, attachments: Array.isArray(attachments) ? attachments : [], assignedTo: assignedTo || null, qaOwner: qaOwner || null });
-            wsBroadcast('issue_updated', { issue: store.getIssue(req.params.id) });
+            const issue = store.getIssue(req.params.id);
+            wsBroadcast('issue_updated', { issue });
+            logIssueEvent(store, issue, `🐞 Bug${bug.severity === 'critical' ? ' (critical)' : ''} filed on "${issue?.title || req.params.id}": ${title}`);
             res.json(bug);
         } catch (err) { res.status(500).json({ error: err.message }); }
     });
@@ -2286,7 +2312,11 @@ The user may ask follow-up questions about the changelog — answer based on the
         try {
             const bug = store.updateBug(req.params.id, req.body || {});
             if (!bug) return res.status(404).json({ error: 'Bug not found' });
-            wsBroadcast('issue_updated', { issue: store.getIssue(bug.issue_id) });
+            const issue = store.getIssue(bug.issue_id);
+            wsBroadcast('issue_updated', { issue });
+            if (req.body?.status && req.body.status !== 'open') {
+                logIssueEvent(store, issue, `✅ Bug ${req.body.status} on "${issue?.title || bug.issue_id}": ${bug.title}`);
+            }
             res.json(bug);
         } catch (err) { res.status(500).json({ error: err.message }); }
     });
@@ -3021,15 +3051,26 @@ Steps:
 
         executionEngine.on('assistant_message', ({ sessionId, content }) => {
             checkFeatureDone(sessionId, content);
+            // Project doc: a UAT deploy or a [[PROJECT: …]] note from the session.
+            logMarkersFromOutput(store, sessionId, content);
             wsBroadcast('assistant_message', { sessionId, content });
         });
 
         executionEngine.on('result', ({ sessionId, content, costUsd }) => {
             checkFeatureDone(sessionId, content);
+            logMarkersFromOutput(store, sessionId, content);
             wsBroadcast('result', { sessionId, content, costUsd });
         });
 
         executionEngine.on('session_end', ({ sessionId, code, status, costUsd }) => {
+            // Every turn ends a session process, so routine completions would flood the
+            // project doc — the roster carries live status instead. Only failures, which
+            // the next person in the project needs to know about, are logged.
+            if (status === 'failed') {
+                logSessionEvent(store, sessionId, `⚠️ Session \`${sessionId}\` failed (exit ${code})`, { roster: true });
+            } else {
+                for (const project of store.getSessionProjects(sessionId)) syncProjectRoster(store, project);
+            }
             wsBroadcast('session_end', { sessionId, code, status, costUsd });
         });
 
