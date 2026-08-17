@@ -28,7 +28,7 @@ import cron from 'node-cron';
 import { sendSprintStatusEmail, buildSprintStatusEmail } from './sprint_mailer.js';
 import { SPRINT_STATUSES, SPRINT_ACTIVE } from './session_store.js';
 import { probeHeadroom } from './headroom.js';
-import { slugify, writeProjectDoc, readProjectDoc } from './project_doc.js';
+import { slugify, writeProjectDoc, readProjectDoc, projectContextBanner } from './project_doc.js';
 import { logSessionEvent, logProjectEvent, logIssueEvent, logMarkersFromOutput, syncProjectRoster } from './project_events.js';
 import { runMasterAgent, SPAWN_TOOL } from './master_agent.js';
 
@@ -806,8 +806,12 @@ a{color:#60a5fa;text-decoration:none}</style></head>
 
     app.post('/api/sessions/start', requireAuth, async (req, res) => {
         try {
-            const { text, model, sprintId, type, labels, name, mode, repo, parentIssueId } = req.body;
+            const { text, model, sprintId, type, labels, name, mode, repo, parentIssueId, projectId } = req.body;
             if (!text) return res.status(400).json({ error: 'text is required' });
+            // A task can be started straight into a project — no fork, no existing session
+            // to seed it from. It joins on creation and is pointed at the context doc.
+            const project = projectId ? store.getProject(String(projectId)) : null;
+            if (projectId && !project) return res.status(404).json({ error: 'Project not found' });
             // Mode is role-driven: design → designs repo (or a chosen frontend repo),
             // tester → tester persona/gating, else developer.
             const sessionMode = (mode === 'design' || mode === 'tester') ? mode : 'developer';
@@ -837,7 +841,7 @@ a{color:#60a5fa;text-decoration:none}</style></head>
             const startInstruction = /^(start fresh|new task|ignore previous)/i.test(text) ? text : `[start fresh] ${text}`;
             const tokens = Array.isArray(req.body.imageTokens) ? req.body.imageTokens : (req.body.imageToken ? [req.body.imageToken] : []);
             const imagePath = tokens.map(t => { const p = pendingImages.get(t); pendingImages.delete(t); return p; }).filter(Boolean)[0] || null;
-            const result = await messageHandler({ isWeb: true, phone: String(phone), text: startInstruction, pushName: req.user.displayName || 'Dashboard', imagePath, ownerId: req.user.id, model: resolveModelForRole(req.user.role, model || 'claude-opus-4-8'), workingDir: sessionWorkingDir, mode: sessionMode, editAccess: testerEditAccess });
+            const result = await messageHandler({ isWeb: true, phone: String(phone), text: startInstruction, pushName: req.user.displayName || 'Dashboard', imagePath, ownerId: req.user.id, model: resolveModelForRole(req.user.role, model || 'claude-opus-4-8'), workingDir: sessionWorkingDir, mode: sessionMode, editAccess: testerEditAccess, promptPrefix: project ? projectContextBanner([project]) : null });
             // Attach sprint + type + tags + name and auto-create a session task issue
             if (result?.sessionId) {
                 const sessionName = (typeof name === 'string' && name.trim())
@@ -851,6 +855,11 @@ a{color:#60a5fa;text-decoration:none}</style></head>
                     mode: sessionMode,
                     ...(sessionMode === 'tester' ? { edit_access: testerEditAccess ? 1 : 0 } : {}),
                 });
+                if (project) {
+                    store.addToProject(project.id, result.sessionId, req.user.id);
+                    const who = req.user.displayName || req.user.email || 'someone';
+                    logProjectEvent(store, project.id, `Session \`${result.sessionId}\` started in the project by ${who} — ${sessionName}`, { roster: true });
+                }
                 const cleanTask = text.replace(/^\[start fresh\]\s*/i, '').trim();
                 const issue = store.createIssue({
                     title: cleanTask,

@@ -649,6 +649,7 @@ function SidebarContent({
   onSessionFilterChange,
   totalSessions = 0,
   onSessionsChanged,
+  onNewProjectTask,
 }) {
   const [adminOpen, setAdminOpen] = useState(false);
   const setSessionFilter = onSessionFilterChange || (() => {});
@@ -695,6 +696,9 @@ function SidebarContent({
   const openProjectId = sessionFilter.startsWith('prj:') ? sessionFilter.slice(4) : null;
   const openProject = openProjectId ? (projects || []).find(p => p.id === openProjectId) : null;
   const canManageProject = (project) => project.created_by === user?.id || !!user?.isAdmin;
+  // A task started inside the project lands in the session list before the project rows
+  // know about it, so the count on the cards would read one short until a remount.
+  useEffect(() => { if (openProjectId) refreshProjects(); }, [openProjectId, totalSessions, refreshProjects]);
   const isInProject = (project, sessionId) => (project.session_ids || []).includes(sessionId);
 
   const onToggleProjectItem = async (project, sessionId) => {
@@ -945,14 +949,24 @@ function SidebarContent({
           </span>
           <span className="font-mono text-[10px]" style={{ color: 'var(--c-text-muted)' }}>{totalSessions}</span>
           {openProject && (
-            <button
-              onClick={() => setDocProject(openProject)}
-              className="cursor-pointer p-1"
-              style={{ color: 'var(--c-text-secondary)' }}
-              title="Open the project context doc"
-            >
-              <FileText size={13} />
-            </button>
+            <>
+              <button
+                onClick={() => onNewProjectTask?.(openProject)}
+                className="flex cursor-pointer items-center gap-0.5 rounded px-1 py-0.5 text-[10px] font-mono uppercase"
+                style={{ color: 'var(--c-accent)' }}
+                title="Start a new task in this project"
+              >
+                <Plus size={12} /> Task
+              </button>
+              <button
+                onClick={() => setDocProject(openProject)}
+                className="cursor-pointer p-1"
+                style={{ color: 'var(--c-text-secondary)' }}
+                title="Open the project context doc"
+              >
+                <FileText size={13} />
+              </button>
+            </>
           )}
         </div>
       )}
@@ -1036,7 +1050,7 @@ function SidebarContent({
           </>
         ) : (
           <div className="px-4 py-8 text-center text-sm" style={{ color: 'var(--c-text-muted)' }}>
-            {sessionFilter === 'mine' ? 'No sessions by you yet' : sessionFilter === 'saved' ? 'No saved sessions yet' : openProjectId ? 'This project is empty — add sessions from the ⋯ menu.' : activePlaylist ? 'This playlist is empty — add sessions from the ⋯ menu.' : 'No sessions yet'}
+            {sessionFilter === 'mine' ? 'No sessions by you yet' : sessionFilter === 'saved' ? 'No saved sessions yet' : openProjectId ? 'This project is empty — start one with “+ Task” above, or add an existing session from its ⋯ menu.' : activePlaylist ? 'This playlist is empty — add sessions from the ⋯ menu.' : 'No sessions yet'}
           </div>
         )}
       </div>

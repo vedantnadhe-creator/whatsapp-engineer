@@ -41,6 +41,9 @@ function Dashboard() {
   const [forkTriggerId, setForkTriggerId] = useState(null)
   const [addToSprintSession, setAddToSprintSession] = useState(null)
   const [sessionSearch, setSessionSearch] = useState('')
+  // Set from the Projects tab's "New task" button — the next session started from the
+  // composer joins this project instead of being forked out of an existing one.
+  const [newSessionProject, setNewSessionProject] = useState(null)
   // Work mode is driven by the user's ROLE (set in Settings → Users), not a manual toggle:
   // designer → design, tester → tester, everyone else → developer.
   const [workMode, setWorkMode] = useState('developer')
@@ -198,6 +201,7 @@ function Dashboard() {
   const handleSelectSession = useCallback((session) => {
     setActiveSession(session)
     setIsNewSession(false)
+    setNewSessionProject(null)
     setSelectedModel(session.model || 'claude-opus-4-8')
     if (session?.id) navigate(`/s/${session.id}`)
   }, [navigate])
@@ -205,12 +209,20 @@ function Dashboard() {
   const handleNewSession = useCallback(() => {
     setActiveSession(null)
     setIsNewSession(true)
+    setNewSessionProject(null)
     setSelectedModel('claude-opus-4-8')
     navigate('/')
   }, [navigate])
 
+  // "New task" inside an open project: the same composer, bound to that project.
+  const handleNewProjectTask = useCallback((project) => {
+    handleNewSession()
+    setNewSessionProject(project)
+  }, [handleNewSession])
+
   const _startSession = useCallback(async (text, model, imageTokens = [], sprintId = null, type = null, labels = [], name = null, repo = null, parentIssueId = null) => {
-    const result = await startSession(text, model, imageTokens, sprintId, type, labels, name, workMode, repo, parentIssueId)
+    const projectId = newSessionProject?.id || null
+    const result = await startSession(text, model, imageTokens, sprintId, type, labels, name, workMode, repo, parentIssueId, projectId)
     if (result.sessionId) {
       const newSession = {
         id: result.sessionId,
@@ -226,6 +238,7 @@ function Dashboard() {
       }
       setActiveSession(newSession)
       setIsNewSession(false)
+      setNewSessionProject(null)
       setSelectedModel(model || 'claude-opus-4-8')
       navigate(`/s/${result.sessionId}`)
       setTimeout(() => {
@@ -234,7 +247,7 @@ function Dashboard() {
         refreshMessages()
       }, 1500)
     }
-  }, [navigate, workMode])
+  }, [navigate, workMode, newSessionProject])
   const [handleStartSession, startingSession] = useAction(_startSession)
 
   const _sendMessage = useCallback(async (text, model, imageTokens = []) => {
@@ -415,6 +428,7 @@ function Dashboard() {
         activeSessionId={activeSession?.id}
         onSelectSession={(s) => { handleSelectSession(s); setView('chat') }}
         onNewSession={() => { handleNewSession(); setView('chat') }}
+        onNewProjectTask={(project) => { handleNewProjectTask(project); setView('chat') }}
         stats={stats}
         user={user}
         onLogout={logout}
@@ -561,6 +575,8 @@ function Dashboard() {
             }}
             isNewSession={isNewSession}
             onStartSession={handleStartSession}
+            newSessionProject={newSessionProject}
+            onClearNewSessionProject={() => setNewSessionProject(null)}
             user={user}
             onTest={handleTestSession}
             onTestFork={handleTestFork}

@@ -262,7 +262,7 @@ claude.on('session_error', async ({ sessionId, error }) => {
 
 // ── WhatsApp message handler ──────────────────────────────────
 
-export async function handleIncomingMessage({ isWeb: explicitIsWeb, phone, text, pushName, groupJid, chatJid = null, imagePath = null, ownerId = null, model = null, workingDir = null, mode = null, editAccess = undefined }) {
+export async function handleIncomingMessage({ isWeb: explicitIsWeb, phone, text, pushName, groupJid, chatJid = null, imagePath = null, ownerId = null, model = null, workingDir = null, mode = null, editAccess = undefined, promptPrefix = null }) {
     try {
         // Evolution only emits sprint messages here — DMs from allowed teammates, plus
         // @mentions in groups when those are enabled. They all feed the one sprint board
@@ -347,7 +347,7 @@ export async function handleIncomingMessage({ isWeb: explicitIsWeb, phone, text,
                 // Close any existing thread before starting fresh
                 if (currentThread) store.closeThread(threadKey);
                 const task = intent.task || text;
-                const { sessionId } = await claude.startSession(threadKey, task, workingDir, imagePath, ownerId, model || 'claude-opus-4-8', { mode, editAccess });
+                const { sessionId } = await claude.startSession(threadKey, task, workingDir, imagePath, ownerId, model || 'claude-opus-4-8', { mode, editAccess, promptPrefix });
 
                 if (isWeb) {
                     webMutedSessions.add(sessionId);

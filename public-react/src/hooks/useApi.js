@@ -333,11 +333,11 @@ export function useAccessRequests() {
 // Standalone API helpers (not hooks)
 // ---------------------------------------------------------------------------
 
-export async function startSession(text, model, imageTokens = [], sprintId = null, type = null, labels = [], name = null, mode = 'developer', repo = null, parentIssueId = null) {
+export async function startSession(text, model, imageTokens = [], sprintId = null, type = null, labels = [], name = null, mode = 'developer', repo = null, parentIssueId = null, projectId = null) {
   return apiFetch('/api/sessions/start', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text, model, imageTokens, sprintId, type, labels, name, mode, repo, parentIssueId }),
+    body: JSON.stringify({ text, model, imageTokens, sprintId, type, labels, name, mode, repo, parentIssueId, projectId }),
   });
 }
 

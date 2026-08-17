@@ -11,7 +11,7 @@ process.env.PROJECTS_DIR = path.join(tmp, 'docs');
 
 const { default: SessionStore } = await import('./session_store.js');
 const { slugify, writeProjectDoc, syncProjectSessions, appendProjectUpdate, readProjectDoc, projectContextBanner } = await import('./project_doc.js');
-const { logSessionEvent, logIssueEvent, extractMarkerUpdates, logMarkersFromOutput } = await import('./project_events.js');
+const { logSessionEvent, logProjectEvent, logIssueEvent, extractMarkerUpdates, logMarkersFromOutput } = await import('./project_events.js');
 
 let failed = 0;
 const check = (label, actual, expected) => {
@@ -87,6 +87,16 @@ logMarkersFromOutput(store, 'S-root', 'done [[PROJECT: deployed to DEV]]');
 logMarkersFromOutput(store, 'S-root', 'done [[PROJECT: deployed to DEV]]');
 check('a repeated marker is logged once', readDoc().split('deployed to DEV').length - 1, 1);
 
+// A task started from inside the project — no parent to fork from, so membership,
+// roster and banner all have to come from the project itself.
+store.createSession('S-new', '+100', 'Drop the ES client', null, '/home/ubuntu/search', 'user-a');
+store.addToProject(project.id, 'S-new', 'user-a');
+logProjectEvent(store, project.id, 'Session `S-new` started in the project by Alex — Drop the ES client', { roster: true });
+check('a task started in the project joins it', store.getSessionProjects('S-new').map(p => p.id), [project.id]);
+check('…appears in the roster', readDoc().includes('S-new'), true);
+check('…and is logged as started, not forked', readDoc().includes('started in the project'), true);
+check('the banner it is spawned with names the doc', projectContextBanner(store.getSessionProjects('S-new')).includes(docPath), true);
+
 // Sprint / QA events reach the project through the issue's sessions.
 const issue = store.createIssue({ title: 'Search cutover', createdBy: 'user-a', sessionId: 'S-root' });
 check('an issue event lands in the project', logIssueEvent(store, store.getIssue(issue.id), '📋 "Search cutover" → Dev Completed'), 1);
@@ -100,7 +110,7 @@ check('a missing doc is recreated on the next append', readDoc().includes('after
 
 // Deleting a session must not leave it filed in a project.
 store.deleteSession('S-fork');
-check('deleted sessions leave the project', store.getProject(project.id).session_ids, ['S-root']);
+check('deleted sessions leave the project', store.getProject(project.id).session_ids.sort(), ['S-new', 'S-root']);
 store.deleteSession('S-root');
 check('deleting the root session clears the pointer', store.getProject(project.id).root_session_id, null);
 

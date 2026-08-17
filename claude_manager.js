@@ -111,7 +111,11 @@ class ClaudeManager extends EventEmitter {
         if (opts.mode) updates.mode = opts.mode;
         if (opts.editAccess !== undefined) updates.edit_access = opts.editAccess ? 1 : 0;
         if (Object.keys(updates).length) this.store.updateSession(sessionId, updates);
-        this._spawnNew(sessionId, task, dir, imagePath, model);
+        // `promptPrefix` reaches the agent only — e.g. the project banner pointing a
+        // task started inside a project at its context doc. The stored user message
+        // stays the task the person actually typed.
+        const prompt = opts.promptPrefix ? `${opts.promptPrefix}\n\n---\n\n${task}` : task;
+        this._spawnNew(sessionId, prompt, dir, imagePath, model);
         return { sessionId };
     }
 

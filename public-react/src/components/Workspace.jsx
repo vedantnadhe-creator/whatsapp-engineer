@@ -22,6 +22,7 @@ import {
   Pencil,
   FlaskConical,
   AlertTriangle,
+  FolderGit2,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -587,6 +588,8 @@ export default function Workspace({
   onForkTriggerConsumed,
   onTestFork,
   testForking = false,
+  newSessionProject = null,
+  onClearNewSessionProject,
 }) {
   const { user: authUser } = useAuth();
   const uid = authUser?.id || '';
@@ -1056,6 +1059,29 @@ export default function Workspace({
         <p className="text-sm mb-6" style={{ color: colors.textSecondary }}>
           Start a new session to begin working with OliBot.
         </p>
+
+        {/* Bound to a project — the session joins it on start and is pointed at its
+            context doc. Removable, so the composer is never a one-way door. */}
+        {newSessionProject && (
+          <div
+            className="mb-4 flex items-center gap-2 rounded-lg px-3 py-2 text-left"
+            style={{ backgroundColor: colors.surface2, border: `1px solid ${colors.border}` }}
+          >
+            <FolderGit2 size={13} className="shrink-0" style={{ color: colors.accent }} />
+            <span className="min-w-0 flex-1 truncate text-[12px]" style={{ color: colors.text }}>
+              New task in <strong>{newSessionProject.name}</strong> — it joins the project and reads its context doc.
+            </span>
+            <button
+              onClick={() => onClearNewSessionProject?.()}
+              className="shrink-0 cursor-pointer p-0.5"
+              style={{ color: colors.textSecondary }}
+              title="Start this task outside the project"
+              aria-label="Remove from project"
+            >
+              <X size={13} />
+            </button>
+          </div>
+        )}
 
         {/* Name */}
         <div className="mb-4 text-left">
