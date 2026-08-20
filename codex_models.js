@@ -110,7 +110,9 @@ export function buildCodexArgs({ model, prompt, threadId = null, workingDir, can
     }
     if (model) args.push('--model', model);
     if (!isResume && workingDir) args.push('--cd', workingDir);
-    if (imagePath) args.push('--image', imagePath);
+    // One flag per file — `--image <FILE>...` is variadic, so `--image a b` would
+    // swallow the prompt positional. Repeat the flag instead.
+    for (const img of [].concat(imagePath || []).filter(Boolean)) args.push('--image', img);
     args.push(prompt);
     return args;
 }

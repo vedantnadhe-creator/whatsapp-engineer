@@ -289,13 +289,14 @@ function Dashboard() {
     }
   }, [activeSession?.id, activeSession?.task, activeSession?.model, selectedModel, refreshSessions, refreshMessages, navigate])
 
-  const _forkSession = useCallback(async (text, model) => {
+  const _forkSession = useCallback(async (text, model, imageTokens = [], name = null) => {
     if (!activeSession?.id) return
-    const result = await forkSession(activeSession.id, text, model)
+    const result = await forkSession(activeSession.id, text, model, imageTokens, name)
     if (result.sessionId) {
       const newSession = {
         id: result.sessionId,
         task: text,
+        name: name || null,
         model: model || activeSession.model || 'claude-opus-4-8',
         status: 'running',
         is_mine: true,

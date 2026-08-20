@@ -559,24 +559,30 @@ class ClaudeManager extends EventEmitter {
         this._spawnNew(sessionId, prompt, recovery.workingDir, null, recovery.model);
     }
 
-    _prepareFile(filePath, workingDir) {
-        if (!filePath || !fs.existsSync(filePath)) return null;
-        try {
-            const ext = path.extname(filePath);
-            const origName = path.basename(filePath);
-            const destName = `context-file-${Date.now()}${ext}`;
-            const dest = path.join(workingDir || config.DEFAULT_WORKING_DIR, destName);
-            fs.copyFileSync(filePath, dest);
-            // Keep the original upload in place — it's served at /api/uploads/<name>
-            // and referenced in the chat history so the attachment stays visible.
-            const isImage = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg'].includes(ext.toLowerCase());
-            return isImage
-                ? `[Image attached — saved at: ${dest}. Please view/read this image as part of the task.]`
-                : `[File attached (${origName}) — saved at: ${dest}. Please read/analyze this file as part of the task.]`;
-        } catch (err) {
-            console.error(`[Claude] Failed to prepare file: ${err.message}`);
-            return null;
-        }
+    // Takes one path or several: a composer can attach (or paste) more than one
+    // image, and every one has to reach the agent — not just the first.
+    _prepareFile(filePaths, workingDir) {
+        const paths = [].concat(filePaths || []).filter(p => p && fs.existsSync(p));
+        if (paths.length === 0) return null;
+        const notes = paths.map((filePath, i) => {
+            try {
+                const ext = path.extname(filePath);
+                const origName = path.basename(filePath);
+                const destName = `context-file-${Date.now()}-${i}-${Math.random().toString(36).slice(2, 6)}${ext}`;
+                const dest = path.join(workingDir || config.DEFAULT_WORKING_DIR, destName);
+                fs.copyFileSync(filePath, dest);
+                // Keep the original upload in place — it's served at /api/uploads/<name>
+                // and referenced in the chat history so the attachment stays visible.
+                const isImage = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg'].includes(ext.toLowerCase());
+                return isImage
+                    ? `[Image attached — saved at: ${dest}. Please view/read this image as part of the task.]`
+                    : `[File attached (${origName}) — saved at: ${dest}. Please read/analyze this file as part of the task.]`;
+            } catch (err) {
+                console.error(`[Claude] Failed to prepare file: ${err.message}`);
+                return null;
+            }
+        }).filter(Boolean);
+        return notes.length ? notes.join('\n') : null;
     }
 
     _buildEnv(sessionId, provider = null) {

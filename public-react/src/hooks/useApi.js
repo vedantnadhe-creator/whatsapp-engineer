@@ -627,11 +627,11 @@ export async function updateSessionSprint(sessionId, sprintId) {
   });
 }
 
-export async function forkSession(sessionId, text, model, imageTokens = []) {
+export async function forkSession(sessionId, text, model, imageTokens = [], name = null) {
   return apiFetch(`/api/sessions/${sessionId}/fork`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text, model, imageTokens }),
+    body: JSON.stringify({ text, model, imageTokens, name }),
   });
 }
 

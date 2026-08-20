@@ -12,7 +12,6 @@ import {
   Copy,
   Check,
   X,
-  FileText,
   GitBranch,
   ArrowRight,
   Share2,
@@ -30,6 +29,8 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import ShareSessionModal from './ShareSessionModal';
 import { getSessionFeature, setSessionFeatureStatus, useFrontendRepos } from '../hooks/useApi';
+import { useAttachments, attachmentMarkdown } from '../hooks/useAttachments';
+import AttachmentStrip from './AttachmentStrip';
 
 // Sprint feature lifecycle, surfaced at the top of a feature's session.
 const FEATURE_STATUS = [
@@ -634,19 +635,27 @@ export default function Workspace({
   const [accessNote, setAccessNote] = useState('');
   const [showFork, setShowFork] = useState(false);
   const [forkText, setForkText] = useState('');
+  const [forkTitle, setForkTitle] = useState('');
+  const [forkError, setForkError] = useState('');
+  const [forkSubmitting, setForkSubmitting] = useState(false);
   const [testText, setTestText] = useState('');
   const [showShare, setShowShare] = useState(false);
   const [testing, setTesting] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [recording, setRecording] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
-  const [attachments, setAttachments] = useState([]);
   const [notifySound, setNotifySound] = useState(() => {
     if (!session?.id) return false;
     try { return localStorage.getItem(`olibot:notify:${uid}:${session.id}`) === '1'; } catch { return false; }
   });
+  // One attachment list per composer — the chat input and the fork dialog stage
+  // files independently (see useAttachments).
+  const composerFiles = useAttachments(onUploadFile);
+  const forkFiles = useAttachments(onUploadFile);
+  const attachments = composerFiles.attachments;
   const textareaRef = useRef(null);
-  const fileInputRef = useRef(null);
+  const forkTextareaRef = useRef(null);
+  const fileInputRef = composerFiles.fileInputRef;
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
   const messagesEndRef = useRef(null);
@@ -772,32 +781,6 @@ export default function Workspace({
     adjustTextarea();
   }, [inputText, adjustTextarea]);
 
-  const addAttachment = useCallback((file) => {
-    const isImage = file.type.startsWith('image/');
-    const previewUrl = isImage ? URL.createObjectURL(file) : null;
-    setAttachments((prev) => [...prev, { file, previewUrl, name: file.name, isImage, uploading: false, token: null }]);
-  }, []);
-
-  const removeAttachment = useCallback((index) => {
-    setAttachments((prev) => {
-      const item = prev[index];
-      if (item?.previewUrl) URL.revokeObjectURL(item.previewUrl);
-      return prev.filter((_, i) => i !== index);
-    });
-  }, []);
-
-  const uploadAttachments = useCallback(async () => {
-    if (!onUploadFile || attachments.length === 0) return [];
-    const results = await Promise.allSettled(
-      attachments.map(async (att) => {
-        if (att.token) return { token: att.token, url: att.url, name: att.name, isImage: att.isImage };
-        const result = await onUploadFile(att.file);
-        return result?.token ? { token: result.token, url: result.url, name: att.name, isImage: att.isImage } : null;
-      })
-    );
-    return results.map((r) => r.status === 'fulfilled' ? r.value : null).filter(Boolean);
-  }, [attachments, onUploadFile]);
-
   const handleSend = async () => {
     if (busy) return;
     const text = inputText.trim();
@@ -805,15 +788,12 @@ export default function Workspace({
     // Upload any pending attachments — get tokens (for Claude) + urls (for display)
     let uploaded = [];
     if (attachments.length > 0) {
-      uploaded = await uploadAttachments();
+      uploaded = await composerFiles.uploadAll();
     }
     const imageTokens = uploaded.map((u) => u.token).filter(Boolean);
     if (!text && imageTokens.length === 0) return;
     // Embed the uploaded files into the message so they stay visible in the chat after sending.
-    const attachMarkdown = uploaded
-      .filter((u) => u.url)
-      .map((u) => (u.isImage ? `![${u.name || 'image'}](${u.url})` : `[📎 ${u.name || 'file'}](${u.url})`))
-      .join('\n');
+    const attachMarkdown = attachmentMarkdown(uploaded);
     const baseText = text || (imageTokens.length > 0 ? '' : '');
     const finalText = [baseText, attachMarkdown].filter(Boolean).join('\n\n') || '[attachment]';
     setSendError('');
@@ -838,9 +818,7 @@ export default function Workspace({
         return;
       }
     }
-    // Clean up previews
-    attachments.forEach((att) => { if (att.previewUrl) URL.revokeObjectURL(att.previewUrl); });
-    setAttachments([]);
+    composerFiles.clear();
     setInputText('');
   };
 
@@ -851,30 +829,9 @@ export default function Workspace({
     }
   };
 
-  const handlePaste = useCallback((e) => {
-    const items = e.clipboardData?.items;
-    if (!items) return;
-    for (const item of items) {
-      if (item.kind === 'file') {
-        e.preventDefault();
-        const file = item.getAsFile();
-        if (file) addAttachment(file);
-      }
-    }
-  }, [addAttachment]);
-
   const handleRequestAccess = () => {
     onRequestAccess?.(accessNote);
     setAccessNote('');
-  };
-
-  const handleFileSelect = (e) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
-    for (const file of files) {
-      addAttachment(file);
-    }
-    e.target.value = '';
   };
 
   const handleMicToggle = async () => {
@@ -1399,45 +1356,7 @@ export default function Workspace({
           compact
         />
       </div>
-      {attachments.length > 0 && (
-        <div className="flex gap-2 mb-2 overflow-x-auto pb-1">
-          {attachments.map((att, i) => (
-            <div
-              key={i}
-              className="relative flex-shrink-0 rounded-lg overflow-hidden group"
-              style={{
-                border: `1px solid ${colors.border}`,
-                backgroundColor: colors.surface2,
-              }}
-            >
-              {att.isImage ? (
-                <img
-                  src={att.previewUrl}
-                  alt={att.name}
-                  className="h-16 w-16 object-cover"
-                />
-              ) : (
-                <div className="h-16 w-16 flex flex-col items-center justify-center p-1">
-                  <FileText size={20} style={{ color: colors.textSecondary }} />
-                  <span
-                    className="text-[9px] mt-1 truncate max-w-full text-center px-0.5"
-                    style={{ color: colors.textSecondary }}
-                  >
-                    {att.name.length > 12 ? att.name.slice(0, 10) + '...' : att.name}
-                  </span>
-                </div>
-              )}
-              <button
-                onClick={() => removeAttachment(i)}
-                className="absolute top-0.5 right-0.5 p-0.5 rounded-full opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
-                style={{ backgroundColor: 'rgba(0,0,0,0.6)' }}
-              >
-                <X size={10} className="text-white" />
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
+      <AttachmentStrip attachments={attachments} onRemove={composerFiles.remove} />
       <div
         className="flex items-end gap-2 rounded-xl p-2"
         style={{
@@ -1450,10 +1369,10 @@ export default function Workspace({
           type="file"
           multiple
           className="hidden"
-          onChange={handleFileSelect}
+          onChange={composerFiles.onFileSelect}
         />
         <button
-          onClick={() => fileInputRef.current?.click()}
+          onClick={composerFiles.openPicker}
           disabled={uploading}
           className="p-1.5 rounded-lg hover:opacity-80 flex-shrink-0 cursor-pointer disabled:opacity-50"
           title={uploading ? 'Uploading...' : 'Attach file'}
@@ -1465,7 +1384,7 @@ export default function Workspace({
           value={inputText}
           onChange={(e) => { setInputText(e.target.value); if (sendError) setSendError(''); }}
           onKeyDown={handleKeyDown}
-          onPaste={handlePaste}
+          onPaste={composerFiles.onPaste}
           placeholder={
             isRunning
               ? 'Session is currently running...'
@@ -1521,16 +1440,48 @@ export default function Workspace({
     </div>
   );
 
+  // Fork submit: stage files first, then hand the tokens (for the agent) and the
+  // markdown (so the images stay visible in the new session's chat) to the fork.
+  const closeFork = () => {
+    setShowFork(false);
+    setForkText('');
+    setForkTitle('');
+    setForkError('');
+    forkFiles.clear();
+  };
+
+  const submitFork = async () => {
+    if (busy || forkSubmitting) return;
+    const text = forkText.trim();
+    if (!text) return;
+    setForkError('');
+    setForkSubmitting(true);
+    try {
+      const uploaded = forkFiles.attachments.length > 0 ? await forkFiles.uploadAll() : [];
+      const imageTokens = uploaded.map((u) => u.token).filter(Boolean);
+      const finalText = [text, attachmentMarkdown(uploaded)].filter(Boolean).join('\n\n');
+      await onForkSession(finalText, selectedModel, imageTokens, forkTitle.trim() || null);
+      closeFork();
+    } catch (err) {
+      // Keep the dialog (and everything typed/attached) open — retrying should not
+      // mean re-describing the task and re-attaching the screenshots.
+      setForkError(err?.message || 'Failed to fork — please try again.');
+    } finally {
+      setForkSubmitting(false);
+    }
+  };
+
   const forkDialog = showFork && (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center"
       style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}
-      onClick={() => setShowFork(false)}
+      onClick={closeFork}
     >
       <div
         className="w-full max-w-md mx-4 rounded-xl p-5"
         style={{ backgroundColor: colors.surface, border: `1px solid ${colors.border}` }}
         onClick={(e) => e.stopPropagation()}
+        onPaste={forkFiles.onPaste}
       >
         <div className="flex items-center gap-2 mb-3">
           <GitBranch size={16} style={{ color: colors.accent }} />
@@ -1541,43 +1492,74 @@ export default function Workspace({
         <p className="text-xs mb-3" style={{ color: colors.textSecondary }}>
           Create a new session that shares the same Claude context as <span className="font-mono">{session?.id}</span>. The original session stays intact.
         </p>
-        <textarea
-          value={forkText}
-          onChange={(e) => setForkText(e.target.value)}
-          placeholder="What should the new session work on?"
-          rows={3}
-          className="w-full text-sm bg-transparent outline-none resize-none rounded-lg p-3 mb-3"
+        <label className="block text-[11px] mb-1" style={{ color: colors.textSecondary }} htmlFor="fork-title">
+          Title <span style={{ opacity: 0.7 }}>(optional — names the session in the sidebar)</span>
+        </label>
+        <input
+          id="fork-title"
+          value={forkTitle}
+          onChange={(e) => setForkTitle(e.target.value)}
+          placeholder="e.g. Search cutover — pagination fix"
+          maxLength={120}
+          className="w-full text-sm bg-transparent outline-none rounded-lg px-3 py-2 mb-3"
           style={{ color: colors.text, border: `1px solid ${colors.border}`, backgroundColor: colors.surface2 }}
           autoFocus
+          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); forkTextareaRef.current?.focus(); } }}
+        />
+        <label className="block text-[11px] mb-1" style={{ color: colors.textSecondary }} htmlFor="fork-task">
+          Task
+        </label>
+        <textarea
+          id="fork-task"
+          ref={forkTextareaRef}
+          value={forkText}
+          onChange={(e) => { setForkText(e.target.value); if (forkError) setForkError(''); }}
+          placeholder="What should the new session work on? Paste a screenshot to attach it."
+          rows={3}
+          className="w-full text-sm bg-transparent outline-none resize-none rounded-lg p-3 mb-2"
+          style={{ color: colors.text, border: `1px solid ${colors.border}`, backgroundColor: colors.surface2 }}
           onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey && forkText.trim()) {
+            if (e.key === 'Enter' && !e.shiftKey) {
               e.preventDefault();
-              onForkSession(forkText.trim(), selectedModel);
-              setForkText('');
-              setShowFork(false);
+              submitFork();
             }
           }}
         />
+        <AttachmentStrip attachments={forkFiles.attachments} onRemove={forkFiles.remove} />
+        {forkError && (
+          <p className="text-[11px] mb-2" style={{ color: '#ef4444' }}>{forkError}</p>
+        )}
         <div className="flex items-center gap-2 justify-end">
+          <input
+            ref={forkFiles.fileInputRef}
+            type="file"
+            multiple
+            className="hidden"
+            onChange={forkFiles.onFileSelect}
+          />
           <button
-            onClick={() => setShowFork(false)}
+            type="button"
+            onClick={forkFiles.openPicker}
+            className="p-1.5 mr-auto rounded-lg hover:opacity-80 cursor-pointer"
+            title="Attach images or files (or paste a screenshot)"
+            aria-label="Attach images or files"
+          >
+            <Paperclip size={16} style={{ color: colors.textSecondary }} />
+          </button>
+          <button
+            onClick={closeFork}
             className="text-xs px-3 py-1.5 rounded-md cursor-pointer"
             style={{ color: colors.textSecondary }}
           >
             Cancel
           </button>
           <button
-            onClick={() => {
-              if (!forkText.trim()) return;
-              onForkSession(forkText.trim(), selectedModel);
-              setForkText('');
-              setShowFork(false);
-            }}
-            disabled={!forkText.trim() || busy}
+            onClick={submitFork}
+            disabled={!forkText.trim() || busy || forkSubmitting}
             className="text-xs px-3 py-1.5 rounded-md font-medium text-white cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
             style={{ backgroundColor: colors.accent }}
           >
-            Fork & Start
+            {forkSubmitting ? 'Forking...' : 'Fork & Start'}
           </button>
         </div>
       </div>

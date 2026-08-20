@@ -37,6 +37,13 @@ const __dirname = path.dirname(__filename);
 
 // Temp store for uploaded files
 const pendingImages = new Map();
+// Body → local file paths. Every attachment is handed to the agent, not just the
+// first: composers let you attach or paste several images at once.
+function takePendingImages(body) {
+    const tokens = Array.isArray(body?.imageTokens) ? body.imageTokens : (body?.imageToken ? [body.imageToken] : []);
+    const paths = tokens.map(t => { const p = pendingImages.get(t); pendingImages.delete(t); return p; }).filter(Boolean);
+    return paths.length ? paths : null;
+}
 function storePendingImage(filePath) {
     const token = `img-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     pendingImages.set(token, filePath);
@@ -839,8 +846,7 @@ a{color:#60a5fa;text-decoration:none}</style></head>
 
             const phone = req.body.phone || req.user.phone || req.user.email || req.user.id;
             const startInstruction = /^(start fresh|new task|ignore previous)/i.test(text) ? text : `[start fresh] ${text}`;
-            const tokens = Array.isArray(req.body.imageTokens) ? req.body.imageTokens : (req.body.imageToken ? [req.body.imageToken] : []);
-            const imagePath = tokens.map(t => { const p = pendingImages.get(t); pendingImages.delete(t); return p; }).filter(Boolean)[0] || null;
+            const imagePath = takePendingImages(req.body);
             const result = await messageHandler({ isWeb: true, phone: String(phone), text: startInstruction, pushName: req.user.displayName || 'Dashboard', imagePath, ownerId: req.user.id, model: resolveModelForRole(req.user.role, model || 'claude-opus-4-8'), workingDir: sessionWorkingDir, mode: sessionMode, editAccess: testerEditAccess, promptPrefix: project ? projectContextBanner([project]) : null });
             // Attach sprint + type + tags + name and auto-create a session task issue
             if (result?.sessionId) {
@@ -984,8 +990,7 @@ Do NOT ask for confirmation — proceed through each step automatically. If any 
             if (req.user.role === 'tester' && session.mode !== 'tester') {
                 return res.status(403).json({ error: 'Testers cannot chat on this session directly — use "Test it" to start a tester session.', code: 'TESTER_MUST_FORK' });
             }
-            const tokens = Array.isArray(req.body.imageTokens) ? req.body.imageTokens : (req.body.imageToken ? [req.body.imageToken] : []);
-            const imagePath = tokens.map(t => { const p = pendingImages.get(t); pendingImages.delete(t); return p; }).filter(Boolean)[0] || null;
+            const imagePath = takePendingImages(req.body);
             // Claude and Codex use incompatible native resume IDs. Let the execution
             // manager see the original provider first, so it can create a context
             // handoff when the selected model crosses that provider boundary.
@@ -999,18 +1004,23 @@ Do NOT ask for confirmation — proceed through each step automatically. If any 
         try {
             if (!executionEngine) return res.status(500).json({ error: 'Execution engine not attached' });
             const parentId = req.params.id;
-            const { text, model } = req.body;
+            const { text, model, name } = req.body;
             if (!text) return res.status(400).json({ error: 'text is required — describe what the new session should do' });
             const phone = req.user.phone || req.user.email || req.user.id;
-            const tokens = Array.isArray(req.body.imageTokens) ? req.body.imageTokens : (req.body.imageToken ? [req.body.imageToken] : []);
-            const imagePath = tokens.map(t => { const p = pendingImages.get(t); pendingImages.delete(t); return p; }).filter(Boolean)[0] || null;
+            const imagePath = takePendingImages(req.body);
             const result = await executionEngine.forkSession(parentId, text, String(phone), req.user.id, resolveModelForRole(req.user.role, model), { imagePath });
             // If the parent session is part of a sprint feature, file the fork as a subtask of that feature.
             if (result?.sessionId) {
+                // A fork carries no name of its own, so it reads as the first line of its
+                // task in every list. The dialog's title, when given, names it instead.
+                const forkName = (typeof name === 'string' && name.trim())
+                    ? name.trim().slice(0, 120)
+                    : text.toString().replace(/\s+/g, ' ').trim().slice(0, 60);
+                store.updateSession(result.sessionId, { name: forkName });
                 const parentFeature = store.getFeatureBySession(parentId);
                 if (parentFeature) {
                     const sub = store.createIssue({
-                        title: text.toString().slice(0, 120),
+                        title: forkName,
                         createdBy: req.user.id,
                         sprintId: parentFeature.sprint_id,
                         parentIssueId: parentFeature.id,
@@ -2222,8 +2232,7 @@ The user may ask follow-up questions about the changelog — answer based on the
             }
             const model = req.body.model || 'claude-opus-4-8';
             const phone = req.body.phone || req.user.phone || req.user.email || req.user.id;
-            const tokens = Array.isArray(req.body.imageTokens) ? req.body.imageTokens : (req.body.imageToken ? [req.body.imageToken] : []);
-            const imagePath = tokens.map(t => { const p = pendingImages.get(t); pendingImages.delete(t); return p; }).filter(Boolean)[0] || null;
+            const imagePath = takePendingImages(req.body);
             const result = await messageHandler({ isWeb: true, phone: String(phone), text: buildFeatureDevPrompt(issue, req.body.text), pushName: req.user.displayName || 'Dashboard', ownerId: req.user.id, model, mode: 'developer', imagePath });
             if (result?.sessionId) {
                 store.updateSession(result.sessionId, { sprint_id: issue.sprint_id || null, type: issue.type || 'feature', name: issue.title.slice(0, 120), mode: 'developer' });
