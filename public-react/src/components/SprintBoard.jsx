@@ -1007,6 +1007,16 @@ function SubtasksPanel({ f, isTester, members, devMembers = [], testerMembers = 
 
 const parseAttachments = (b) => { try { const a = JSON.parse(b.attachments || '[]'); return Array.isArray(a) ? a : [] } catch { return [] } }
 
+// Clipboard screenshots all arrive named "image.png", and attachments are listed by
+// name — three pasted shots would be three identical chips. Stamp them instead.
+function stampPastedName(file) {
+  if (file.name && file.name !== 'image.png') return file
+  const ext = (file.type.split('/')[1] || 'png').replace('jpeg', 'jpg')
+  const t = new Date()
+  const stamp = [t.getHours(), t.getMinutes(), t.getSeconds()].map(n => String(n).padStart(2, '0')).join('')
+  return new File([file], `screenshot-${stamp}-${Math.random().toString(36).slice(2, 5)}.${ext}`, { type: file.type })
+}
+
 // ── Issue attachments (features, tasks and subtasks — same shape bugs already use) ──
 // Upload each picked file, then hand back the [{ name, key, contentType }] entries.
 async function uploadAll(fileList) {
@@ -1090,7 +1100,7 @@ function BugsPanel({ f, isTester, devMembers = [], testerMembers = [], onGoToSes
   const remove = async (b) => { await deleteBug(b.id); load(); refreshIssues() }
 
   const pickFiles = (target) => { attachTarget.current = target; fileRef.current?.click() }
-  const onFiles = async (fileList) => {
+  const onFiles = async (fileList, target = attachTarget.current) => {
     const files = Array.from(fileList || [])
     if (!files.length) return
     setAttaching(true)
@@ -1100,7 +1110,6 @@ function BugsPanel({ f, isTester, devMembers = [], testerMembers = [], onGoToSes
         const d = await uploadAttachment(file)
         if (d?.key) uploaded.push(d)
       }
-      const target = attachTarget.current
       if (target === 'new') {
         setPendingAtt(prev => [...prev, ...uploaded])
       } else {
@@ -1113,6 +1122,19 @@ function BugsPanel({ f, isTester, devMembers = [], testerMembers = [], onGoToSes
       if (fileRef.current) fileRef.current.value = ''
     }
   }
+  // Reporting a bug usually starts with a screenshot on the clipboard, so paste
+  // attaches it to the bug being written instead of making you save it to disk first.
+  const onPasteFiles = (e) => {
+    const files = Array.from(e.clipboardData?.items || [])
+      .filter(it => it.kind === 'file')
+      .map(it => it.getAsFile())
+      .filter(Boolean)
+      .map(stampPastedName)
+    if (!files.length) return
+    e.preventDefault()
+    onFiles(files, 'new')
+  }
+
   // action: 'fork' → new session off the dev session · 'send' → add to the current dev session
   const sendToFix = async (b, action) => {
     setForking(b.id)
@@ -1129,7 +1151,7 @@ function BugsPanel({ f, isTester, devMembers = [], testerMembers = [], onGoToSes
       </div>
       <div className="flex flex-col gap-1.5 mb-2">
         <div className="flex items-center gap-2">
-          <input value={title} onChange={e => setTitle(e.target.value)} onKeyDown={e => e.key === 'Enter' && add()} placeholder="Describe a bug QA found…" className="flex-1 text-xs px-2 py-1.5 rounded outline-none" style={{ backgroundColor: 'var(--c-bg)', color: 'var(--c-text)', border: '1px solid var(--c-border)' }} />
+          <input value={title} onChange={e => setTitle(e.target.value)} onKeyDown={e => e.key === 'Enter' && add()} onPaste={onPasteFiles} placeholder="Describe a bug QA found… (paste a screenshot to attach)" className="flex-1 text-xs px-2 py-1.5 rounded outline-none" style={{ backgroundColor: 'var(--c-bg)', color: 'var(--c-text)', border: '1px solid var(--c-border)' }} />
           <label className="flex items-center gap-1 text-[10px] cursor-pointer" style={{ color: critical ? '#ef4444' : 'var(--c-text-muted)' }}>
             <input type="checkbox" checked={critical} onChange={e => setCritical(e.target.checked)} /> Critical
           </label>
