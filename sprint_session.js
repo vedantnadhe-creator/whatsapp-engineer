@@ -89,12 +89,17 @@ export default class SprintSession {
         // with evidence is a paste of the descriptor rather than a multi-step errand the
         // agent has to remember. A failure here degrades to a text-only bug, never a lost one.
         const attachment = media ? await fetchAndUpload(media, { apiBase: this.apiBase, token }) : null;
+        // An image is handed to the model as a real image input (below) so it can read
+        // what is in it — "pick the first bug from this screenshot" is the whole point.
+        // The S3 descriptor is a separate thing: that is what gets stored on the bug.
+        const imagePath = attachment?.viewable ? attachment.localPath : null;
         const mediaNote = media
             ? (attachment
-                ? `\n\n[Attachment ready — ${attachment.kind}${attachment.quoted ? ', from the quoted message' : ''}. `
-                  + `If this turn files or updates a bug, pass it verbatim as the attachments array:\n`
+                ? `\n\n[Attachment ready — ${attachment.kind}${attachment.quoted ? ', from the quoted message' : ''}.`
+                  + (imagePath ? ' The image itself is attached to this message — read it and act on what it shows.' : '')
+                  + `\nIf this turn files or updates a bug, pass this verbatim as the attachments array:\n`
                   + `${JSON.stringify([{ name: attachment.name, key: attachment.key, contentType: attachment.contentType }])}]`
-                : `\n\n[The sender attached ${media.kind.replace('Message', '')} but it could not be retrieved. `
+                : `\n\n[The sender attached ${String(media.kind).replace('Message', '')} but it could not be retrieved. `
                   + `Carry on without it and say the attachment did not come through.]`)
             : '';
 
@@ -113,7 +118,7 @@ export default class SprintSession {
             if (this.claude.isRunning(existing.id)) await this._waitForEnd(existing.id);
             this.mute(existing.id);
             this.pending.set(existing.id, target);
-            await this.claude.resumeSession(existing.id, turn);
+            await this.claude.resumeSession(existing.id, turn, imagePath);
             await this._waitForEnd(existing.id);
             return existing.id;
         }
@@ -123,7 +128,7 @@ export default class SprintSession {
             THREAD_KEY(chat),
             `${this._primer()}\n\n---\n\nFirst request:\n\n${turn}`,
             this.workspace,
-            null,
+            imagePath,
             this._botUser().id,
             this.model,
         );
@@ -261,11 +266,17 @@ Every message is prefixed with the sender and their role.
   only show them the board and that a teammate has to make the change. Your token is
   read-only for those turns, so a write attempt will fail with 403 regardless.
 
-## Scope — the sprint board, nothing else
-You may only read and change sprints, issues/tasks, bugs, assignments and statuses, and
-start working sessions through the tool below. Refuse everything else — editing code,
-deploys, builds, git, direct database access, shell work, reading repositories — with one
-line saying you only manage the sprint board. Do not run commands unrelated to the calls below.
+## Scope
+You can do four things, and you should say yes to all of them:
+1. Read and change the board — sprints, issues/tasks, bugs, assignments, statuses.
+2. **Read images that are attached to a message** and act on what they show.
+3. **Start a working session** on a bug or a task, and hand back its link.
+4. **Share a session** you started, again or with someone else.
+
+Refuse everything else — editing code yourself, deploys, builds, git, direct database
+access, general shell work, reading repositories — with one line saying you manage the
+sprint board and can start a session for the rest. Never say you are unable to view an
+image or unable to create a session: both are tools you have, described below.
 
 ## The board API
 This is the only way to touch the board. The token is on disk and changes every turn, so
@@ -321,12 +332,24 @@ When it is about a bug, the bug's text and its attachments are handed to the ses
 you, and the bug is marked as being worked on. Pass their instruction in \`text\` as they
 said it ("try to get the cause of it") — that is the session's brief.
 
+**Share a session again** — \`POST /api/oli/sessions/:id/share\`
+Returns a fresh {"shareUrl"} for a session you started earlier. Use it for "send me that
+link again" or "share it with X too". It only works for sessions you started.
+
 ## Attachments (screenshots, screen recordings)
-When someone sends or quotes an image/video, the turn ends with an \`[Attachment ready …]\`
-note containing a ready-made JSON array. If that turn files or updates a bug, pass that
-array **verbatim** as \`attachments\`. Do not rewrite, re-key or invent entries, and never
-try to upload anything yourself — it is already stored. If the note says the attachment
-could not be retrieved, file the bug anyway and mention that the file did not come through.
+When someone sends or quotes an image or video, the turn ends with an \`[Attachment ready …]\`
+note. Two separate things come out of it:
+
+- **You can see images.** When the note says the image is attached, it has been saved and
+  the path is in the message — read it like any other image and use what is in it. If
+  someone sends a screenshot of a bug list and says "take the first one", read the list
+  and take the first one. Never reply that you cannot view images.
+- **The stored copy goes on the bug.** The note contains a ready-made JSON array. If that
+  turn files or updates a bug, pass it **verbatim** as \`attachments\`. Do not rewrite,
+  re-key or invent entries, and never try to upload anything yourself — it is already stored.
+
+If the note says the attachment could not be retrieved, carry on and say the file did not
+come through. A screen recording is stored for the bug but is not something you can watch.
 
 ## Rules
 1. Fetch the sprint / teammate / issue lists and resolve names to ids. Never guess an id.

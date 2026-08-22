@@ -8,11 +8,35 @@
 // The upload happens BEFORE the agent's turn, not as a tool it chooses to call:
 // the media is the evidence, and an agent that forgets to fetch it files a bug with
 // a description of a screenshot nobody can see.
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import config from './config.js';
 
 // WhatsApp's own caps; anything larger never arrives in the first place. The
 // dashboard's raw body parser stops at 50mb, so keep under it.
 const MAX_BYTES = 45 * 1024 * 1024;
+
+// The blob is also dropped on local disk so the agent can actually LOOK at it.
+// Storing it only in S3 makes the media available to the board but invisible to the
+// session — which is how "pick the first bug from the image" turns into "I can't view
+// image contents". `_prepareFile` copies from here into the session's working dir.
+const SCRATCH = path.join(os.tmpdir(), 'oli-media');
+const SCRATCH_TTL_MS = 24 * 60 * 60 * 1000;
+
+function scratchWrite(name, buffer) {
+    fs.mkdirSync(SCRATCH, { recursive: true });
+    // Prune on write rather than on a timer: this is the only thing that creates them,
+    // so there is no state to keep and nothing runs when nobody sends media.
+    const now = Date.now();
+    for (const f of fs.readdirSync(SCRATCH)) {
+        const full = path.join(SCRATCH, f);
+        try { if (now - fs.statSync(full).mtimeMs > SCRATCH_TTL_MS) fs.unlinkSync(full); } catch (_) { /* raced */ }
+    }
+    const dest = path.join(SCRATCH, `${now.toString(36)}-${name}`);
+    fs.writeFileSync(dest, buffer);
+    return dest;
+}
 
 const KINDS = {
     imageMessage: { ext: 'jpg', label: 'image' },
@@ -56,7 +80,7 @@ function fileNameFor({ kind, node, messageId }) {
  * fetch. Never throws: a failed screenshot must not cost the user their bug report,
  * so the caller degrades to a text-only bug and says so.
  *
- * @returns {Promise<{name:string,key:string,contentType:string,kind:string,quoted:boolean}|null>}
+ * @returns {Promise<{name:string,key:string,contentType:string,kind:string,quoted:boolean,localPath:string,viewable:boolean}|null>}
  */
 export async function fetchAndUpload(found, { apiBase, token }) {
     if (!found?.messageId) return null;
@@ -91,8 +115,21 @@ export async function fetchAndUpload(found, { apiBase, token }) {
         });
         if (!up.ok) throw new Error(`Attachment upload ${up.status}: ${(await up.text()).slice(0, 200)}`);
         const descriptor = await up.json();
-        console.log(`[OliMedia] Stored ${name} (${(buffer.length / 1024).toFixed(0)}KB) as ${descriptor.key}`);
-        return { ...descriptor, kind: KINDS[found.kind]?.label || 'file', quoted: found.quoted };
+        // Local copy for the agent's own eyes. A failure here must not lose the upload
+        // that already succeeded — the bug still gets its attachment either way.
+        let localPath = null;
+        try { localPath = scratchWrite(name, buffer); }
+        catch (err) { console.error(`[OliMedia] Could not stage ${name} locally: ${err.message}`); }
+        console.log(`[OliMedia] Stored ${name} (${(buffer.length / 1024).toFixed(0)}KB) as ${descriptor.key}${localPath ? ' + local copy' : ''}`);
+        return {
+            ...descriptor,
+            kind: KINDS[found.kind]?.label || 'file',
+            quoted: found.quoted,
+            localPath,
+            // Only images are worth handing to the model directly; a 40MB mp4 is not
+            // something it can watch, and the attachment link is the useful artefact.
+            viewable: Boolean(localPath) && String(contentType).startsWith('image/'),
+        };
     } catch (err) {
         console.error(`[OliMedia] ${err.message}`);
         return null;

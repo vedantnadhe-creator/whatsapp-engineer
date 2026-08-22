@@ -815,6 +815,28 @@ a{color:#60a5fa;text-decoration:none}</style></head>
         } catch (err) { res.status(500).json({ error: err.message }); }
     });
 
+    // Hand back a fresh link for a session Oli started earlier — "share me that session
+    // again", or sharing it with a second person. Scoped to sessions the bot owns: it is
+    // not a way to hand out access to anybody's session by naming an id in a chat.
+    app.post('/api/oli/sessions/:id/share', requireAuth, (req, res) => {
+        try {
+            const session = store.getSession(req.params.id);
+            if (!session) return res.status(404).json({ error: 'Session not found' });
+            if (session.owner_id !== req.user.id) {
+                return res.status(403).json({ error: 'Oli can only share sessions it started.' });
+            }
+            const token = crypto.randomBytes(24).toString('base64url');
+            store.createShareLink({
+                sessionId: session.id,
+                token,
+                createdBy: req.user.id,
+                permission: 'write',
+                expiresAt: new Date(Date.now() + SHARE_LINK_TTL_DAYS * 24 * 60 * 60 * 1000).toISOString(),
+            });
+            res.json({ sessionId: session.id, name: session.name || session.task?.slice(0, 80) || null, shareUrl: `${config.PUBLIC_URL}${config.BASE_PATH}/share/${token}` });
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
     // ── Admin: User Management ──────────────────────────────────
 
     app.get('/api/admin/users', requireAuth, requireAdmin, (req, res) => {
