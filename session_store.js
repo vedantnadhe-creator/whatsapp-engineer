@@ -1121,6 +1121,30 @@ class SessionStore {
     }
 
     /**
+     * Every issue assigned to one person. Exists because answering "what is assigned to
+     * me" from GET /api/issues meant the agent reading all ~1,500 issues (1.8MB of JSON)
+     * to find a dozen — slow, and about a dollar a question.
+     *
+     * Both status fields are returned rather than one being picked: the board has rows
+     * where `status` says completed and `dev_status` says todo, and silently trusting
+     * either would over- or under-report someone's plate. `status_conflict` marks them so
+     * the disagreement gets mentioned instead of hidden.
+     */
+    getIssuesAssignedTo(userId, { status = 'active' } = {}) {
+        const where = status === 'all' ? '' : "AND i.dev_status IN ('todo', 'in_progress')";
+        return this.db.prepare(
+            `SELECT i.id, i.title, i.type, i.status, i.dev_status, i.priority, i.deadline,
+                    i.open_bugs, i.critical_bugs, i.is_backlog, i.sprint_id,
+                    s.name AS sprint_name,
+                    CASE WHEN i.status = 'completed' AND i.dev_status <> 'done' THEN 1 ELSE 0 END AS status_conflict
+             FROM issues i
+             LEFT JOIN sprints s ON i.sprint_id = s.id
+             WHERE i.assigned_to = ? ${where}
+             ORDER BY i.dev_status = 'in_progress' DESC, i.created_at DESC`
+        ).all(String(userId));
+    }
+
+    /**
      * Every bug assigned to one person, plus the feature and sprint it sits under.
      * Powers Oli's "what bugs are assigned to me" in a personal chat — the per-issue
      * query above would need one call per feature to answer that.

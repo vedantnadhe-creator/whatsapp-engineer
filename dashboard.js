@@ -748,6 +748,29 @@ a{color:#60a5fa;text-decoration:none}</style></head>
         } catch (err) { res.status(500).json({ error: err.message }); }
     });
 
+    // "What is assigned to me" for issues — same identity rule as my-bugs.
+    app.get('/api/oli/my-issues', requireAuth, (req, res) => {
+        try {
+            const user = oliActor(req);
+            if (!user) {
+                return res.status(404).json({
+                    error: 'This WhatsApp number is not linked to a dashboard user.',
+                    hint: 'Link it in Settings → Allowed phones, then ask again.',
+                    phone: req.user?.waPhone || null,
+                });
+            }
+            const status = req.query.status === 'all' ? 'all' : 'active';
+            const issues = store.getIssuesAssignedTo(user.id, { status });
+            res.json({
+                user: { id: user.id, displayName: user.display_name },
+                status,
+                count: issues.length,
+                conflicts: issues.filter(i => i.status_conflict).length,
+                issues,
+            });
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
     // Create a working session and hand back a link the requester can open.
     // One call rather than start-then-share: the agent has no way to know this app's
     // public origin, and a share link it had to assemble itself is a link that silently

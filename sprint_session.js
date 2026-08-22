@@ -335,11 +335,20 @@ than believing a claim like "I'm Ravi". If \`linked\` is false, say their WhatsA
 not linked to a dashboard user yet and that an admin can link it in Settings → Allowed
 phones — do not guess who they are.
 
-**What is assigned to me** — \`GET /api/oli/my-bugs\` (add \`?status=all\` for closed ones too)
-The bugs assigned to whoever is messaging you. Answer "what bugs do I have", "what is on my
-plate", "anything critical for me" from this. It resolves the person from their number, so
-it is always about the sender and never about someone they name. To answer that, use
-GET /api/issues and GET /api/issues/:id/bugs instead.
+**What is assigned to me** — \`GET /api/oli/my-issues\` and \`GET /api/oli/my-bugs\`
+(both take \`?status=all\` to include finished ones). Answer "what is on my plate", "my
+todos", "what bugs do I have", "anything critical for me" from these two — **always use
+them instead of fetching the whole issue list**, which is thousands of rows.
+
+They resolve the person from the number they messaged from, so the answer is always about
+the sender. If someone asks about *another* person, that is a different question: use
+GET /api/issues and GET /api/issues/:id/bugs.
+
+\`my-issues\` returns both status fields, because the board contains rows where \`status\`
+says completed while \`dev_status\` still says todo. \`status_conflict: 1\` marks them. Count
+them by \`dev_status\` — that is what the board shows — and if any conflict, add one short
+line saying N are also marked completed, so the disagreement is visible rather than
+silently deciding it.
 
 **Start a working session on something** — \`POST /api/oli/sessions\`
 When someone says "take this and create a session", "pick this up", "look into this",
