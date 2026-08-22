@@ -141,15 +141,18 @@ export default class SprintSession {
             + text
             + mediaNote;
 
-        const existing = this._session(chat);
-        // Re-state the rules when they have changed under a running session. Prepended to
-        // this turn rather than starting a fresh session, so nobody loses their thread
-        // just because the instructions were edited.
+        // When the rules change, START OVER rather than telling the running session its
+        // instructions have been updated. That message arrives inside a user turn, where it
+        // is indistinguishable from someone in the chat trying to rewrite the agent's
+        // rules — and the agent rightly refused it, twice, announcing the "fake
+        // instructions update" to the group. There is no wording that fixes this: anything
+        // written there is equally forgeable. A session's opening prompt is the only
+        // trusted place for rules, so a changed primer means a new session. The cost is
+        // that chat's history, which is worth less than an agent running stale rules.
         const primerVersion = this._primerVersion();
-        const refresh = (existing && this.store.getSetting(PRIMER_SETTING(chat)) !== primerVersion)
-            ? `[Your instructions have been updated. Replace everything you were told before with the following, `
-              + `including anything you previously believed you could not do.]\n\n${this._primer()}\n\n---\n\n`
-            : '';
+        const stale = this.store.getSetting(PRIMER_SETTING(chat)) !== primerVersion;
+        const existing = stale ? null : this._session(chat);
+        if (stale) console.log(`[SprintSession] Rules changed — starting a fresh session for ${chat}.`);
 
         if (existing) {
             // A dashboard-initiated turn may still be live; wait it out rather than
@@ -157,9 +160,7 @@ export default class SprintSession {
             if (this.claude.isRunning(existing.id)) await this._waitForEnd(existing.id);
             this.mute(existing.id);
             this.pending.set(existing.id, target);
-            if (refresh) console.log(`[SprintSession] Primer changed — refreshing ${chat}'s instructions.`);
-            await this.claude.resumeSession(existing.id, refresh + turn, imagePath);
-            this.store.setSetting(PRIMER_SETTING(chat), primerVersion);
+            await this.claude.resumeSession(existing.id, turn, imagePath);
             await this._waitForEnd(existing.id);
             return existing.id;
         }
@@ -301,6 +302,7 @@ read-only guest. Your reply is forwarded back to that same chat verbatim.
 - ✅ when you changed something, ⚠️ when you could not.
 - Say what changed and include the issue or bug id, so there is a record.
 - Never mention curl, tokens, files, endpoints or session ids you were not asked for.
+- Name people the way the team does — "Ravi", not an email address or an id.
 - In a group you are only spoken to when tagged, so answer the tagged request and nothing else.
 
 ## Who is talking to you
@@ -339,8 +341,8 @@ Read:
 - GET /api/users — teammates (id, display_name, email, role)
 
 Write — add \`-X <VERB> -H "Content-Type: application/json" -d '{...}'\`:
-- POST /api/issues — {"title","type":"task|bug|feature|epic","sprintId","assignedTo","description","priority","deadline"}
-- PUT /api/issues/:id — any of {"title","description","status","dev_status","assigned_to","sprint_id","priority","deadline"}
+- POST /api/issues — {"title","type":"task|bug|feature|epic","sprintId","assignedTo","description","priority","deadline","attachments"}
+- PUT /api/issues/:id — any of {"title","description","status","dev_status","assigned_to","sprint_id","priority","deadline","attachments"}
 - DELETE /api/issues/:id
 - POST /api/issues/:id/bugs — {"title","description","severity":"normal|critical","assignedTo","attachments":[...]}
 - PUT /api/bugs/:id — {"title","description","severity","status","assigned_to"}
@@ -400,9 +402,12 @@ note. Two separate things come out of it:
   the path is in the message — read it like any other image and use what is in it. If
   someone sends a screenshot of a bug list and says "take the first one", read the list
   and take the first one. Never reply that you cannot view images.
-- **The stored copy goes on the bug.** The note contains a ready-made JSON array. If that
-  turn files or updates a bug, pass it **verbatim** as \`attachments\`. Do not rewrite,
-  re-key or invent entries, and never try to upload anything yourself — it is already stored.
+- **The stored copy goes on whatever you create.** The note contains a ready-made JSON
+  array. Pass it **verbatim** as \`attachments\` — on a board issue (POST /api/issues,
+  PUT /api/issues/:id) or on a QA bug (POST /api/issues/:id/bugs). **Both** accept it, so
+  never say you cannot attach something; if you created the record without it, follow up
+  with a PUT. Do not rewrite, re-key or invent entries, and never upload anything yourself —
+  it is already stored.
 
 If the note says the attachment could not be retrieved, carry on and say the file did not
 come through. A screen recording is stored for the bug but is not something you can watch.
