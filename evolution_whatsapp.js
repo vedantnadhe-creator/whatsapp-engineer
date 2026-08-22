@@ -9,12 +9,15 @@ const cleanId = value => String(value || '').split(':')[0].split('@')[0].replace
 // Every JID tagged anywhere in a message. WhatsApp hangs `contextInfo` off whichever
 // node carries the content (text, image, video, document...), so look at all of them
 // rather than guessing which one this message happens to be.
-const mentionedJids = node => (node && typeof node === 'object')
+const mentionedJids = node => [...new Set(collectMentions(node))];
+const collectMentions = node => (node && typeof node === 'object')
     ? Object.values(node).flatMap(v => (v && typeof v === 'object')
-        ? (Array.isArray(v?.contextInfo?.mentionedJid) ? v.contextInfo.mentionedJid : []).concat(mentionedJids(v))
+        ? (Array.isArray(v?.contextInfo?.mentionedJid) ? v.contextInfo.mentionedJid : []).concat(collectMentions(v))
         : [])
         .concat(Array.isArray(node?.contextInfo?.mentionedJid) ? node.contextInfo.mentionedJid : [])
     : [];
+// Learned bot lids survive restarts here — a group Oli has spoken in once keeps working.
+const LID_SETTING = 'evolution_bot_lids';
 const escapeRe = v => String(v).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const messageText = msg => msg?.conversation
     || msg?.extendedTextMessage?.text
@@ -31,6 +34,10 @@ export default class EvolutionWhatsApp extends EventEmitter {
         this.sock = null; // compatibility with existing dashboard/session delivery guards
         this.botNumber = cleanId(config.EVOLUTION_BOT_NUMBER);
         this._processed = new Set();
+        // Configured lids plus any this instance has already learned about itself.
+        this._botLids = new Set(config.EVOLUTION_BOT_LIDS);
+        try { JSON.parse(this.store.getSetting(LID_SETTING) || '[]').forEach(l => this._botLids.add(l)); }
+        catch (_) { /* corrupt setting is not worth failing a boot over */ }
     }
 
     get enabled() { return Boolean(config.EVOLUTION_API_URL && config.EVOLUTION_INSTANCE); }
@@ -55,10 +62,30 @@ export default class EvolutionWhatsApp extends EventEmitter {
      * Still a tag: a bare mention of the name in a sentence does not count.
      */
     _tagged(msg, data, text) {
-        const mentioned = mentionedJids(msg).concat(mentionedJids(data));
-        if (this.botNumber && mentioned.some(j => cleanId(j) === this.botNumber)) return true;
-        if (this.botNumber && text.includes(`@${this.botNumber}`)) return true;
+        const mentioned = [...new Set(mentionedJids(msg).concat(mentionedJids(data)).map(cleanId))];
+        const ids = new Set([...this._botLids, this.botNumber].filter(Boolean));
+        if (mentioned.some(j => ids.has(j))) return true;
+        // The tag as it is written in the message body: `@<number>` in a phone-addressed
+        // group, `@<lid>` in a linked-identity one.
+        if ([...ids].some(id => text.includes(`@${id}`))) return true;
         return config.BOT_ALIASES.some(alias => new RegExp(`(^|\\s)@${escapeRe(alias)}\\b`, 'i').test(text));
+    }
+
+    /**
+     * Remember a linked identity that belongs to us. Called with the `participant` of a
+     * group message we sent ourselves, which is the only place WhatsApp reveals it — the
+     * Evolution API has no endpoint for the instance's own lid. Once learned, tags in that
+     * group are recognised for good, so a new deployment self-configures after Oli's first
+     * reply rather than needing EVOLUTION_BOT_LID set by hand.
+     */
+    _learnBotLid(lid) {
+        const id = cleanId(lid);
+        if (!id || this._botLids.has(id)) return;
+        this._botLids.add(id);
+        try {
+            this.store.setSetting(LID_SETTING, JSON.stringify([...this._botLids]));
+            console.log(`[Evolution] Learned own linked identity ${id} — group tags using it will now be recognised.`);
+        } catch (err) { console.error(`[Evolution] Could not persist bot lid: ${err.message}`); }
     }
 
     async _request(path, options = {}) {
@@ -132,7 +159,12 @@ export default class EvolutionWhatsApp extends EventEmitter {
         if (owner) this.botNumber = owner;
         const data = payload?.data || payload;
         const key = data?.key || {};
-        if (key.fromMe) return;
+        if (key.fromMe) {
+            // Our own message in a group carries our lid as the participant — the one
+            // chance to learn it. Everything else about a fromMe message is ignored.
+            if (String(key.remoteJid || '').endsWith('@g.us')) this._learnBotLid(key.participant || key.participantAlt);
+            return;
+        }
         const id = key.id || data?.messageId;
         if (id && this._processed.has(id)) return;
         if (id) { this._processed.add(id); setTimeout(() => this._processed.delete(id), 5 * 60_000); }
@@ -142,10 +174,24 @@ export default class EvolutionWhatsApp extends EventEmitter {
         // Groups stay off unless SPRINT_AGENT_GROUPS is on, and there a tag is still required
         // so the bot never answers ordinary group chatter.
         if (isGroup && !config.SPRINT_AGENT_GROUPS) return;
-        if (isGroup && config.ALLOWED_GROUPS.length && !config.ALLOWED_GROUPS.includes(jid)) return;
+        if (isGroup && config.ALLOWED_GROUPS.length && !config.ALLOWED_GROUPS.includes(jid)) {
+            console.warn(`[Evolution] Ignored message from group ${jid} — not in ALLOWED_GROUPS.`);
+            return;
+        }
         const msg = data?.message || data;
         const text = messageText(msg).trim();
-        if (isGroup && !this._tagged(msg, data, text)) return;
+        if (isGroup && !this._tagged(msg, data, text)) {
+            // Only log when the message looks like it was meant for us. Logging every
+            // untagged line would replay the whole group into the log, but "I tagged it
+            // and nothing happened" was previously indistinguishable from a dead webhook.
+            if (/(^|\s)@/.test(text)) {
+                const seen = [...new Set(mentionedJids(msg).concat(mentionedJids(data)).map(cleanId))];
+                console.warn(`[Evolution] Group message tagged someone else — ignoring. mentioned=[${seen.join(', ')}] `
+                    + `known=[${[...this._botLids, this.botNumber].filter(Boolean).join(', ')}]. `
+                    + `If one of the mentioned ids is Oli, add it to EVOLUTION_BOT_LID.`);
+            }
+            return;
+        }
         // WhatsApp now addresses most chats by `@lid` — a linked-identity id that is NOT a
         // phone number — and carries the real number alongside in `*Alt`/`*Pn`. Read those
         // first: a bare `@lid` fails the allowed-phones gate for every teammate, and is not

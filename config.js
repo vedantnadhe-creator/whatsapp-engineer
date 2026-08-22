@@ -69,6 +69,13 @@ const config = {
     // The number that will scan the QR, country code included. Required for reliable
     // @mention matching because Evolution webhooks do not always include the owner.
     EVOLUTION_BOT_NUMBER: process.env.EVOLUTION_BOT_NUMBER || '',
+    // The bot's own WhatsApp "linked identity" ids. Newer groups address every member by
+    // an @lid instead of a phone number, and a tag in such a group carries the bot's LID —
+    // which Evolution never exposes, so the bot cannot recognise its own tag without this.
+    // Comma-separated; also learned automatically from the bot's own group messages.
+    EVOLUTION_BOT_LIDS: (process.env.EVOLUTION_BOT_LID || process.env.EVOLUTION_BOT_LIDS || '')
+        .split(',').map(v => v.replace(/\D/g, '')).filter(Boolean),
+
     // Optional shared secret for Evolution's webhook request header/query.
     EVOLUTION_WEBHOOK_SECRET: process.env.EVOLUTION_WEBHOOK_SECRET || '',
 
