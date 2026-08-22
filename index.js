@@ -275,6 +275,7 @@ export async function handleIncomingMessage({ isWeb: explicitIsWeb, phone, text,
                 text, phone, pushName, groupJid,
                 chatJid: chatJid || groupJid || phone,
                 trusted: arguments[0]?.trusted === true,
+                media: arguments[0]?.media || null,
             });
             return { sprintAgent: true };
         }

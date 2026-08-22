@@ -705,6 +705,116 @@ a{color:#60a5fa;text-decoration:none}</style></head>
         } catch (err) { res.status(500).json({ error: err.message }); }
     });
 
+    // ── Oli (WhatsApp agent) tools ───────────────────────────────
+    // The agent is a text-driven session: anything it *passes* can be talked into it by
+    // whoever is messaging. So identity is never a parameter here — it is read from the
+    // per-turn token that SprintSession mints from the real sender's phone number.
+    // Everything else the agent needs it already has via the ordinary board API.
+
+    const oliActor = req => (req.user?.waPhone ? store.getUserByWhatsappPhone(req.user.waPhone) : null);
+    const bugAttachments = bug => { try { const a = JSON.parse(bug?.attachments || '[]'); return Array.isArray(a) ? a : []; } catch { return []; } };
+
+    // Who is Oli talking to? Lets the agent address people by name and, more importantly,
+    // tell an unrecognised number that their WhatsApp is not linked yet instead of
+    // guessing at who they are.
+    app.get('/api/oli/whoami', requireAuth, (req, res) => {
+        try {
+            const phone = req.user?.waPhone || null;
+            const user = oliActor(req);
+            res.json({
+                phone,
+                linked: Boolean(user),
+                readOnly: Boolean(req.user?.readOnly),
+                user: user ? { id: user.id, displayName: user.display_name, email: user.email, role: user.role } : null,
+            });
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    // "What bugs are assigned to me?" — resolved from the sender's number, so one person
+    // cannot read another's queue by asking Oli nicely.
+    app.get('/api/oli/my-bugs', requireAuth, (req, res) => {
+        try {
+            const user = oliActor(req);
+            if (!user) {
+                return res.status(404).json({
+                    error: 'This WhatsApp number is not linked to a dashboard user.',
+                    hint: 'Link it in Settings → Allowed phones, then ask again.',
+                    phone: req.user?.waPhone || null,
+                });
+            }
+            const status = String(req.query.status || 'active');
+            const bugs = store.getBugsAssignedTo(user.id, { status });
+            res.json({ user: { id: user.id, displayName: user.display_name }, status, count: bugs.length, bugs });
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    // Create a working session and hand back a link the requester can open.
+    // One call rather than start-then-share: the agent has no way to know this app's
+    // public origin, and a share link it had to assemble itself is a link that silently
+    // 404s in someone's chat.
+    app.post('/api/oli/sessions', requireAuth, async (req, res) => {
+        try {
+            const { text, bugId, issueId, model, type } = req.body || {};
+            const bug = bugId ? store.getBug(String(bugId)) : null;
+            if (bugId && !bug) return res.status(404).json({ error: `Bug ${bugId} not found` });
+            const issue = bug ? store.getIssue(bug.issue_id) : (issueId ? store.getIssue(String(issueId)) : null);
+            if (issueId && !issue) return res.status(404).json({ error: `Issue ${issueId} not found` });
+            const ask = String(text || '').trim();
+            if (!ask && !bug) return res.status(400).json({ error: 'text is required when no bugId is given' });
+
+            // The bug's own text is the brief; the requester's message is the instruction
+            // on top of it. Attachments are named so the session knows evidence exists and
+            // where to pull it from.
+            const attachments = bug ? bugAttachments(bug) : [];
+            const brief = bug
+                ? [
+                    `Bug on feature "${issue?.title || bug.issue_id}"${issue?.sprint_id ? ` (sprint ${store.getSprint(issue.sprint_id)?.name || issue.sprint_id})` : ''}:`,
+                    `${bug.title}${bug.severity === 'critical' ? '  [CRITICAL]' : ''}`,
+                    bug.description || '',
+                    attachments.length
+                        ? `\nAttachments (GET ${config.BASE_PATH}/api/attachments?key=<key>):\n`
+                          + attachments.map(a => `- ${a.name} — key: ${a.key}`).join('\n')
+                        : '',
+                    ask ? `\nWhat was asked: ${ask}` : '\nReproduce it, find the root cause, fix it, and verify.',
+                ].filter(Boolean).join('\n')
+                : ask;
+
+            const started = await messageHandler({
+                isWeb: true,
+                phone: String(req.user.waPhone || req.user.email || req.user.id),
+                text: `[start fresh] ${brief}`,
+                pushName: req.user.displayName || 'Oli (WhatsApp)',
+                ownerId: req.user.id,
+                model: model || 'claude-opus-4-8',
+                mode: 'developer',
+            });
+            const sessionId = started?.sessionId;
+            if (!sessionId) return res.status(500).json({ error: 'Session could not be started' });
+
+            const name = (bug ? bug.title : ask).slice(0, 120);
+            store.updateSession(sessionId, { name, type: type === 'task' ? 'task' : 'bug', sprint_id: issue?.sprint_id || null });
+            if (bug) store.updateBug(bug.id, { fix_session_id: sessionId, status: 'fixing' });
+
+            // Owner is the bot, so it may always mint the link. The recipient redeems it
+            // and becomes a write collaborator — that is what makes "you take it from
+            // here" actually work.
+            const token = crypto.randomBytes(24).toString('base64url');
+            store.createShareLink({
+                sessionId,
+                token,
+                createdBy: req.user.id,
+                permission: 'write',
+                expiresAt: new Date(Date.now() + SHARE_LINK_TTL_DAYS * 24 * 60 * 60 * 1000).toISOString(),
+            });
+            res.json({
+                sessionId,
+                name,
+                bugId: bug?.id || null,
+                shareUrl: `${config.PUBLIC_URL}${config.BASE_PATH}/share/${token}`,
+            });
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
     // ── Admin: User Management ──────────────────────────────────
 
     app.get('/api/admin/users', requireAuth, requireAdmin, (req, res) => {

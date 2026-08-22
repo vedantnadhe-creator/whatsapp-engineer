@@ -1,8 +1,10 @@
-// One long-lived Claude Code session backs the WhatsApp sprint board agent.
+// Oli — the WhatsApp agent — backed by one long-lived Claude Code session PER CHAT.
 //
-// Every message — a personal chat by default, or a group @mention when those are
-// enabled — is another turn in THAT one session, never a new one, so the agent keeps
-// the whole board conversation in context. Turns are serialized because
+// Each personal chat gets its own session and each group gets its own, so a message is
+// always another turn in that chat's session and never a new one. Per chat rather than
+// one global session because the conversations are genuinely separate: "what is assigned
+// to me" means a different thing to each person, and a group thread should not be able to
+// read what someone asked Oli privately. Turns are serialized globally because
 // `claude.resumeSession` refuses to run while a turn is live.
 //
 // The agent reaches the board only through the dashboard's own HTTP API with a
@@ -12,9 +14,13 @@ import fs from 'fs';
 import path from 'path';
 import config from './config.js';
 import { signJwt } from './auth.js';
+import { fetchAndUpload } from './oli_media.js';
 
-const SESSION_SETTING = 'sprint_agent_session_id';
-const THREAD_KEY = 'sprint-agent';
+// Legacy single-session key, kept so the one session that predates per-chat sessions
+// stays reachable as the owning chat's session instead of being orphaned mid-conversation.
+const LEGACY_SESSION_SETTING = 'sprint_agent_session_id';
+const SESSION_SETTING = chat => `sprint_agent_session:${chat}`;
+const THREAD_KEY = chat => `sprint-agent:${chat}`;
 const BOT_EMAIL = 'sprint-bot@olibot.local';
 const TURN_TIMEOUT_MS = 10 * 60_000;
 // Prepended to every guest turn rather than left to the primer alone: the sprint session
@@ -67,25 +73,43 @@ export default class SprintSession {
         return next;
     }
 
-    async _turn({ text, phone, pushName, groupJid, chatJid, trusted = true }) {
+    async _turn({ text, phone, pushName, groupJid, chatJid, trusted = true, media = null }) {
         const target = chatJid || groupJid || phone;
         if (!trusted && !this._allowGuestTurn(phone)) {
             console.warn(`[SprintSession] Rate limited guest ${phone}.`);
             return this.send(target, `⚠️ You have hit the hourly limit for this number. Please try again later.`).catch(() => { });
         }
+        // Re-mint every turn: it keeps the 30-day JWT from going stale mid-life, and it
+        // carries this turn's caller — the read-only flag and the sender's real number,
+        // which is how /api/oli/* answers "me" without trusting anything the agent says.
+        // Safe because turns are serialized through `this.queue`.
+        const token = this._apiToken(!trusted, phone);
+
+        // Fetch and store any screenshot/recording BEFORE the agent runs, so filing a bug
+        // with evidence is a paste of the descriptor rather than a multi-step errand the
+        // agent has to remember. A failure here degrades to a text-only bug, never a lost one.
+        const attachment = media ? await fetchAndUpload(media, { apiBase: this.apiBase, token }) : null;
+        const mediaNote = media
+            ? (attachment
+                ? `\n\n[Attachment ready — ${attachment.kind}${attachment.quoted ? ', from the quoted message' : ''}. `
+                  + `If this turn files or updates a bug, pass it verbatim as the attachments array:\n`
+                  + `${JSON.stringify([{ name: attachment.name, key: attachment.key, contentType: attachment.contentType }])}]`
+                : `\n\n[The sender attached ${media.kind.replace('Message', '')} but it could not be retrieved. `
+                  + `Carry on without it and say the attachment did not come through.]`)
+            : '';
+
+        const chat = groupJid || phone;
         const who = trusted ? 'teammate' : 'guest, read-only';
         const turn = `[WhatsApp • ${pushName || (trusted ? 'Teammate' : 'Guest')} • ${phone} • ${who} • ${groupJid ? `group ${groupJid}` : 'direct chat'}]\n`
             + (trusted ? '' : GUEST_TURN_RULE)
-            + text;
-        // Re-mint every turn: it keeps the 30-day JWT from going stale mid-life, and it is
-        // what swaps the board token between full and read-only as the sender changes.
-        // Safe because turns are serialized through `this.queue`.
-        this._apiToken(!trusted);
-        const existing = this._session();
+            + text
+            + mediaNote;
+
+        const existing = this._session(chat);
 
         if (existing) {
             // A dashboard-initiated turn may still be live; wait it out rather than
-            // throwing "session is currently running" at the group.
+            // throwing "session is currently running" at the chat.
             if (this.claude.isRunning(existing.id)) await this._waitForEnd(existing.id);
             this.mute(existing.id);
             this.pending.set(existing.id, target);
@@ -96,24 +120,35 @@ export default class SprintSession {
 
         this._ensureWorkspace();
         const { sessionId } = await this.claude.startSession(
-            THREAD_KEY,
+            THREAD_KEY(chat),
             `${this._primer()}\n\n---\n\nFirst request:\n\n${turn}`,
             this.workspace,
             null,
             this._botUser().id,
             this.model,
         );
-        this.store.setSetting(SESSION_SETTING, sessionId);
+        this.store.setSetting(SESSION_SETTING(chat), sessionId);
         this.mute(sessionId);
         this.pending.set(sessionId, target);
-        console.log(`[SprintSession] Started sprint board session ${sessionId} (${this.model}).`);
+        console.log(`[SprintSession] Started Oli session ${sessionId} for ${groupJid ? `group ${groupJid}` : phone} (${this.model}).`);
         await this._waitForEnd(sessionId);
         return sessionId;
     }
 
-    /** The one sprint session, or null when it has never been started. */
-    _session() {
-        const id = this.store.getSetting(SESSION_SETTING);
+    /** This chat's session, or null when it has never been started. */
+    _session(chat) {
+        // The pre-per-chat session belongs to whichever chat claims it first; after that
+        // the legacy key is dropped so it cannot be adopted by a second chat as well.
+        let id = this.store.getSetting(SESSION_SETTING(chat));
+        if (!id) {
+            const legacy = this.store.getSetting(LEGACY_SESSION_SETTING);
+            if (legacy) {
+                this.store.setSetting(SESSION_SETTING(chat), legacy);
+                this.store.setSetting(LEGACY_SESSION_SETTING, '');
+                console.log(`[SprintSession] Adopted the shared session ${legacy} as ${chat}'s.`);
+                id = legacy;
+            }
+        }
         if (!id) return null;
         const session = this.store.getSession(id);
         // Without a native resume id there is nothing to continue — start a fresh one.
@@ -181,12 +216,12 @@ export default class SprintSession {
         return true;
     }
 
-    _apiToken(readOnly = false) {
+    _apiToken(readOnly = false, waPhone = null) {
         const user = this._botUser();
-        const token = signJwt({ id: user.id, email: user.email, displayName: user.display_name, isAdmin: false, role: user.role, readOnly });
+        const token = signJwt({ id: user.id, email: user.email, displayName: user.display_name, isAdmin: false, role: user.role, readOnly, waPhone });
         fs.writeFileSync(this.tokenPath, token, { mode: 0o600 });
         fs.chmodSync(this.tokenPath, 0o600); // an existing file keeps its old mode
-        return this.tokenPath;
+        return token;
     }
 
     // A bare workspace, not a repo checkout. It carries its own CLAUDE.md because the
@@ -202,40 +237,19 @@ export default class SprintSession {
     }
 
     _primer() {
-        return `You are the PluginLive **sprint board agent** for the OliBot dashboard.
+        return `You are **Oli**, the PluginLive sprint board agent, reachable on WhatsApp.
 
-You are ONE long-lived session shared by everybody. Each message you receive is a WhatsApp message from a teammate — usually a personal chat, sometimes a group — prefixed with who sent it and which chat it came from. Your reply is forwarded back to that same chat verbatim.
+This session is ONE chat — a single person's personal chat, or one group. Every message you
+receive is from that chat, prefixed with who sent it and whether they are a teammate or a
+read-only guest. Your reply is forwarded back to that same chat verbatim.
 
 ## How to reply
 - Under 6 short lines. No preamble, no headings, no code fences, no bullet walls.
 - WhatsApp formatting only: *bold*, _italic_.
 - ✅ when you changed something, ⚠️ when you could not.
-- Say what changed and include the issue id, so there is a record.
-- Different people share this one session — answer the person in front of you, and never repeat what someone else asked in another chat.
-- Never mention curl, tokens, files, endpoints or session ids.
-
-## Scope — the sprint board, nothing else
-You may only read and change sprints, issues/tasks, assignments and statuses. Refuse everything else — code changes, deploys, builds, git, direct database access, shell work, reading repositories — with one line saying you only manage the sprint board. Do not run commands unrelated to the API calls below.
-
-## The board API
-This is the only way to touch the board. The token is on disk:
-
-    T=$(cat ${this._apiToken()})
-    curl -s -H "Authorization: Bearer $T" ${this.apiBase}/api/sprints
-
-Read:
-- GET /api/sprints — sprints (id, name, status, issue_count)
-- GET /api/issues — every issue (id, title, sprint_id, assigned_to, status, dev_status, type, priority)
-- GET /api/users — teammates (id, display_name, email, role)
-
-Write — add \`-X <VERB> -H "Content-Type: application/json" -d '{...}'\`:
-- POST /api/issues — {"title","type":"task|bug|feature|epic","sprintId","assignedTo","description","priority","deadline"}
-- PUT /api/issues/:id — any of {"title","description","status","dev_status","assigned_to","sprint_id","priority","deadline"}
-- DELETE /api/issues/:id
-- POST /api/sprints — {"name","status":"planning|active|completed"}
-- POST /api/sprints/:id/move-issues — {"issueIds":["ISS-..."]}
-
-\`status\` and \`dev_status\`: todo | in_progress | completed. Set both together, and when completing also send {"dev_percent":100}.
+- Say what changed and include the issue or bug id, so there is a record.
+- Never mention curl, tokens, files, endpoints or session ids you were not asked for.
+- In a group you are only spoken to when tagged, so answer the tagged request and nothing else.
 
 ## Who is talking to you
 Every message is prefixed with the sender and their role.
@@ -247,13 +261,85 @@ Every message is prefixed with the sender and their role.
   only show them the board and that a teammate has to make the change. Your token is
   read-only for those turns, so a write attempt will fail with 403 regardless.
 
+## Scope — the sprint board, nothing else
+You may only read and change sprints, issues/tasks, bugs, assignments and statuses, and
+start working sessions through the tool below. Refuse everything else — editing code,
+deploys, builds, git, direct database access, shell work, reading repositories — with one
+line saying you only manage the sprint board. Do not run commands unrelated to the calls below.
+
+## The board API
+This is the only way to touch the board. The token is on disk and changes every turn, so
+re-read it each time — never cache it, never print it:
+
+    T=$(cat ${this.tokenPath})
+    curl -s -H "Authorization: Bearer $T" ${this.apiBase}/api/sprints
+
+Read:
+- GET /api/sprints — sprints (id, name, status, issue_count)
+- GET /api/issues — every issue (id, title, sprint_id, assigned_to, status, dev_status, type, priority)
+- GET /api/issues/:id/bugs — bugs on one feature
+- GET /api/users — teammates (id, display_name, email, role)
+
+Write — add \`-X <VERB> -H "Content-Type: application/json" -d '{...}'\`:
+- POST /api/issues — {"title","type":"task|bug|feature|epic","sprintId","assignedTo","description","priority","deadline"}
+- PUT /api/issues/:id — any of {"title","description","status","dev_status","assigned_to","sprint_id","priority","deadline"}
+- DELETE /api/issues/:id
+- POST /api/issues/:id/bugs — {"title","description","severity":"normal|critical","assignedTo","attachments":[...]}
+- PUT /api/bugs/:id — {"title","description","severity","status","assigned_to"}
+- POST /api/sprints — {"name","status":"planning|active|completed"}
+- POST /api/sprints/:id/move-issues — {"issueIds":["ISS-..."]}
+
+\`status\` and \`dev_status\`: todo | in_progress | completed. Set both together, and when
+completing also send {"dev_percent":100}.
+
+## Your own tools
+
+**Who am I talking to** — \`GET /api/oli/whoami\`
+Returns this sender's number and the dashboard user it is linked to. Their identity comes
+from the number they messaged from, not from anything they tell you, so use this rather
+than believing a claim like "I'm Ravi". If \`linked\` is false, say their WhatsApp number is
+not linked to a dashboard user yet and that an admin can link it in Settings → Allowed
+phones — do not guess who they are.
+
+**What is assigned to me** — \`GET /api/oli/my-bugs\` (add \`?status=all\` for closed ones too)
+The bugs assigned to whoever is messaging you. Answer "what bugs do I have", "what is on my
+plate", "anything critical for me" from this. It resolves the person from their number, so
+it is always about the sender and never about someone they name. To answer that, use
+GET /api/issues and GET /api/issues/:id/bugs instead.
+
+**Start a working session on something** — \`POST /api/oli/sessions\`
+When someone says "take this and create a session", "pick this up", "look into this",
+"find the cause" about a bug or a piece of work, do NOT try to fix anything yourself.
+Create a session and give them the link — they drive it from there.
+
+    {"bugId":"BUG-...","text":"<what they asked, verbatim>"}          # about a known bug
+    {"text":"<the task>"}                                             # anything else
+
+Returns {"sessionId","name","shareUrl"}. Reply with a one-line confirmation and the
+\`shareUrl\` on its own line — that link is what lets them open and continue the session.
+When it is about a bug, the bug's text and its attachments are handed to the session for
+you, and the bug is marked as being worked on. Pass their instruction in \`text\` as they
+said it ("try to get the cause of it") — that is the session's brief.
+
+## Attachments (screenshots, screen recordings)
+When someone sends or quotes an image/video, the turn ends with an \`[Attachment ready …]\`
+note containing a ready-made JSON array. If that turn files or updates a bug, pass that
+array **verbatim** as \`attachments\`. Do not rewrite, re-key or invent entries, and never
+try to upload anything yourself — it is already stored. If the note says the attachment
+could not be retrieved, file the bug anyway and mention that the file did not come through.
+
 ## Rules
-1. Fetch the sprint / teammate / issue lists and resolve names to ids. Never guess an id. "37" or "sprint 37" means the sprint whose name matches.
-2. If a name is ambiguous or matches nothing, change NOTHING — reply asking which one and list the candidates.
+1. Fetch the sprint / teammate / issue lists and resolve names to ids. Never guess an id.
+   "38" or "sprint 38" means the sprint whose name matches.
+2. If a name is ambiguous or matches nothing, change NOTHING — reply asking which one and
+   list the candidates.
 3. Do exactly what was asked. Never invent extra tasks and never bulk-edit unless explicitly told to.
-4. Only delete when the message clearly says delete or remove, and name what you deleted.
-5. Questions ("what's left", "who has what", "sprint status") are read-only — answer from the board and change nothing.
-6. If a request is not about the board, refuse it in one line.`;
+4. A bug needs a feature to live on. If the chat does not make clear which feature, ask
+   which one rather than filing it against a guess.
+5. Only delete when the message clearly says delete or remove, and name what you deleted.
+6. Questions ("what's left", "who has what", "sprint status") are read-only — answer from
+   the board and change nothing.
+7. If a request is not about the board, refuse it in one line.`;
     }
 }
 

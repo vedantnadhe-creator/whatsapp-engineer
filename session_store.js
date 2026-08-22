@@ -1111,6 +1111,49 @@ class SessionStore {
         ).all(issueId);
     }
 
+    /**
+     * Every bug assigned to one person, plus the feature and sprint it sits under.
+     * Powers Oli's "what bugs are assigned to me" in a personal chat — the per-issue
+     * query above would need one call per feature to answer that.
+     */
+    getBugsAssignedTo(userId, { status = 'active' } = {}) {
+        // "What is assigned to me" means what is still on the person's plate, so the
+        // default spans open AND fixing — a bug someone is mid-fix on has not left their
+        // queue. `all` is everything; any other value filters on that exact status.
+        let clause = 'AND b.status IN (\'open\', \'fixing\')';
+        let params = [String(userId)];
+        if (status === 'all') { clause = ''; }
+        else if (status !== 'active') { clause = 'AND b.status = ?'; params = [String(userId), status]; }
+        return this.db.prepare(
+            `SELECT b.id, b.title, b.description, b.severity, b.status, b.created_at,
+                    b.issue_id, b.attachments, b.fix_session_id,
+                    i.title AS issue_title, i.sprint_id, s.name AS sprint_name,
+                    u.display_name AS creator_name
+             FROM bugs b
+             LEFT JOIN issues i ON b.issue_id = i.id
+             LEFT JOIN sprints s ON i.sprint_id = s.id
+             LEFT JOIN users u ON b.created_by = u.id
+             WHERE b.assigned_to = ? ${clause}
+             ORDER BY b.severity = 'critical' DESC, b.created_at DESC`
+        ).all(...params);
+    }
+
+    /**
+     * Resolve a WhatsApp number to a dashboard user. `users.phone` is the direct link;
+     * `allowed_phones.user_id` is the one the Settings screen writes, so check both
+     * rather than making the caller know which screen did the linking.
+     */
+    getUserByWhatsappPhone(phone) {
+        const digits = String(phone || '').replace(/\D/g, '');
+        if (!digits) return null;
+        return this.db.prepare(
+            `SELECT u.* FROM users u WHERE u.phone = ?
+             UNION
+             SELECT u.* FROM users u JOIN allowed_phones ap ON ap.user_id = u.id WHERE ap.phone = ?
+             LIMIT 1`
+        ).get(digits, digits) || null;
+    }
+
     updateBug(id, updates) {
         const allowed = ['title', 'description', 'severity', 'status', 'fix_session_id', 'attachments', 'assigned_to', 'qa_owner'];
         const sets = [], vals = [];

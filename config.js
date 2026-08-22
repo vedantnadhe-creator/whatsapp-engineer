@@ -138,6 +138,11 @@ const config = {
     GOOGLE_SHEETS_SHARE_WITH: process.env.GOOGLE_SHEETS_SHARE_WITH || '',
     GOOGLE_DRIVE_FOLDER_ID: process.env.GOOGLE_DRIVE_FOLDER_ID || '',
 
+    // Public origin, used to build links that leave the box — today the session share
+    // links Oli sends over WhatsApp. Derived from the Evolution webhook URL when unset,
+    // since that is already a public URL pointing at this same app.
+    PUBLIC_URL: (process.env.PUBLIC_URL || '').replace(/\/$/, ''),
+
     // Base path when served under a sub-path (e.g., /sessions)
     // Leave empty '' when served at root /
     BASE_PATH: (process.env.BASE_PATH || '').replace(/\/$/, ''),
@@ -158,6 +163,10 @@ const config = {
 // derive the name from it. The path stays '/' on purpose: the /ws and /term
 // WebSocket upgrades are mounted at the root, not under BASE_PATH, so a
 // path-scoped cookie would never reach them.
+if (!config.PUBLIC_URL && config.EVOLUTION_WEBHOOK_URL) {
+    try { config.PUBLIC_URL = new URL(config.EVOLUTION_WEBHOOK_URL).origin; } catch (_) { /* leave empty */ }
+}
+
 const basePathSlug = config.BASE_PATH.replace(/[^a-zA-Z0-9]/g, '');
 config.COOKIE_NAME = basePathSlug ? `wa_token_${basePathSlug}` : 'wa_token';
 

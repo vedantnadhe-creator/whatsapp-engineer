@@ -3,9 +3,25 @@
 // EventEmitter `message`/`ready` events.
 import { EventEmitter } from 'events';
 import config from './config.js';
+import { findMedia } from './oli_media.js';
 
 const cleanId = value => String(value || '').split(':')[0].split('@')[0].replace(/\D/g, '');
-const messageText = msg => msg?.conversation || msg?.extendedTextMessage?.text || msg?.imageMessage?.caption || '';
+// Every JID tagged anywhere in a message. WhatsApp hangs `contextInfo` off whichever
+// node carries the content (text, image, video, document...), so look at all of them
+// rather than guessing which one this message happens to be.
+const mentionedJids = node => (node && typeof node === 'object')
+    ? Object.values(node).flatMap(v => (v && typeof v === 'object')
+        ? (Array.isArray(v?.contextInfo?.mentionedJid) ? v.contextInfo.mentionedJid : []).concat(mentionedJids(v))
+        : [])
+        .concat(Array.isArray(node?.contextInfo?.mentionedJid) ? node.contextInfo.mentionedJid : [])
+    : [];
+const messageText = msg => msg?.conversation
+    || msg?.extendedTextMessage?.text
+    || msg?.imageMessage?.caption
+    || msg?.videoMessage?.caption
+    || msg?.documentMessage?.caption
+    || msg?.documentWithCaptionMessage?.message?.documentMessage?.caption
+    || '';
 
 export default class EvolutionWhatsApp extends EventEmitter {
     constructor(store) {
@@ -114,7 +130,11 @@ export default class EvolutionWhatsApp extends EventEmitter {
         const msg = data?.message || data;
         const text = messageText(msg).trim();
         if (isGroup) {
-            const mentioned = msg?.extendedTextMessage?.contextInfo?.mentionedJid || data?.contextInfo?.mentionedJid || [];
+            // The tag can ride on any message node, not just a text one: "@oli file this as
+            // a bug" attached to a screenshot puts `mentionedJid` under `imageMessage`, so
+            // reading only `extendedTextMessage` silently ignored every tagged screenshot —
+            // which is the main way a bug gets reported in a group.
+            const mentioned = mentionedJids(msg).concat(mentionedJids(data));
             // Do not treat a plain word/name as a mention: groups are tag-only by design.
             if (!(this.botNumber && mentioned.some(j => cleanId(j) === this.botNumber))) return;
         }
@@ -135,19 +155,30 @@ export default class EvolutionWhatsApp extends EventEmitter {
         // Guests exist only in personal chats and only when open DMs are switched on —
         // groups stay allow-list only. Log the drop either way: "the bot ignored me" is
         // otherwise indistinguishable from a broken webhook.
-        const trusted = this._allowed(sender);
+        // An explicitly allow-listed group is itself the trust boundary: its members are
+        // the team, and requiring every one of them to also be in allowed_phones would
+        // mean "@oli file this bug" silently doing nothing for most of the group. With
+        // ALLOWED_GROUPS empty, any group Oli happens to be added to would qualify, so
+        // there the sender must still be a known number.
+        const trusted = this._allowed(sender) || (isGroup && config.ALLOWED_GROUPS.includes(jid));
         if (!trusted && (isGroup || !config.SPRINT_AGENT_OPEN_DMS)) {
             console.warn(`[Evolution] Ignored sprint message from ${sender} — not in the allowed phones list${isGroup ? ' (group)' : ' (open DMs are off)'}.`);
             return;
         }
+        // A screenshot or screen recording, either attached here or on the message this
+        // one replies to. Only the reference travels — the bytes are fetched and stored
+        // later, where the board token lives.
+        const media = findMedia(data);
         const command = (isGroup ? text.replace(/@\S+/g, '') : text).trim();
-        if (!command) return;
+        // A bare image with no caption is not a request. In a group the tag is the
+        // request, so "@oli" plus a screenshot is allowed through with empty text.
+        if (!command && !(media && isGroup)) return;
         this.emit('message', {
-            phone: sender, text: command,
+            phone: sender, text: command || '(no text — see the attached media)',
             pushName: data?.pushName || data?.pushname || (isGroup ? 'Group member' : 'Teammate'),
             // Reply to the group JID, or to the teammate's *number* — never the `@lid`.
             groupJid: isGroup ? jid : null, chatJid: isGroup ? jid : sender, raw: payload, sprintCommand: true,
-            trusted,
+            trusted, media,
         });
     }
 }
