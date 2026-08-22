@@ -37,10 +37,27 @@ setsid nohup "$NODE" index.js >>"$LOG" 2>&1 &
 echo "started PID $!"
 
 sleep 12
+NEW=$(lsof -ti tcp:"$PORT" -sTCP:LISTEN 2>/dev/null | head -1)
 echo "--- probes ---"
-curl -s -o /dev/null -w 'dashboard   %{http_code}\n' "http://127.0.0.1:$PORT/"
-curl -s "http://127.0.0.1:$PORT/api/evolution/webhook"
+if [ -z "$NEW" ]; then
+    echo "VERDICT: DOWN — nothing is listening on $PORT"
+    tail -30 "$LOG"
+    echo "=== done $(date -Is) ==="
+    exit 1
+fi
+curl -s -o /dev/null -w 'dashboard        %{http_code}  (200 = serving)\n' "http://127.0.0.1:$PORT/"
+printf 'oli tools        '; curl -s -o /dev/null -w '%{http_code}  (401 = route exists, auth required)\n' "http://127.0.0.1:$PORT/api/oli/whoami"
+printf 'evolution hook   '; curl -s "http://127.0.0.1:$PORT/api/evolution/webhook"; echo
+# Config only counts if the RUNNING process has it — a .env edit that never got
+# exported looks identical from the outside until a message silently goes missing.
+echo "--- live config (from the running process) ---"
+tr '\0' '\n' < "/proc/$NEW/environ" \
+  | grep -E '^(SPRINT_AGENT_GROUPS|SPRINT_AGENT_OPEN_DMS|ALLOWED_GROUPS|BOT_ALIASES|EVOLUTION_BOT_NUMBER)=' | sort | sed 's/^/  /'
+echo "--- whatsapp link ---"
+curl -s -H "apikey: $EVOLUTION_API_KEY" \
+  "$EVOLUTION_API_URL/instance/connectionState/$EVOLUTION_INSTANCE" | sed 's/^/  /'
 echo
 echo "--- dashboard log tail ---"
-grep -a '\[Evolution\]' "$LOG" | tail -5
+grep -a '\[Evolution\]\|\[SprintSession\]\|Error\|error:' "$LOG" | tail -6
+echo "VERDICT: UP (pid $NEW)"
 echo "=== done $(date -Is) ==="
