@@ -79,14 +79,26 @@ export function findMedia(data) {
     // The sender's own attachment wins over anything they quoted: if they send a fresh
     // screenshot while replying to something, the new one is what they mean.
     const direct = Object.keys(KINDS).find(k => msg[k]);
-    if (direct) return { messageId: key.id, kind: direct, node: msg[direct], quoted: false };
-    // Otherwise: replying to somebody else's image and tagging Oli. `stanzaId` is the
-    // quoted message's own id, which is what Evolution needs to hand the blob back — it
-    // has the original, so this works for media posted by anyone in the chat.
+    if (direct) {
+        return { messageId: key.id, kind: direct, node: msg[direct], quoted: false, key, messageNode: msg };
+    }
+    // Otherwise: replying to somebody else's image and tagging Oli. The quoted message
+    // comes with its own content — media keys and all — so it is carried along and handed
+    // to Evolution whole. Looking it up by `stanzaId` alone only works if Evolution has
+    // that message indexed, which it is not always; the content is always right here.
     const ctx = findQuoteContext(msg) || findQuoteContext(data) || {};
     const quoted = ctx?.quotedMessage;
     const quotedKind = quoted && Object.keys(KINDS).find(k => quoted[k]);
-    if (quotedKind && ctx.stanzaId) return { messageId: ctx.stanzaId, kind: quotedKind, node: quoted[quotedKind], quoted: true };
+    if (quotedKind && ctx.stanzaId) {
+        return {
+            messageId: ctx.stanzaId,
+            kind: quotedKind,
+            node: quoted[quotedKind],
+            quoted: true,
+            key: { id: ctx.stanzaId, remoteJid: key.remoteJid, fromMe: false, participant: ctx.participant },
+            messageNode: quoted,
+        };
+    }
     return null;
 }
 
@@ -108,18 +120,36 @@ function fileNameFor({ kind, node, messageId }) {
 export async function fetchAndUpload(found, { apiBase, token }) {
     if (!found?.messageId) return null;
     try {
-        const res = await fetch(
-            `${config.EVOLUTION_API_URL.replace(/\/$/, '')}/chat/getBase64FromMediaMessage/${encodeURIComponent(config.EVOLUTION_INSTANCE)}`,
-            {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', apikey: config.EVOLUTION_API_KEY },
-                body: JSON.stringify({ message: { key: { id: found.messageId } }, convertToMp4: false }),
-            },
-        );
-        if (!res.ok) throw new Error(`Evolution ${res.status}: ${(await res.text()).slice(0, 200)}`);
-        const payload = await res.json();
-        const b64 = payload?.base64 || payload?.data?.base64;
-        if (!b64) throw new Error('Evolution returned no base64 for that message');
+        // Prefer sending the message whole. Evolution decrypts straight from the content
+        // that way; the id-only form makes it search its own store, which answers
+        // "Message not found" for anything it has not indexed — the failure that made a
+        // quoted screenshot come back empty. Id-only stays as a fallback because a direct
+        // (non-quoted) send is always in the store, and the richer body is the newer path.
+        const bodies = [];
+        if (found.messageNode) bodies.push({ message: { key: found.key, message: found.messageNode }, convertToMp4: false });
+        bodies.push({ message: { key: { id: found.messageId } }, convertToMp4: false });
+
+        let b64, payload, lastError;
+        for (const body of bodies) {
+            try {
+                const res = await fetch(
+                    `${config.EVOLUTION_API_URL.replace(/\/$/, '')}/chat/getBase64FromMediaMessage/${encodeURIComponent(config.EVOLUTION_INSTANCE)}`,
+                    {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', apikey: config.EVOLUTION_API_KEY },
+                        body: JSON.stringify(body),
+                    },
+                );
+                if (!res.ok) throw new Error(`Evolution ${res.status}: ${(await res.text()).slice(0, 200)}`);
+                payload = await res.json();
+                b64 = payload?.base64 || payload?.data?.base64;
+                if (b64) break;
+                throw new Error('Evolution returned no base64 for that message');
+            } catch (err) { lastError = err; }
+        }
+        // Name the message in the error: without it, "Message not found" gives no way to
+        // tell which media failed or whether the id was even the one we meant.
+        if (!b64) throw new Error(`${lastError?.message || 'no media returned'} [id=${found.messageId} kind=${found.kind} quoted=${found.quoted}]`);
         const buffer = Buffer.from(b64, 'base64');
         if (!buffer.length) throw new Error('Evolution returned an empty file');
         if (buffer.length > MAX_BYTES) throw new Error(`File is ${(buffer.length / 1048576).toFixed(1)}MB, over the ${MAX_BYTES / 1048576}MB limit`);
