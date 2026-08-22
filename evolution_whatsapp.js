@@ -19,11 +19,14 @@ export default class EvolutionWhatsApp extends EventEmitter {
     get enabled() { return Boolean(config.EVOLUTION_API_URL && config.EVOLUTION_INSTANCE); }
     _url(path) { return `${config.EVOLUTION_API_URL.replace(/\/$/, '')}${path}`; }
     _headers() { return { 'Content-Type': 'application/json', apikey: config.EVOLUTION_API_KEY }; }
-    // A tagged group message drives a Claude Code session, so fail CLOSED: the sender
-    // must be a known teammate, not merely a member of some group this number is in.
-    // (The old `ALLOWED_PHONES.length === 0 ||` short-circuit let anyone in — harmless
-    // for the previous five-verb regex agent, not for a shell-capable session.)
-    // Numbers are managed in Settings → allowed phones, seeded from ALLOWED_PHONES.
+    // A known teammate: full write access to the board. Numbers are managed in
+    // Settings → allowed phones, seeded from ALLOWED_PHONES.
+    // Groups still fail CLOSED on this — a tagged group message drives a Claude Code
+    // session, and the sender must be a known teammate, not merely a member of some
+    // group this number happens to be in. (The old `ALLOWED_PHONES.length === 0 ||`
+    // short-circuit let anyone in — harmless for the previous five-verb regex agent,
+    // not for a shell-capable session.) A DM from an unknown number is handled as a
+    // guest instead of dropped when SPRINT_AGENT_OPEN_DMS is on; see handleWebhook.
     _allowed(phone) { return this.store.isPhoneAllowed(phone); }
 
     async _request(path, options = {}) {
@@ -128,10 +131,13 @@ export default class EvolutionWhatsApp extends EventEmitter {
             if (senderJid) console.warn(`[Evolution] Ignored sprint message from ${senderJid} — no phone number in the payload.`);
             return;
         }
-        // Stay silent rather than replying to strangers, but log it: "the bot ignored me"
-        // is otherwise indistinguishable from a broken webhook.
-        if (!this._allowed(sender)) {
-            console.warn(`[Evolution] Ignored sprint message from ${sender} — not in the allowed phones list.`);
+        // A teammate drives the board; anyone else is a guest who may only read it.
+        // Guests exist only in personal chats and only when open DMs are switched on —
+        // groups stay allow-list only. Log the drop either way: "the bot ignored me" is
+        // otherwise indistinguishable from a broken webhook.
+        const trusted = this._allowed(sender);
+        if (!trusted && (isGroup || !config.SPRINT_AGENT_OPEN_DMS)) {
+            console.warn(`[Evolution] Ignored sprint message from ${sender} — not in the allowed phones list${isGroup ? ' (group)' : ' (open DMs are off)'}.`);
             return;
         }
         const command = (isGroup ? text.replace(/@\S+/g, '') : text).trim();
@@ -141,6 +147,7 @@ export default class EvolutionWhatsApp extends EventEmitter {
             pushName: data?.pushName || data?.pushname || (isGroup ? 'Group member' : 'Teammate'),
             // Reply to the group JID, or to the teammate's *number* — never the `@lid`.
             groupJid: isGroup ? jid : null, chatJid: isGroup ? jid : sender, raw: payload, sprintCommand: true,
+            trusted,
         });
     }
 }

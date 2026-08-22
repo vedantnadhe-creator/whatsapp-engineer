@@ -17,6 +17,15 @@ const SESSION_SETTING = 'sprint_agent_session_id';
 const THREAD_KEY = 'sprint-agent';
 const BOT_EMAIL = 'sprint-bot@olibot.local';
 const TURN_TIMEOUT_MS = 10 * 60_000;
+// Prepended to every guest turn rather than left to the primer alone: the sprint session
+// is long-lived, so the session already running in production was primed before guests
+// existed and would never see a primer-only rule. The read-only token is the actual
+// enforcement (see auth.js) — this is here so the agent explains the refusal instead of
+// reporting a confusing 403.
+const GUEST_TURN_RULE = 'This sender is NOT a teammate. Answer board questions normally, '
+    + 'but make no change of any kind — no create, update, delete or assignment. If asked '
+    + 'to change something, reply in one line that you can only show the board and a '
+    + 'teammate has to make the change.\n\n';
 
 export default class SprintSession {
     /**
@@ -38,6 +47,7 @@ export default class SprintSession {
         this.tokenPath = path.join(process.cwd(), '.sprint-api-token');
         this.pending = new Map(); // sessionId → chat JID still awaiting this turn's answer
         this.queue = Promise.resolve();
+        this.guestTurns = new Map(); // guest phone → recent turn timestamps (rate limit)
 
         claude.on('result', ({ sessionId, content }) => this._deliver(sessionId, content));
         claude.on('session_error', ({ sessionId, error }) => this._deliver(sessionId, `⚠️ Sprint agent error: ${error}`));
@@ -57,10 +67,20 @@ export default class SprintSession {
         return next;
     }
 
-    async _turn({ text, phone, pushName, groupJid, chatJid }) {
+    async _turn({ text, phone, pushName, groupJid, chatJid, trusted = true }) {
         const target = chatJid || groupJid || phone;
-        const turn = `[WhatsApp • ${pushName || 'Teammate'} • ${phone} • ${groupJid ? `group ${groupJid}` : 'direct chat'}]\n${text}`;
-        this._apiToken(); // re-mint every turn so the 30-day JWT never goes stale mid-life
+        if (!trusted && !this._allowGuestTurn(phone)) {
+            console.warn(`[SprintSession] Rate limited guest ${phone}.`);
+            return this.send(target, `⚠️ You have hit the hourly limit for this number. Please try again later.`).catch(() => { });
+        }
+        const who = trusted ? 'teammate' : 'guest, read-only';
+        const turn = `[WhatsApp • ${pushName || (trusted ? 'Teammate' : 'Guest')} • ${phone} • ${who} • ${groupJid ? `group ${groupJid}` : 'direct chat'}]\n`
+            + (trusted ? '' : GUEST_TURN_RULE)
+            + text;
+        // Re-mint every turn: it keeps the 30-day JWT from going stale mid-life, and it is
+        // what swaps the board token between full and read-only as the sender changes.
+        // Safe because turns are serialized through `this.queue`.
+        this._apiToken(!trusted);
         const existing = this._session();
 
         if (existing) {
@@ -151,9 +171,19 @@ export default class SprintSession {
      * environment: the prompt is persisted in the message transcript, and the parent
      * env is inherited by every unrelated coding session.
      */
-    _apiToken() {
+    /** Sliding one-hour window per guest number, so one stranger cannot burn the budget. */
+    _allowGuestTurn(phone) {
+        const now = Date.now();
+        const recent = (this.guestTurns.get(phone) || []).filter(t => now - t < 60 * 60_000);
+        if (recent.length >= config.SPRINT_AGENT_GUEST_LIMIT) { this.guestTurns.set(phone, recent); return false; }
+        recent.push(now);
+        this.guestTurns.set(phone, recent);
+        return true;
+    }
+
+    _apiToken(readOnly = false) {
         const user = this._botUser();
-        const token = signJwt({ id: user.id, email: user.email, displayName: user.display_name, isAdmin: false, role: user.role });
+        const token = signJwt({ id: user.id, email: user.email, displayName: user.display_name, isAdmin: false, role: user.role, readOnly });
         fs.writeFileSync(this.tokenPath, token, { mode: 0o600 });
         fs.chmodSync(this.tokenPath, 0o600); // an existing file keeps its old mode
         return this.tokenPath;
@@ -181,7 +211,7 @@ You are ONE long-lived session shared by everybody. Each message you receive is 
 - WhatsApp formatting only: *bold*, _italic_.
 - ✅ when you changed something, ⚠️ when you could not.
 - Say what changed and include the issue id, so there is a record.
-- Different teammates share this one session — answer the person in front of you, and never repeat what someone else asked in another chat.
+- Different people share this one session — answer the person in front of you, and never repeat what someone else asked in another chat.
 - Never mention curl, tokens, files, endpoints or session ids.
 
 ## Scope — the sprint board, nothing else
@@ -206,6 +236,16 @@ Write — add \`-X <VERB> -H "Content-Type: application/json" -d '{...}'\`:
 - POST /api/sprints/:id/move-issues — {"issueIds":["ISS-..."]}
 
 \`status\` and \`dev_status\`: todo | in_progress | completed. Set both together, and when completing also send {"dev_percent":100}.
+
+## Who is talking to you
+Every message is prefixed with the sender and their role.
+
+- **teammate** — may read the board and change it.
+- **guest, read-only** — an unknown number. Answer their questions about the board from
+  the read endpoints as helpfully as you would a teammate, but make no change of any
+  kind: no POST, no PUT, no DELETE. If they ask for one, say in one line that you can
+  only show them the board and that a teammate has to make the change. Your token is
+  read-only for those turns, so a write attempt will fail with 403 regardless.
 
 ## Rules
 1. Fetch the sprint / teammate / issue lists and resolve names to ids. Never guess an id. "37" or "sprint 37" means the sprint whose name matches.

@@ -269,7 +269,13 @@ export async function handleIncomingMessage({ isWeb: explicitIsWeb, phone, text,
         // session, which answers in that same chat, so this never reaches the
         // orchestrator and never spawns a per-chat coding session.
         if (arguments[0]?.sprintCommand) {
-            await sprintSession.handle({ text, phone, pushName, groupJid, chatJid: chatJid || groupJid || phone });
+            // `trusted` distinguishes a teammate from a guest DM; default to guest so a
+            // caller that forgets the flag can never accidentally hand out write access.
+            await sprintSession.handle({
+                text, phone, pushName, groupJid,
+                chatJid: chatJid || groupJid || phone,
+                trusted: arguments[0]?.trusted === true,
+            });
             return { sprintAgent: true };
         }
         const isWeb = explicitIsWeb || pushName === 'Web Dashboard';

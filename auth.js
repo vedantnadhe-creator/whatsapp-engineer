@@ -100,6 +100,14 @@ export function requireAuth(req, res, next) {
     const payload = verifyJwt(token);
     if (!payload) return _deny(req, res);
     req.user = payload;
+    // A read-only token — the WhatsApp sprint agent answering a number that is not on
+    // the allowed list — may look at the board but never change it. Enforced here, at
+    // the one place every /api route already passes through, so an agent talked into
+    // trying a write by a stranger's message still cannot perform one. Normal logins
+    // never carry the claim, so this is inert for every human user.
+    if (payload.readOnly && req.method !== 'GET') {
+        return res.status(403).json({ error: 'Read-only access: this token may not change anything.' });
+    }
     next();
 }
 

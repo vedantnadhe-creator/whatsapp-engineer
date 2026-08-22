@@ -80,6 +80,14 @@ const config = {
     // Off by default: the agent answers personal chats only. Turn on to also answer
     // @mentions in groups (never untagged group chatter).
     SPRINT_AGENT_GROUPS: /^(1|true|yes)$/i.test(process.env.SPRINT_AGENT_GROUPS || ''),
+    // Answer direct messages from numbers that are NOT on the allowed list. Those
+    // senders are *guests*: their turns run on a read-only board token (enforced in
+    // requireAuth, not merely asked for in the prompt) and are rate limited, so a
+    // stranger with the number can read the board but cannot change it or burn tokens.
+    // Teammates on the allowed list are unaffected and keep full write access.
+    SPRINT_AGENT_OPEN_DMS: /^(1|true|yes)$/i.test(process.env.SPRINT_AGENT_OPEN_DMS || ''),
+    // Guest turns allowed per number per hour.
+    SPRINT_AGENT_GUEST_LIMIT: parseInt(process.env.SPRINT_AGENT_GUEST_LIMIT || '10', 10),
 
     // Session defaults
     DEFAULT_WORKING_DIR: process.env.DEFAULT_WORKING_DIR || '/home/ubuntu',
