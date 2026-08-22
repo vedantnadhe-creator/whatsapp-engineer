@@ -59,7 +59,8 @@ export default class SprintSession {
         this.model = config.SPRINT_AGENT_MODEL;
         this.tokenPath = path.join(process.cwd(), '.sprint-api-token');
         this.pending = new Map(); // sessionId → chat JID still awaiting this turn's answer
-        this.queue = Promise.resolve();
+        this.queues = new Map();  // chat → promise chain of that chat's turns
+        this.depth = new Map();   // chat → how many turns are waiting, for logging
         this.guestTurns = new Map(); // guest phone → recent turn timestamps (rate limit)
 
         claude.on('result', ({ sessionId, content }) => this._deliver(sessionId, content));
@@ -69,14 +70,37 @@ export default class SprintSession {
         });
     }
 
-    /** Queue an incoming WhatsApp message as the next turn of the single sprint session. */
+    /**
+     * Queue an incoming WhatsApp message as the next turn of that chat's session.
+     *
+     * One queue PER CHAT, not one globally. Within a conversation the turns are strictly
+     * sequential — three people tagging Oli in a group at once are answered one at a time,
+     * in the order they arrived, and none is dropped, which also matches what
+     * `claude.resumeSession` allows (it refuses to run while that session has a live turn).
+     * Across conversations they are independent: a group tag no longer waits behind an
+     * unrelated private chat's turn, which with turns running tens of seconds was long
+     * enough to look like Oli had ignored the group.
+     */
     handle(message) {
-        const next = this.queue.then(() => this._turn(message)).catch(err => {
+        const chat = message.groupJid || message.phone;
+        const waiting = (this.depth.get(chat) || 0) + 1;
+        this.depth.set(chat, waiting);
+        if (waiting > 1) console.log(`[SprintSession] ${chat}: queued behind ${waiting - 1} turn(s).`);
+
+        const queue = this.queues.get(chat) || Promise.resolve();
+        const next = queue.then(() => this._turn(message)).catch(err => {
             console.error('[SprintSession]', err.message);
             const target = message.chatJid || message.groupJid || message.phone;
             return this.send(target, `⚠️ Sprint agent could not handle that: ${err.message}`).catch(() => { });
         });
-        this.queue = next.then(() => { }, () => { });
+        // Settle regardless of outcome: one failed turn must not wedge the chat's queue.
+        const settled = next.then(() => { }, () => { });
+        this.queues.set(chat, settled);
+        settled.then(() => {
+            this.depth.set(chat, Math.max(0, (this.depth.get(chat) || 1) - 1));
+            // Drop the chain once this chat is idle, so the maps do not grow forever.
+            if (this.queues.get(chat) === settled) { this.queues.delete(chat); this.depth.delete(chat); }
+        });
         return next;
     }
 

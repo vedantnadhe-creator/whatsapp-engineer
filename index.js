@@ -144,6 +144,12 @@ async function sendContent(phone, content, prefix = '') {
 
 async function broadcastToSubscribers(session, message, prefix = '') {
     if (!wa?.sock) return; // WhatsApp not connected — skip
+    // Oli's own chat sessions answer through SprintSession, which replies to the exact
+    // chat that addressed it. They must never broadcast: in a group that would be Oli
+    // speaking without being tagged, and progress chatter ("🔄 Working...") on top of it.
+    // Muting covers this too, but the mute is applied just after the session spawns —
+    // this closes that window, and does not depend on remembering to mute a new caller.
+    if (String(session?.user_phone || '').startsWith('sprint-agent')) return;
     const phones = session.subscribers_arr || [session.user_phone];
     for (const phone of phones) {
         if (!phone) continue;
