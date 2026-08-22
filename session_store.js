@@ -1153,7 +1153,12 @@ class SessionStore {
      * rather than making the caller know which screen did the linking.
      */
     getUserByWhatsappPhone(phone) {
-        const digits = String(phone || '').replace(/\D/g, '');
+        const raw = String(phone || '');
+        // A participant in an @lid-addressed group arrives as `lid:<digits>` — an opaque
+        // WhatsApp id, not a number we can dial. Stripping non-digits would turn it into
+        // something that could collide with a real stored phone, so refuse it outright.
+        if (raw.startsWith('lid:')) return null;
+        const digits = raw.replace(/\D/g, '');
         if (!digits) return null;
         return this.db.prepare(
             `SELECT u.* FROM users u WHERE u.phone = ?

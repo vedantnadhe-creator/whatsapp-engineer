@@ -15,6 +15,7 @@ const mentionedJids = node => (node && typeof node === 'object')
         : [])
         .concat(Array.isArray(node?.contextInfo?.mentionedJid) ? node.contextInfo.mentionedJid : [])
     : [];
+const escapeRe = v => String(v).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const messageText = msg => msg?.conversation
     || msg?.extendedTextMessage?.text
     || msg?.imageMessage?.caption
@@ -44,6 +45,21 @@ export default class EvolutionWhatsApp extends EventEmitter {
     // not for a shell-capable session.) A DM from an unknown number is handled as a
     // guest instead of dropped when SPRINT_AGENT_OPEN_DMS is on; see handleWebhook.
     _allowed(phone) { return this.store.isPhoneAllowed(phone); }
+
+    /**
+     * Is this group message addressed to Oli? Groups stay tag-only, but "tagged" has to
+     * mean more than one field: WhatsApp puts a tag in `mentionedJid`, and in @lid-addressed
+     * groups that array can carry linked-identity ids rather than the bot's number, so the
+     * bot would never recognise its own tag. Also accept the tag as it appears in the text —
+     * `@<number>`, or `@` plus a configured alias, which is what people actually type.
+     * Still a tag: a bare mention of the name in a sentence does not count.
+     */
+    _tagged(msg, data, text) {
+        const mentioned = mentionedJids(msg).concat(mentionedJids(data));
+        if (this.botNumber && mentioned.some(j => cleanId(j) === this.botNumber)) return true;
+        if (this.botNumber && text.includes(`@${this.botNumber}`)) return true;
+        return config.BOT_ALIASES.some(alias => new RegExp(`(^|\\s)@${escapeRe(alias)}\\b`, 'i').test(text));
+    }
 
     async _request(path, options = {}) {
         const response = await fetch(this._url(path), { ...options, headers: { ...this._headers(), ...(options.headers || {}) } });
@@ -129,26 +145,30 @@ export default class EvolutionWhatsApp extends EventEmitter {
         if (isGroup && config.ALLOWED_GROUPS.length && !config.ALLOWED_GROUPS.includes(jid)) return;
         const msg = data?.message || data;
         const text = messageText(msg).trim();
-        if (isGroup) {
-            // The tag can ride on any message node, not just a text one: "@oli file this as
-            // a bug" attached to a screenshot puts `mentionedJid` under `imageMessage`, so
-            // reading only `extendedTextMessage` silently ignored every tagged screenshot —
-            // which is the main way a bug gets reported in a group.
-            const mentioned = mentionedJids(msg).concat(mentionedJids(data));
-            // Do not treat a plain word/name as a mention: groups are tag-only by design.
-            if (!(this.botNumber && mentioned.some(j => cleanId(j) === this.botNumber))) return;
-        }
+        if (isGroup && !this._tagged(msg, data, text)) return;
         // WhatsApp now addresses most chats by `@lid` — a linked-identity id that is NOT a
         // phone number — and carries the real number alongside in `*Alt`/`*Pn`. Read those
         // first: a bare `@lid` fails the allowed-phones gate for every teammate, and is not
         // a number we could reply to either. In a DM the chat itself is the sender
         // (`payload.sender` is our own number, never theirs).
-        const senderJid = isGroup
+        const senderJid = String(isGroup
             ? (key.participantAlt || key.participantPn || key.participant || data?.participant || '')
-            : (key.remoteJidAlt || key.senderPn || jid);
-        const sender = cleanId(senderJid);
-        if (!sender || senderJid.endsWith('@lid')) {
-            if (senderJid) console.warn(`[Evolution] Ignored sprint message from ${senderJid} — no phone number in the payload.`);
+            : (key.remoteJidAlt || key.senderPn || jid));
+        const isLid = senderJid.endsWith('@lid');
+        const sender = isLid ? '' : cleanId(senderJid);
+        // An explicitly allow-listed group is the trust boundary, so a member we cannot
+        // resolve to a phone number is still legitimate — and we reply to the GROUP, not
+        // to them, so their number is not needed to answer. Newer WhatsApp groups address
+        // every participant by `@lid`, which would otherwise drop every tagged message in
+        // the group. Such a sender travels as an opaque participant id and simply does not
+        // resolve to a dashboard user.
+        const groupTrusted = isGroup && config.ALLOWED_GROUPS.includes(jid);
+        const participant = sender || (isLid && groupTrusted ? `lid:${cleanId(senderJid)}` : '');
+        if (!participant) {
+            if (senderJid) {
+                console.warn(`[Evolution] Ignored message from ${senderJid} — no phone number in the payload`
+                    + `${isGroup ? '. Add this group to ALLOWED_GROUPS to accept its @lid members.' : '.'}`);
+            }
             return;
         }
         // A teammate drives the board; anyone else is a guest who may only read it.
@@ -160,9 +180,9 @@ export default class EvolutionWhatsApp extends EventEmitter {
         // mean "@oli file this bug" silently doing nothing for most of the group. With
         // ALLOWED_GROUPS empty, any group Oli happens to be added to would qualify, so
         // there the sender must still be a known number.
-        const trusted = this._allowed(sender) || (isGroup && config.ALLOWED_GROUPS.includes(jid));
+        const trusted = (sender && this._allowed(sender)) || groupTrusted;
         if (!trusted && (isGroup || !config.SPRINT_AGENT_OPEN_DMS)) {
-            console.warn(`[Evolution] Ignored sprint message from ${sender} — not in the allowed phones list${isGroup ? ' (group)' : ' (open DMs are off)'}.`);
+            console.warn(`[Evolution] Ignored sprint message from ${participant} — not in the allowed phones list${isGroup ? ' (group not in ALLOWED_GROUPS)' : ' (open DMs are off)'}.`);
             return;
         }
         // A screenshot or screen recording, either attached here or on the message this
@@ -174,7 +194,7 @@ export default class EvolutionWhatsApp extends EventEmitter {
         // request, so "@oli" plus a screenshot is allowed through with empty text.
         if (!command && !(media && isGroup)) return;
         this.emit('message', {
-            phone: sender, text: command || '(no text — see the attached media)',
+            phone: participant, text: command || '(no text — see the attached media)',
             pushName: data?.pushName || data?.pushname || (isGroup ? 'Group member' : 'Teammate'),
             // Reply to the group JID, or to the teammate's *number* — never the `@lid`.
             groupJid: isGroup ? jid : null, chatJid: isGroup ? jid : sender, raw: payload, sprintCommand: true,
