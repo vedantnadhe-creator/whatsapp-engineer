@@ -55,12 +55,35 @@ const KINDS = {
  * carries the quoted message's own id in `stanzaId`, which is what Evolution needs
  * to hand the blob back.
  */
+/**
+ * The first `contextInfo` carrying a quoted message, wherever it hangs.
+ *
+ * WhatsApp attaches `contextInfo` to whichever node holds the reply's own content, and a
+ * reply can be any type — text, image, video, sticker, a voice note. Naming the node types
+ * we expect is how tagged screenshots got silently ignored once already, so search instead
+ * of guessing.
+ */
+function findQuoteContext(node, depth = 0) {
+    if (!node || typeof node !== 'object' || depth > 6) return null;
+    if (node.contextInfo?.quotedMessage && node.contextInfo?.stanzaId) return node.contextInfo;
+    for (const value of Object.values(node)) {
+        const found = findQuoteContext(value, depth + 1);
+        if (found) return found;
+    }
+    return null;
+}
+
 export function findMedia(data) {
     const msg = data?.message || {};
     const key = data?.key || {};
-    const ctx = msg?.extendedTextMessage?.contextInfo || msg?.imageMessage?.contextInfo || data?.contextInfo || {};
+    // The sender's own attachment wins over anything they quoted: if they send a fresh
+    // screenshot while replying to something, the new one is what they mean.
     const direct = Object.keys(KINDS).find(k => msg[k]);
     if (direct) return { messageId: key.id, kind: direct, node: msg[direct], quoted: false };
+    // Otherwise: replying to somebody else's image and tagging Oli. `stanzaId` is the
+    // quoted message's own id, which is what Evolution needs to hand the blob back — it
+    // has the original, so this works for media posted by anyone in the chat.
+    const ctx = findQuoteContext(msg) || findQuoteContext(data) || {};
     const quoted = ctx?.quotedMessage;
     const quotedKind = quoted && Object.keys(KINDS).find(k => quoted[k]);
     if (quotedKind && ctx.stanzaId) return { messageId: ctx.stanzaId, kind: quotedKind, node: quoted[quotedKind], quoted: true };
