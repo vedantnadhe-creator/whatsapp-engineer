@@ -10,6 +10,7 @@
 // The agent reaches the board only through the dashboard's own HTTP API with a
 // scoped bot token, so edits flow through the running dashboard (and its websocket
 // broadcasts) instead of a second process writing the same database.
+import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import config from './config.js';
@@ -20,6 +21,12 @@ import { fetchAndUpload } from './oli_media.js';
 // stays reachable as the owning chat's session instead of being orphaned mid-conversation.
 const LEGACY_SESSION_SETTING = 'sprint_agent_session_id';
 const SESSION_SETTING = chat => `sprint_agent_session:${chat}`;
+// The primer is only injected when a session is CREATED, so editing it left every
+// existing chat running the old instructions forever — which is how Oli kept insisting
+// it could not start a session hours after being given the tool. Stamping the primer's
+// hash per chat lets a resume notice the change and re-state the rules, without
+// throwing away the conversation.
+const PRIMER_SETTING = chat => `sprint_agent_primer:${chat}`;
 const THREAD_KEY = chat => `sprint-agent:${chat}`;
 const BOT_EMAIL = 'sprint-bot@olibot.local';
 const TURN_TIMEOUT_MS = 10 * 60_000;
@@ -111,6 +118,14 @@ export default class SprintSession {
             + mediaNote;
 
         const existing = this._session(chat);
+        // Re-state the rules when they have changed under a running session. Prepended to
+        // this turn rather than starting a fresh session, so nobody loses their thread
+        // just because the instructions were edited.
+        const primerVersion = this._primerVersion();
+        const refresh = (existing && this.store.getSetting(PRIMER_SETTING(chat)) !== primerVersion)
+            ? `[Your instructions have been updated. Replace everything you were told before with the following, `
+              + `including anything you previously believed you could not do.]\n\n${this._primer()}\n\n---\n\n`
+            : '';
 
         if (existing) {
             // A dashboard-initiated turn may still be live; wait it out rather than
@@ -118,7 +133,9 @@ export default class SprintSession {
             if (this.claude.isRunning(existing.id)) await this._waitForEnd(existing.id);
             this.mute(existing.id);
             this.pending.set(existing.id, target);
-            await this.claude.resumeSession(existing.id, turn, imagePath);
+            if (refresh) console.log(`[SprintSession] Primer changed — refreshing ${chat}'s instructions.`);
+            await this.claude.resumeSession(existing.id, refresh + turn, imagePath);
+            this.store.setSetting(PRIMER_SETTING(chat), primerVersion);
             await this._waitForEnd(existing.id);
             return existing.id;
         }
@@ -133,6 +150,7 @@ export default class SprintSession {
             this.model,
         );
         this.store.setSetting(SESSION_SETTING(chat), sessionId);
+        this.store.setSetting(PRIMER_SETTING(chat), primerVersion);
         this.mute(sessionId);
         this.pending.set(sessionId, target);
         console.log(`[SprintSession] Started Oli session ${sessionId} for ${groupJid ? `group ${groupJid}` : phone} (${this.model}).`);
@@ -211,6 +229,11 @@ export default class SprintSession {
      * environment: the prompt is persisted in the message transcript, and the parent
      * env is inherited by every unrelated coding session.
      */
+    /** Short hash of the primer, so any edit to it invalidates every chat's copy. */
+    _primerVersion() {
+        return crypto.createHash('sha256').update(this._primer()).digest('hex').slice(0, 12);
+    }
+
     /** Sliding one-hour window per guest number, so one stranger cannot burn the budget. */
     _allowGuestTurn(phone) {
         const now = Date.now();

@@ -18,6 +18,12 @@ export const SPRINT_ACTIVE = 'active';
 export const SPRINT_COMPLETED = 'completed';
 export const SPRINT_STATUSES = [SPRINT_PLANNING, SPRINT_ACTIVE, SPRINT_COMPLETED];
 
+// Oli's own WhatsApp chat sessions are plumbing, not work: one per person and per
+// group, each a long-lived thread of board chatter. They would otherwise dominate the
+// session list and bury the actual sessions. Matched on the thread key rather than a
+// new column so the ones created before this also disappear.
+const HIDE_AGENT_SESSIONS = "s.user_phone NOT LIKE 'sprint-agent%'";
+
 class SessionStore {
     constructor() {
         this.db = new Database(config.DB_PATH);
@@ -455,7 +461,7 @@ class SessionStore {
         return this.db.prepare(
             `SELECT s.*, u.display_name as owner_name, u.email as owner_email
              FROM sessions s LEFT JOIN users u ON s.owner_id = u.id
-             WHERE s.status = 'running' ORDER BY s.updated_at DESC`
+             WHERE s.status = 'running' AND ${HIDE_AGENT_SESSIONS} ORDER BY s.updated_at DESC`
         ).all();
     }
 
@@ -521,6 +527,7 @@ class SessionStore {
              FROM sessions s
              LEFT JOIN users u ON s.owner_id = u.id
              LEFT JOIN session_collaborators sc ON sc.session_id = s.id AND sc.user_id = ?
+             WHERE ${HIDE_AGENT_SESSIONS}
              ORDER BY s.updated_at DESC LIMIT ? OFFSET ?`
         ).all(userId, userId, limit, offset);
     }
@@ -557,11 +564,12 @@ class SessionStore {
                     1 as has_access
              FROM sessions s
              LEFT JOIN users u ON s.owner_id = u.id
-             WHERE s.name LIKE ? ESCAPE '\\'
-                OR s.task LIKE ? ESCAPE '\\'
-                OR s.id LIKE ? ESCAPE '\\'
-                OR u.display_name LIKE ? ESCAPE '\\'
-                OR u.email LIKE ? ESCAPE '\\'
+             WHERE ${HIDE_AGENT_SESSIONS}
+               AND (s.name LIKE ? ESCAPE '\\'
+                    OR s.task LIKE ? ESCAPE '\\'
+                    OR s.id LIKE ? ESCAPE '\\'
+                    OR u.display_name LIKE ? ESCAPE '\\'
+                    OR u.email LIKE ? ESCAPE '\\')
              ORDER BY s.updated_at DESC LIMIT ? OFFSET ?`
         ).all(userId, pattern, pattern, pattern, pattern, pattern, limit, offset);
     }
@@ -589,11 +597,12 @@ class SessionStore {
         return this.db.prepare(
             `SELECT COUNT(*) as count
              FROM sessions s LEFT JOIN users u ON s.owner_id = u.id
-             WHERE s.name LIKE ? ESCAPE '\\'
-                OR s.task LIKE ? ESCAPE '\\'
-                OR s.id LIKE ? ESCAPE '\\'
-                OR u.display_name LIKE ? ESCAPE '\\'
-                OR u.email LIKE ? ESCAPE '\\'`
+             WHERE ${HIDE_AGENT_SESSIONS}
+               AND (s.name LIKE ? ESCAPE '\\'
+                    OR s.task LIKE ? ESCAPE '\\'
+                    OR s.id LIKE ? ESCAPE '\\'
+                    OR u.display_name LIKE ? ESCAPE '\\'
+                    OR u.email LIKE ? ESCAPE '\\')`
         ).get(pattern, pattern, pattern, pattern, pattern).count;
     }
 
@@ -731,7 +740,7 @@ class SessionStore {
     }
 
     countAllSessions() {
-        return this.db.prepare('SELECT COUNT(*) as count FROM sessions').get().count;
+        return this.db.prepare(`SELECT COUNT(*) as count FROM sessions s WHERE ${HIDE_AGENT_SESSIONS}`).get().count;
     }
 
     setSessionStatus(id, status) {
