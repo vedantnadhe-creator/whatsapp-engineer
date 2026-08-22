@@ -35,10 +35,10 @@ const TURN_TIMEOUT_MS = 10 * 60_000;
 // existed and would never see a primer-only rule. The read-only token is the actual
 // enforcement (see auth.js) — this is here so the agent explains the refusal instead of
 // reporting a confusing 403.
-const GUEST_TURN_RULE = 'This sender is NOT a teammate. Answer board questions normally, '
-    + 'but make no change of any kind — no create, update, delete or assignment. If asked '
-    + 'to change something, reply in one line that you can only show the board and a '
-    + 'teammate has to make the change.\n\n';
+const GUEST_TURN_RULE = 'This chat is NOT enabled for changes. Answer board questions '
+    + 'normally, but make no change of any kind — no create, update, delete or assignment. '
+    + 'If asked to change something, reply in one line that you can show the board here but '
+    + 'this chat has not been enabled for changes yet, and an admin can enable it.\n\n';
 
 export default class SprintSession {
     /**

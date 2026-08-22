@@ -174,10 +174,10 @@ export default class EvolutionWhatsApp extends EventEmitter {
         // Groups stay off unless SPRINT_AGENT_GROUPS is on, and there a tag is still required
         // so the bot never answers ordinary group chatter.
         if (isGroup && !config.SPRINT_AGENT_GROUPS) return;
-        if (isGroup && config.ALLOWED_GROUPS.length && !config.ALLOWED_GROUPS.includes(jid)) {
-            console.warn(`[Evolution] Ignored message from group ${jid} — not in ALLOWED_GROUPS.`);
-            return;
-        }
+        // No hard drop for an unfamiliar group. Being tagged and saying nothing is
+        // indistinguishable from being broken — which is exactly how the second group Oli
+        // was added to looked. An un-allow-listed group is answered read-only instead
+        // (below), the same treatment an unknown DM gets.
         const msg = data?.message || data;
         const text = messageText(msg).trim();
         if (isGroup && !this._tagged(msg, data, text)) {
@@ -209,7 +209,9 @@ export default class EvolutionWhatsApp extends EventEmitter {
         // the group. Such a sender travels as an opaque participant id and simply does not
         // resolve to a dashboard user.
         const groupTrusted = isGroup && config.ALLOWED_GROUPS.includes(jid);
-        const participant = sender || (isLid && groupTrusted ? `lid:${cleanId(senderJid)}` : '');
+        // Any group member may be @lid-addressed, allow-listed group or not — we reply to
+        // the group rather than to the person, so their phone number is not needed.
+        const participant = sender || (isLid && isGroup ? `lid:${cleanId(senderJid)}` : '');
         if (!participant) {
             if (senderJid) {
                 console.warn(`[Evolution] Ignored message from ${senderJid} — no phone number in the payload`
@@ -226,10 +228,16 @@ export default class EvolutionWhatsApp extends EventEmitter {
         // mean "@oli file this bug" silently doing nothing for most of the group. With
         // ALLOWED_GROUPS empty, any group Oli happens to be added to would qualify, so
         // there the sender must still be a known number.
+        // A known teammate is a teammate wherever they are; an allow-listed group vouches
+        // for everyone in it. Anything else is a guest: answered, but read-only.
         const trusted = (sender && this._allowed(sender)) || groupTrusted;
-        if (!trusted && (isGroup || !config.SPRINT_AGENT_OPEN_DMS)) {
-            console.warn(`[Evolution] Ignored sprint message from ${participant} — not in the allowed phones list${isGroup ? ' (group not in ALLOWED_GROUPS)' : ' (open DMs are off)'}.`);
+        if (!trusted && !isGroup && !config.SPRINT_AGENT_OPEN_DMS) {
+            console.warn(`[Evolution] Ignored sprint message from ${participant} — not in the allowed phones list (open DMs are off).`);
             return;
+        }
+        if (!trusted && isGroup) {
+            console.warn(`[Evolution] Group ${jid} is not in ALLOWED_GROUPS — answering read-only. `
+                + `Add that id to ALLOWED_GROUPS to let its members change the board.`);
         }
         // A screenshot or screen recording, either attached here or on the message this
         // one replies to. Only the reference travels — the bytes are fetched and stored
