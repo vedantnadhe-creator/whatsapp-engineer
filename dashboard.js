@@ -26,7 +26,7 @@ import { listCodexModels, isCodexModel, safeCodexModel } from './codex_models.js
 import { mountGrokProxy } from './grok_proxy.js';
 import cron from 'node-cron';
 import { sendSprintStatusEmail, buildSprintStatusEmail } from './sprint_mailer.js';
-import { SPRINT_STATUSES, SPRINT_ACTIVE } from './session_store.js';
+import { SPRINT_STATUSES, SPRINT_ACTIVE, parseAssignees } from './session_store.js';
 import { probeHeadroom } from './headroom.js';
 import { slugify, writeProjectDoc, readProjectDoc, projectContextBanner } from './project_doc.js';
 import { logSessionEvent, logProjectEvent, logIssueEvent, logMarkersFromOutput, syncProjectRoster } from './project_events.js';
@@ -2282,7 +2282,7 @@ The user may ask follow-up questions about the changelog — answer based on the
             // Notify assignee
             if (assignedTo) {
                 const assignee = store.getUserById(assignedTo);
-                const assignedCount = store.getAllIssues().filter(i => i.assigned_to === assignedTo && i.status !== 'completed').length;
+                const assignedCount = store.getAllIssues().filter(i => i.status !== 'completed' && parseAssignees(i).includes(assignedTo)).length;
                 wsBroadcast('issue_assigned', {
                     issue,
                     assigneeId: assignedTo,
@@ -2298,7 +2298,7 @@ The user may ask follow-up questions about the changelog — answer based on the
 
     app.put('/api/issues/:id', requireAuth, (req, res) => {
         try {
-            const allowed = ['title', 'description', 'status', 'priority', 'labels', 'assigned_to', 'sort_order', 'sprint_id', 'type', 'stage', 'prd_url', 'design_session_id', 'qa_session_id',
+            const allowed = ['title', 'description', 'status', 'priority', 'labels', 'assigned_to', 'assignees', 'sort_order', 'sprint_id', 'type', 'stage', 'prd_url', 'design_session_id', 'qa_session_id',
                 // Sprint board fields
                 'platform', 'qa_owner', 'dev_status', 'dev_percent', 'deadline',
                 'test_cases_count', 'test_cases_done_date', 'qa_status', 'open_bugs', 'critical_bugs', 'qa_comments', 'is_backlog', 'attachments', 'is_critical'];
@@ -2307,6 +2307,12 @@ The user may ask follow-up questions about the changelog — answer based on the
                 if (req.body[key] !== undefined) updates[key] = req.body[key];
             }
             if (updates.attachments !== undefined) updates.attachments = sanitizeAttachments(updates.attachments);
+            // A feature's dev team: ids only, deduped, and never longer than the roster.
+            // The store keeps `assigned_to` pointing at the first of them.
+            if (updates.assignees !== undefined) {
+                if (!Array.isArray(updates.assignees)) return res.status(400).json({ error: 'assignees must be an array of user ids' });
+                updates.assignees = [...new Set(updates.assignees.filter(v => typeof v === 'string' && v.trim()).map(v => v.trim()))];
+            }
             if (updates.status === 'completed') updates.completed_at = new Date().toISOString();
             // Keep the kanban status in sync when a manager flips Dev Status on the sprint board.
             if (updates.dev_status !== undefined) {
@@ -2319,7 +2325,8 @@ The user may ask follow-up questions about the changelog — answer based on the
             }
 
             // Detect assignment change
-            const oldIssue = updates.assigned_to !== undefined ? store.getIssue(req.params.id) : null;
+            const assignmentChanged = updates.assigned_to !== undefined || updates.assignees !== undefined;
+            const oldIssue = assignmentChanged ? store.getIssue(req.params.id) : null;
 
             const issue = store.updateIssue(req.params.id, updates);
             if (!issue) return res.status(404).json({ error: 'Issue not found' });
@@ -2332,17 +2339,22 @@ The user may ask follow-up questions about the changelog — answer based on the
             }
             if (updates.prd_url) logIssueEvent(store, issue, `📄 PRD for "${issue.title}": ${updates.prd_url}`);
 
-            // Notify assignee if assignment changed
-            if (updates.assigned_to && updates.assigned_to !== oldIssue?.assigned_to) {
-                const assignee = store.getUserById(updates.assigned_to);
-                const assignedCount = store.getAllIssues().filter(i => i.assigned_to === updates.assigned_to && i.status !== 'completed').length;
-                wsBroadcast('issue_assigned', {
-                    issue,
-                    assigneeId: updates.assigned_to,
-                    assigneeName: assignee?.display_name || 'Someone',
-                    assignedBy: req.user.displayName || req.user.email,
-                    totalAssigned: assignedCount,
-                });
+            // Notify everyone newly put on the feature — with several devs the person
+            // who matters is not always the primary, so diff the lists rather than
+            // watching assigned_to alone.
+            if (assignmentChanged) {
+                const before = new Set(parseAssignees(oldIssue));
+                const open = store.getAllIssues().filter(i => i.status !== 'completed');
+                for (const userId of parseAssignees(issue).filter(u => !before.has(u))) {
+                    const assignee = store.getUserById(userId);
+                    wsBroadcast('issue_assigned', {
+                        issue,
+                        assigneeId: userId,
+                        assigneeName: assignee?.display_name || 'Someone',
+                        assignedBy: req.user.displayName || req.user.email,
+                        totalAssigned: open.filter(i => parseAssignees(i).includes(userId)).length,
+                    });
+                }
             }
 
             res.json(issue);

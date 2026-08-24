@@ -84,5 +84,16 @@ export const TYPE_PILL = {
   improvement: '#22d3ee',
   story: '#60a5fa', // legacy fallback for older rows
 }
+// The dev team on a feature. Rows written before multi-assign — or by a single-assign
+// screen like the issues board — still answer through assigned_to. Mirrors
+// parseAssignees() in session_store.js; keep the two in sync.
+export const assigneeIds = (f) => {
+  try {
+    const list = JSON.parse(f?.assignees || '[]')
+    if (Array.isArray(list) && list.length) return list.filter(Boolean).map(String)
+  } catch { /* malformed column — fall back to the primary below */ }
+  return f?.assigned_to ? [String(f.assigned_to)] : []
+}
+
 export const ASSIGNEE_PILL = '#4ade80'
 export const QA_OWNER_PILL = '#cbd5e1'

@@ -1,7 +1,7 @@
 import { useState, useMemo, useCallback } from 'react'
 import { Play, MessageSquare, Loader2, Calendar, Bug } from 'lucide-react'
 import {
-  DEV_STATUS, TYPE_PILL, memberName, featureCompletion, completionColor, openBugCount,
+  DEV_STATUS, TYPE_PILL, memberName, featureCompletion, completionColor, openBugCount, assigneeIds,
 } from './sprintMeta'
 
 // Native HTML5 drag-and-drop carries the dragged issue id as plain text. Typed so a
@@ -24,7 +24,8 @@ function KanbanCard({ f, status, members, onMove, onStartSession, onGoToSession,
   const pct = featureCompletion(f)
   const pctColor = completionColor(pct)
   const bugs = openBugCount(f)
-  const dev = (members || []).find(m => m.id === f.assigned_to)
+  // A feature can be built by several devs; the card names them all.
+  const devs = assigneeIds(f).map(id => (members || []).find(m => m.id === id)).filter(Boolean)
   const qa = (members || []).find(m => m.id === f.qa_owner)
   const typeColor = TYPE_PILL[f.type || 'feature'] || TYPE_PILL.feature
   const overdue = isOverdue(f)
@@ -80,7 +81,7 @@ function KanbanCard({ f, status, members, onMove, onStartSession, onGoToSession,
       </div>
 
       <div className="flex items-center gap-2 flex-wrap text-[10px]" style={{ color: 'var(--c-text-muted)' }}>
-        {dev && <span style={{ color: 'var(--c-text-secondary)' }}>{memberName(dev)}</span>}
+        {devs.length > 0 && <span style={{ color: 'var(--c-text-secondary)' }}>{devs.map(memberName).join(', ')}</span>}
         {qa && <span title="QA owner">QA: {memberName(qa)}</span>}
         {f.deadline && (
           <span className="inline-flex items-center gap-1" style={{ color: overdue ? '#f87171' : 'var(--c-text-muted)' }}>

@@ -20,7 +20,7 @@ import {
 import {
   memberName, DEV_STATUS, QA_STATUS, TYPES, PLATFORM_SUGGESTIONS,
   devStatusMeta, featureCompletion, completionColor, isOpenBugRow,
-  TYPE_PILL, ASSIGNEE_PILL, QA_OWNER_PILL,
+  TYPE_PILL, ASSIGNEE_PILL, QA_OWNER_PILL, assigneeIds,
   sprintStatusMeta, isSprintRunning,
 } from './sprintMeta'
 import SprintKanban from './SprintKanban'
@@ -38,6 +38,91 @@ function PillSelect({ value, onChange, options, fg, placeholder = '—', disable
       {!value && <option value="" style={{ color: 'var(--c-text)', backgroundColor: 'var(--c-surface)' }}>{placeholder}</option>}
       {options.map(o => <option key={o.v ?? o.id} value={o.v ?? o.id} style={{ color: 'var(--c-text)', backgroundColor: 'var(--c-surface)' }}>{o.label ?? memberName(o)}</option>)}
     </select>
+  )
+}
+
+// Same pill, but for a field that holds a team rather than one person (a feature's
+// devs). Collapsed it reads "Ravi +2"; open it is a checkbox list, so adding a second
+// dev never means un-picking the first. Unknown ids (a member dropped from the roster)
+// are shown rather than silently discarded.
+function MultiPillSelect({ value = [], onChange, options, fg, placeholder = '—', disabled }) {
+  const [open, setOpen] = useState(false)
+  // Picks the server has not confirmed yet. onUpdate refetches the whole list rather
+  // than patching it, so without this a tick would not appear until the round-trip
+  // lands, and a quick second tick would send a list built from the pre-first-tick
+  // value — silently dropping the first dev.
+  //
+  // Like the Kanban's pendingMoves, it needs no clean-up to stay correct: once the
+  // refetch lands the draft and the server value are the same list. It is dropped when
+  // the popover is reopened, so a change someone else made stops being pinned here.
+  const [draft, setDraft] = useState(null)
+  const ref = useRef(null)
+  const current = draft ?? value
+
+  useEffect(() => {
+    if (!open) return
+    const onDoc = (e) => { if (!ref.current?.contains(e.target)) setOpen(false) }
+    const onKey = (e) => { if (e.key === 'Escape') setOpen(false) }
+    document.addEventListener('mousedown', onDoc)
+    document.addEventListener('keydown', onKey)
+    return () => { document.removeEventListener('mousedown', onDoc); document.removeEventListener('keydown', onKey) }
+  }, [open])
+
+  const nameOf = (id) => {
+    const o = options.find(m => (m.v ?? m.id) === id)
+    return o ? (o.label ?? memberName(o)) : id
+  }
+  const names = current.map(nameOf)
+  const commit = (next) => {
+    setDraft(next)
+    Promise.resolve(onChange(next)).catch(() => setDraft(null))
+  }
+  const toggle = (id) => commit(current.includes(id) ? current.filter(v => v !== id) : [...current, id])
+
+  return (
+    <div className="relative inline-block" ref={ref}>
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => { if (!open) setDraft(null); setOpen(o => !o) }}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        title={names.length ? names.join(', ') : 'Assign developers'}
+        className="text-[11px] font-medium rounded-full px-2 py-0.5 cursor-pointer outline-none border-0 text-center whitespace-nowrap overflow-hidden align-middle disabled:opacity-60 disabled:cursor-default"
+        style={{ backgroundColor: current.length ? fg + '22' : 'var(--c-surface-2)', color: current.length ? fg : 'var(--c-text-muted)', maxWidth: 170, textOverflow: 'ellipsis' }}
+      >
+        {current.length === 0 ? placeholder : `${names[0]}${current.length > 1 ? ` +${current.length - 1}` : ''}`}
+      </button>
+      {open && (
+        <div
+          role="listbox"
+          aria-multiselectable="true"
+          className="absolute z-30 mt-1 left-0 rounded-lg p-1 min-w-[170px] max-h-56 overflow-auto"
+          style={{ backgroundColor: 'var(--c-surface)', border: '1px solid var(--c-border)', boxShadow: '0 8px 24px rgba(0,0,0,0.35)' }}
+        >
+          {options.length === 0 && <div className="text-[11px] px-2 py-1" style={{ color: 'var(--c-text-muted)' }}>No devs on the roster.</div>}
+          {options.map(o => {
+            const id = o.v ?? o.id
+            const on = current.includes(id)
+            return (
+              <label key={id} role="option" aria-selected={on} className="flex items-center gap-2 px-2 py-1 rounded cursor-pointer text-[11px] hover:bg-[var(--c-surface-2)]" style={{ color: 'var(--c-text)' }}>
+                <input type="checkbox" checked={on} onChange={() => toggle(id)} />
+                {o.label ?? memberName(o)}
+              </label>
+            )
+          })}
+          {current.filter(id => !options.some(o => (o.v ?? o.id) === id)).map(id => (
+            <label key={id} className="flex items-center gap-2 px-2 py-1 rounded cursor-pointer text-[11px]" style={{ color: 'var(--c-text-muted)' }}>
+              <input type="checkbox" checked onChange={() => toggle(id)} />
+              {id} <span className="text-[9px]">(off roster)</span>
+            </label>
+          ))}
+          {current.length > 0 && (
+            <button type="button" onClick={() => commit([])} className="w-full text-left text-[11px] px-2 py-1 mt-0.5 rounded cursor-pointer hover:bg-[var(--c-surface-2)]" style={{ color: 'var(--c-text-muted)', borderTop: '1px solid var(--c-border)' }}>Clear</button>
+          )}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -259,7 +344,7 @@ export default function SprintBoard({
   const filteredFeatures = useMemo(() => features.filter(f =>
     (!filters.dev || f.dev_status === filters.dev) &&
     (!filters.qa || (f.qa_status || '') === filters.qa) &&
-    (!filters.dev_assignee || f.assigned_to === filters.dev_assignee) &&
+    (!filters.dev_assignee || assigneeIds(f).includes(filters.dev_assignee)) &&
     (!filters.qa_owner || f.qa_owner === filters.qa_owner) &&
     (!filters.platform || f.platform === filters.platform) &&
     (!filters.type || f.type === filters.type)
@@ -802,7 +887,7 @@ function FeatureRow({ f, idx, members, isTester, expanded, isBacklogView, select
           <PillSelect value={f.type || 'feature'} onChange={(v) => upd({ type: v })} options={TYPES} fg={TYPE_PILL[f.type || 'feature'] || TYPE_PILL.feature} />
         </td>
         <td className="px-2 py-2" style={cellBorder}>
-          <PillSelect value={f.assigned_to || ''} onChange={(v) => upd({ assigned_to: v || null })} options={devMembers} fg={ASSIGNEE_PILL} placeholder="—" />
+          <MultiPillSelect value={assigneeIds(f)} onChange={(ids) => upd({ assignees: ids })} options={devMembers} fg={ASSIGNEE_PILL} placeholder="—" />
         </td>
         <td className="px-2 py-2" style={cellBorder}>
           <PillSelect value={f.qa_owner || ''} onChange={(v) => upd({ qa_owner: v || '' })} options={testerMembers} fg={QA_OWNER_PILL} placeholder="—" />

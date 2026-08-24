@@ -57,7 +57,7 @@ export function buildSprintStatusEmail(sprint, progress, issues, { trigger = 'sc
         return `<tr>
             <td style="padding:8px 10px;border-bottom:1px solid #eceef5;font-size:13px;color:#333;">${esc(i.title)}</td>
             <td style="padding:8px 10px;border-bottom:1px solid #eceef5;font-size:12px;white-space:nowrap;"><span style="color:${meta.color};font-weight:600;">${meta.label}</span></td>
-            <td style="padding:8px 10px;border-bottom:1px solid #eceef5;font-size:12px;color:#888;">${esc(i.assignee_name || '—')}</td>
+            <td style="padding:8px 10px;border-bottom:1px solid #eceef5;font-size:12px;color:#888;">${esc(i.assignee_names || i.assignee_name || '—')}</td>
             <td style="padding:8px 10px;border-bottom:1px solid #eceef5;font-size:12px;color:#333;text-align:right;">${pct}%${bugNote}</td>
         </tr>`;
     }).join('');

@@ -24,6 +24,41 @@ export const SPRINT_STATUSES = [SPRINT_PLANNING, SPRINT_ACTIVE, SPRINT_COMPLETED
 // new column so the ones created before this also disappear.
 const HIDE_AGENT_SESSIONS = "s.user_phone NOT LIKE 'sprint-agent%'";
 
+// A feature can be assigned to several devs. `assignees` holds the full list;
+// `assigned_to` holds the first of them, so every existing join, export, mailer and
+// "my work" query keeps reading one id exactly as before. The two are only ever
+// written together, here, so no caller can drift them apart: pass `assignees` to set
+// the team, or `assigned_to` alone (older single-assign screens) to replace it.
+function normalizeAssignment(updates) {
+    if (updates.assignees !== undefined) {
+        const list = [...new Set((Array.isArray(updates.assignees) ? updates.assignees : [])
+            .filter(Boolean).map(String))];
+        return { ...updates, assignees: JSON.stringify(list), assigned_to: list[0] || null };
+    }
+    if (updates.assigned_to !== undefined) {
+        const one = updates.assigned_to ? [String(updates.assigned_to)] : [];
+        return { ...updates, assignees: JSON.stringify(one) };
+    }
+    return updates;
+}
+
+// The dev team on an issue row, as ids. Rows written before `assignees` existed (or
+// by a single-assign screen) still answer correctly through `assigned_to`.
+export function parseAssignees(issue) {
+    if (!issue) return [];
+    try {
+        const list = JSON.parse(issue.assignees || '[]');
+        if (Array.isArray(list) && list.length) return list.filter(Boolean).map(String);
+    } catch (_) { /* malformed column — fall back to the primary below */ }
+    return issue.assigned_to ? [String(issue.assigned_to)] : [];
+}
+
+// Names of every dev on a feature, resolved in the same statement so the mailer and
+// the board do not each need a users lookup. Falls back to nothing when unassigned.
+const ASSIGNEE_NAMES_SQL = `(SELECT group_concat(COALESCE(au.display_name, au.email), ', ')
+              FROM json_each(COALESCE(i.assignees, '[]')) je
+              LEFT JOIN users au ON au.id = je.value) AS assignee_names`;
+
 class SessionStore {
     constructor() {
         this.db = new Database(config.DB_PATH);
@@ -306,10 +341,22 @@ class SessionStore {
             // Per-bug ownership: dev who fixes it, QA who raised/verifies it.
             "ALTER TABLE bugs ADD COLUMN assigned_to TEXT",
             "ALTER TABLE bugs ADD COLUMN qa_owner TEXT",
+            // A feature is often built by more than one dev. `assignees` is the full
+            // list (JSON array of user ids); `assigned_to` stays the primary — see
+            // normalizeAssignment() for the invariant that keeps the two in step.
+            "ALTER TABLE issues ADD COLUMN assignees TEXT DEFAULT '[]'",
         ];
         for (const sql of safeMigrations) {
             try { this.db.exec(sql); } catch (_) { /* column already exists */ }
         }
+        // Backfill: rows that predate `assignees` carry only `assigned_to`, and the
+        // board reads the list — without this they would all render as unassigned.
+        // Safe to re-run: clearing a team also clears assigned_to, so nothing revives.
+        try {
+            this.db.exec(`UPDATE issues SET assignees = json_array(assigned_to)
+                          WHERE assigned_to IS NOT NULL AND assigned_to <> ''
+                            AND (assignees IS NULL OR assignees = '[]')`);
+        } catch (_) { }
         try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_owner ON sessions(owner_id)'); } catch (_) { }
         try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_issues_sprint ON issues(sprint_id)'); } catch (_) { }
     }
@@ -932,12 +979,13 @@ class SessionStore {
 
     // ── Issues ─────────────────────────────────────────────────
 
-    createIssue({ title, description = '', priority = 'medium', labels = [], createdBy = null, forkSessionId = null, sprintId = null, assignedTo = null, type = 'task', category = 'issue', mode = 'developer', platform = '', qaOwner = '', parentIssueId = null, sessionId = null, deadline = null, attachments = [] }) {
+    createIssue({ title, description = '', priority = 'medium', labels = [], createdBy = null, forkSessionId = null, sprintId = null, assignedTo = null, assignees = null, type = 'task', category = 'issue', mode = 'developer', platform = '', qaOwner = '', parentIssueId = null, sessionId = null, deadline = null, attachments = [] }) {
         const id = `ISS-${Date.now().toString(36)}${Math.floor(Math.random() * 1000)}`;
+        const assignment = normalizeAssignment(assignees ? { assignees } : { assigned_to: assignedTo });
         const maxOrder = this.db.prepare("SELECT COALESCE(MAX(sort_order), 0) as m FROM issues WHERE status = 'todo'").get().m;
         this.db.prepare(
-            `INSERT INTO issues (id, title, description, priority, labels, created_by, sort_order, fork_session_id, sprint_id, assigned_to, type, category, mode, platform, qa_owner, parent_issue_id, session_id, deadline, attachments) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-        ).run(id, title, description, priority, JSON.stringify(labels), createdBy, maxOrder + 1, forkSessionId, sprintId, assignedTo, type, category, mode === 'design' ? 'design' : 'developer', platform, qaOwner, parentIssueId, sessionId, deadline, JSON.stringify(Array.isArray(attachments) ? attachments : []));
+            `INSERT INTO issues (id, title, description, priority, labels, created_by, sort_order, fork_session_id, sprint_id, assigned_to, assignees, type, category, mode, platform, qa_owner, parent_issue_id, session_id, deadline, attachments) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ).run(id, title, description, priority, JSON.stringify(labels), createdBy, maxOrder + 1, forkSessionId, sprintId, assignment.assigned_to, assignment.assignees, type, category, mode === 'design' ? 'design' : 'developer', platform, qaOwner, parentIssueId, sessionId, deadline, JSON.stringify(Array.isArray(attachments) ? attachments : []));
         return this.getIssue(id);
     }
 
@@ -954,7 +1002,8 @@ class SessionStore {
 
     getAllIssues() {
         return this.db.prepare(
-            `SELECT i.*, u.display_name as creator_name, a.display_name as assignee_name
+            `SELECT i.*, u.display_name as creator_name, a.display_name as assignee_name,
+             ${ASSIGNEE_NAMES_SQL}
              FROM issues i
              LEFT JOIN users u ON i.created_by = u.id
              LEFT JOIN users a ON i.assigned_to = a.id
@@ -989,7 +1038,7 @@ class SessionStore {
     updateIssue(id, updates) {
         const fields = [];
         const values = [];
-        for (const [key, val] of Object.entries(updates)) {
+        for (const [key, val] of Object.entries(normalizeAssignment(updates))) {
             if (key === 'labels' || key === 'attachments') {
                 fields.push(`${key} = ?`);
                 values.push(JSON.stringify(val));
@@ -1139,9 +1188,11 @@ class SessionStore {
                     CASE WHEN i.status = 'completed' AND i.dev_status <> 'done' THEN 1 ELSE 0 END AS status_conflict
              FROM issues i
              LEFT JOIN sprints s ON i.sprint_id = s.id
-             WHERE i.assigned_to = ? ${where}
+             WHERE (i.assigned_to = ?
+                    OR EXISTS (SELECT 1 FROM json_each(COALESCE(i.assignees, '[]')) je WHERE je.value = ?))
+                   ${where}
              ORDER BY i.dev_status = 'in_progress' DESC, i.created_at DESC`
-        ).all(String(userId));
+        ).all(String(userId), String(userId));
     }
 
     /**
@@ -1571,7 +1622,8 @@ class SessionStore {
 
     getIssuesBySprint(sprintId) {
         return this.db.prepare(
-            `SELECT i.*, u.display_name as creator_name, a.display_name as assignee_name
+            `SELECT i.*, u.display_name as creator_name, a.display_name as assignee_name,
+             ${ASSIGNEE_NAMES_SQL}
              FROM issues i
              LEFT JOIN users u ON i.created_by = u.id
              LEFT JOIN users a ON i.assigned_to = a.id

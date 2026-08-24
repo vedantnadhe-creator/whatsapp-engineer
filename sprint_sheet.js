@@ -9,6 +9,7 @@
 // ============================================================
 
 import XLSX from 'xlsx';
+import { parseAssignees } from './session_store.js';
 import {
     TABS,
     COLUMNS,
@@ -53,6 +54,17 @@ const userLabel = (idx, id) => {
     return u ? (u.display_name || u.email || id) : '';
 };
 
+// A feature can have several devs, so the Dev cell is a comma-separated list both
+// ways. Exporting only the primary — or importing the list as one unresolvable name
+// — would quietly drop the rest of the team on every sheet round-trip.
+const userLabels = (idx, ids) => (ids || []).map((id) => userLabel(idx, id)).filter(Boolean).join(', ');
+
+const resolveUserIds = (idx, raw) => String(raw ?? '')
+    .split(/[,;]/)
+    .map((part) => resolveUserId(idx, part))
+    .filter(Boolean)
+    .filter((id, i, all) => all.indexOf(id) === i);
+
 // ── Export: sprint → grids ────────────────────────────────────────────
 // Returns { [tabName]: arrayOfArrays } with a header row + one row per record.
 export const buildSprintGrids = (store, sprintId) => {
@@ -74,7 +86,7 @@ export const buildSprintGrids = (store, sprintId) => {
             title: f.title || '',
             description: f.description || '',
             type: f.type || 'feature',
-            dev: userLabel(idx, f.assigned_to),
+            dev: userLabels(idx, parseAssignees(f)),
             qa_owner: userLabel(idx, f.qa_owner),
             dev_status: f.dev_status || 'todo',
             qa_status: f.qa_status || '',
@@ -156,6 +168,7 @@ export const buildLegendGrid = () => {
         ['Bug Status', COLUMNS[TABS.BUGS].find((c) => c.key === 'status').options.join(' / ')],
         ['Test Case Status', COLUMNS[TABS.TEST_CASES].find((c) => c.key === 'status').options.join(' / ')],
         ['Deadline', 'YYYY-MM-DD'],
+        ['Dev (Features)', 'One name, or several separated by commas — the first is the primary.'],
         [''],
         ['Note', 'Open Bugs / Critical / TC Count / Done % are auto-computed and ignored on upload.'],
     ];
@@ -241,13 +254,21 @@ export const importSprintData = (store, sprintId, parsed, userId) => {
             platform: String(rec.platform ?? '').trim(),
             description: String(rec.description ?? '').trim(),
             type: normalizeType(rec.type),
-            assigned_to: resolveUserId(idx, rec.dev),
             qa_owner: resolveUserId(idx, rec.qa_owner) || '',
             dev_status: normalizeDevStatus(rec.dev_status),
             qa_status: normalizeQaStatus(rec.qa_status),
             deadline: normalizeDate(rec.deadline) || null,
             qa_comments: String(rec.qa_comments ?? '').trim(),
         };
+        // An empty Dev cell means "nobody"; a cell full of names nobody recognises means
+        // a typo, and blanking the team over a typo loses work silently. Say so instead.
+        const devCell = String(rec.dev ?? '').trim();
+        const devIds = resolveUserIds(idx, devCell);
+        if (devCell && devIds.length === 0) {
+            summary.warnings.push(`Feature "${title || id}" — dev "${devCell}" is not on the roster; assignment left unchanged.`);
+        } else {
+            fields.assignees = devIds;
+        }
         const existing = id ? store.getIssue(id) : null;
         if (existing) {
             const upd = { ...fields, sprint_id: sprintId, is_backlog: 0 };
@@ -265,7 +286,7 @@ export const importSprintData = (store, sprintId, parsed, userId) => {
                 type: fields.type,
                 platform: fields.platform,
                 qaOwner: fields.qa_owner,
-                assignedTo: fields.assigned_to,
+                assignees: fields.assignees,
             });
             store.updateIssue(issue.id, {
                 dev_status: fields.dev_status,
