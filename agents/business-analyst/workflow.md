@@ -14,8 +14,8 @@ Production data is read via the safe helper on the PROD host:
 ssh ubuntu@140.245.25.134 '/home/ubuntu/scripts/prod-readonly-query.sh "<SQL>"'
 ```
 
-- Target DB: `prod_pluginlive` on `10.0.2.105:5432`.
-- Available schemas: `institute`, `student`, `admin`, `assessment`, `corporate`.
+- Target DB: `prod_pluginlive` on `10.0.6.104:5432` (PostgreSQL 16). The old `10.0.2.105` PG14 box was decommissioned on 2026-08-17 — if you ever see it in a query result, config or older doc, that data is frozen pre-cutover and is **not** what the app reads.
+- Available schemas (table counts as of 2026-08-28): `assessment` (197), `corporate` (54), `student` (33), `institute` (33), `admin` (18), `candidate_ingestion_schema` (16), `user_management` (14), `audit` (6), `search_engine` (2), `ai_usage` (1).
 - The helper rejects every write keyword (INSERT/UPDATE/DELETE/DROP/TRUNCATE/ALTER/CREATE/GRANT/REVOKE/COPY…FROM) and runs the query inside `BEGIN READ ONLY; … ROLLBACK;` — so it is physically impossible to mutate PROD through this path. Use it confidently for SELECTs.
 - For CSV-ish output add `PSQL_EXTRA="-A -F','"` before the script call.
 - For tuples-only: `PSQL_EXTRA="-t -A"`.
