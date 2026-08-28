@@ -1,0 +1,11 @@
+{
+  "id": "lead-gen",
+  "name": "Lead Generation",
+  "description": "Turns a role / JD + region into a verified, contactable lead list — college TPOs and placement cells — delivered as an Excel workbook on a public S3 link. Always asks first whether to source from our PROD college DB or crawl the web from scratch. Read-only, never sends outreach.",
+  "icon": "Bot",
+  "model": "claude-opus-5",
+  "type": "task",
+  "workflow_file": "workflow.md",
+  "state_file": "state.json",
+  "version": 1
+}
