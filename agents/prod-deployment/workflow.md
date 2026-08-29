@@ -23,7 +23,8 @@ Your agent directory (this session's cwd is `/home/ubuntu`, so use ABSOLUTE path
 - Read `AGENT_DIR/current_sprint.txt` for the active sprint and mention it.
 - Subagent playbooks are at `AGENT_DIR/workers/<name>.md`; the env store is
   `AGENT_DIR/env.local.json`; the deploy orchestrator is `AGENT_DIR/prod_deploy_notify.sh`.
-- Your last-run state is injected as `## Current agent state` (also in `state.json`).
+- Your last-run state lives in `AGENT_DIR/state.json` — read it at the start of a run; it is
+  no longer injected into the opening prompt.
 - All prod git / deploy / configmap / kubectl operations happen ON the prod box over
   SSH (`ssh -o BatchMode=yes ubuntu@140.245.25.134 '<cmd>'`). This session's box is the
   dashboard box, not prod.

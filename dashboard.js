@@ -1271,6 +1271,24 @@ Do NOT ask for confirmation — proceed through each step automatically. If any 
             .map(a => ({ id: a.id, name: a.name, description: a.description, icon: a.icon, model: a.model, version: a.version, run_mode: a.run_mode || null, lastRunAt: a.state?.last_run_at || null, workers: a.workers || [] }));
     }
 
+    // The workflow (and state) can run to tens of KB. Inlining them into the
+    // session's opening message dumped a wall of markdown into the chat before
+    // the agent had said anything. Point at the files instead — the session has
+    // filesystem access, and this keeps the visible prompt to a few lines.
+    function agentBriefingBlock(agent) {
+        const files = [`1. \`${agent.workflowPath}\` — your workflow. Follow it from its first step.`];
+        if (fs.existsSync(agent.statePath)) {
+            files.push(`2. \`${agent.statePath}\` — current agent state: past runs, and where the last one stopped.`);
+        }
+        return [
+            '',
+            'Read these files first — they are your instructions, not background reading:',
+            ...files,
+            '',
+            'Then begin. Do not summarise the workflow back to the user.',
+        ].join('\n');
+    }
+
     app.get('/api/agents', requireAuth, (req, res) => {
         try { res.json({ agents: listAgents() }); }
         catch (err) { res.status(500).json({ error: err.message }); }
@@ -1291,14 +1309,12 @@ Do NOT ask for confirmation — proceed through each step automatically. If any 
 
             const phone = req.body.phone || req.user.phone || req.user.email || req.user.id;
             const userOverride = (req.body?.note || '').toString().trim();
-            const stateBlock = `## Current agent state (from ${agent.statePath})\n\n\`\`\`json\n${JSON.stringify(agent.state, null, 2)}\n\`\`\``;
             const triggeredBy = req.user.displayName || req.user.email || req.user.id;
             const prompt = [
                 `[start fresh] You are running the **${agent.name}** agent (${agent.id}).`,
                 `Triggered by: ${triggeredBy} on ${new Date().toISOString()}`,
                 userOverride ? `\nUser note for this run: ${userOverride}` : '',
-                `\n${stateBlock}`,
-                `\n---\n\n${agent.workflow}`,
+                agentBriefingBlock(agent),
             ].filter(Boolean).join('\n');
 
             const result = await messageHandler({
@@ -1359,7 +1375,7 @@ Do NOT ask for confirmation — proceed through each step automatically. If any 
                 `SOURCE_SESSION: ${source.id}`,
                 `Source task: ${source.task || source.name || '(unknown)'}`,
                 routesHint ? `Routes/flows to focus on: ${routesHint}` : '',
-                `\n---\n\n${agent.workflow}`,
+                agentBriefingBlock(agent),
             ].filter(Boolean).join('\n');
 
             const result = await messageHandler({
