@@ -1,11 +1,11 @@
 {
   "id": "lead-gen",
   "name": "Lead Generation",
-  "description": "Turns a role / JD + region into a verified, contactable lead list — college TPOs and placement cells — delivered as an Excel workbook on a public S3 link. Always asks first whether to source from our PROD college DB or crawl the web from scratch. Read-only, never sends outreach.",
+  "description": "Sourcing only — turns a role / JD + region into a ranked, verified lead list of college TPOs and placement cells, as an Excel workbook on a public S3 link. Asks DB vs staged web crawl first, then climbs a ladder (college site → targeted search → Sulekha → official registries), tiering every contact and never contacting anyone. Read-only.",
   "icon": "Bot",
   "model": "claude-opus-5",
   "type": "task",
   "workflow_file": "workflow.md",
   "state_file": "state.json",
-  "version": 1
+  "version": 2
 }
