@@ -459,6 +459,11 @@ class ClaudeManager extends EventEmitter {
         const { realModel } = this._resolveProvider(model);
         const session = this.store.getSession(sessionId);
         const canEdit = session?.edit_access !== 0;
+        // The Claude path gets its boundary from --disallowedTools and the PreToolUse
+        // guard, both of which are Claude-CLI flags that _spawnNew skips entirely for
+        // Codex. Without this, picking a GPT model would be the way out of the whole
+        // client-support boundary. Codex's own sandbox is the equivalent control.
+        const confined = session?.mode === 'client_support';
         const args = buildCodexArgs({
             model: realModel,
             prompt,
@@ -466,8 +471,10 @@ class ClaudeManager extends EventEmitter {
             workingDir: workingDir || config.DEFAULT_WORKING_DIR,
             canEdit,
             imagePath,
+            confined,
         });
-        console.log(`[Codex] ${threadId ? 'RESUME' : 'NEW'} session ${sessionId} | model: ${realModel} | cwd: ${workingDir}${canEdit ? '' : ' | read-only sandbox'}`);
+        const gate = confined ? ' | workspace sandbox' : (canEdit ? '' : ' | read-only sandbox');
+        console.log(`[Codex] ${threadId ? 'RESUME' : 'NEW'} session ${sessionId} | model: ${realModel} | cwd: ${workingDir}${gate}`);
         return args;
     }
 

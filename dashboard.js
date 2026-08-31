@@ -66,7 +66,7 @@ export { pendingImages };
 // and sprint-only view are separate and unchanged.
 const TESTER_MODEL = 'haiku';
 const TESTER_CODEX_MODEL = 'codex:gpt-5.6-luna';
-const CLIENT_SUPPORT_MODEL = 'sonnet';
+const CLIENT_SUPPORT_MODEL = 'claude-sonnet-5';
 const ROLE_MODEL_POLICY = {
     // Was Ollama-only for cost containment; Ollama left the dropdown on 2026-08-06,
     // which would have left BAs with an empty list, so they now share the tester's
@@ -76,9 +76,13 @@ const ROLE_MODEL_POLICY = {
     // the picker and enforces this same allow-list for starts, resumes, and forks.
     tester: { allow: (m) => m === TESTER_MODEL || m === TESTER_CODEX_MODEL, fallback: TESTER_MODEL },
     // Client support runs multi-step work (staged TPO sourcing, Excel builds, client-
-    // facing writing), so haiku alone is too thin — sonnet is the default with haiku
-    // allowed for cheap lookups. No Codex/Ollama: nothing they do is code.
-    client_support: { allow: (m) => m === CLIENT_SUPPORT_MODEL || m === TESTER_MODEL, fallback: CLIENT_SUPPORT_MODEL },
+    // facing writing), so haiku alone is too thin — Sonnet 5 is the default, with haiku
+    // for cheap lookups and the Codex GPT models available on request.
+    // NOTE: `sonnet` is Sonnet 4.6 and `claude-sonnet-5` is Sonnet 5 — the ids do not
+    // sort the way the names do, and picking the wrong one silently downgrades the role.
+    // Codex is a different binary with no hook system, so the PreToolUse guard does not
+    // apply there; claude_manager confines those sessions with a Codex sandbox instead.
+    client_support: { allow: (m) => m === CLIENT_SUPPORT_MODEL || m === TESTER_MODEL || isCodexModel(m), fallback: CLIENT_SUPPORT_MODEL },
 };
 function resolveModelForRole(role, model) {
     const safe = safeCodexModel(safeGrokModel(safeOllamaModel(model)));

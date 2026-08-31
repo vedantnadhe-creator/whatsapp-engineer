@@ -82,7 +82,7 @@ export function codexSandbox(canEdit) {
 
 // Argument list for a turn. `threadId` resumes an existing Codex session; omit it
 // to start a new one. Prompt is passed as a positional arg, matching the CLI.
-export function buildCodexArgs({ model, prompt, threadId = null, workingDir, canEdit = true, imagePath = null }) {
+export function buildCodexArgs({ model, prompt, threadId = null, workingDir, canEdit = true, imagePath = null, confined = false }) {
     const args = ['exec'];
     const isResume = Boolean(threadId);
     if (isResume) args.push('resume', threadId);
@@ -91,7 +91,23 @@ export function buildCodexArgs({ model, prompt, threadId = null, workingDir, can
     // both --sandbox and --cd with exit code 2. It inherits the PTY's working
     // directory, and retains the original session's sandbox, so pass those options
     // only when creating a new thread.
-    if (canEdit) {
+    if (confined) {
+        // Client-support sessions: neither of the two options below fits. The blanket
+        // bypass would hand a commercial user unrestricted access to this box, and
+        // read-only would break the job — sourcing writes an Excel workbook. So:
+        // writes confined to the session's own workspace, network kept (the whole task
+        // is fetching college pages), and no approval prompts because a dashboard PTY
+        // has nobody to answer them.
+        //
+        // This is the Codex substitute for the PreToolUse guard on the Claude path.
+        // Codex has no hook system, so the Bash/Skill allow-list cannot be reproduced
+        // here; the sandbox bounds the blast radius instead of enumerating commands.
+        if (!isResume) {
+            args.push('--sandbox', codexSandbox(true));
+            args.push('-c', 'sandbox_workspace_write.network_access=true');
+        }
+        args.push('-c', 'approval_policy="never"');
+    } else if (canEdit) {
         // This is Codex's equivalent of Claude's
         // --dangerously-skip-permissions: automation must never wait for an
         // approval prompt, and developers get unrestricted command/file access.

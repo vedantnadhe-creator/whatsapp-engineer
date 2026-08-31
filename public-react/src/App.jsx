@@ -75,7 +75,7 @@ function Dashboard() {
   // Work mode follows the user's role (no manual toggle).
   useEffect(() => {
     if (!user?.id) return
-    const m = user.role === 'designer' ? 'design' : (user.role === 'tester' ? 'tester' : 'developer')
+    const m = user.role === 'designer' ? 'design' : (user.role === 'tester' ? 'tester' : (user.role === 'client_support' ? 'client_support' : 'developer'))
     setWorkMode(m)
   }, [user?.id, user?.role])
 

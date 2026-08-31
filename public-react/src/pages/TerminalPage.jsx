@@ -140,7 +140,7 @@ export default function TerminalPage() {
   const [adminSettings, setAdminSettings] = useState({})
   const [sessionFilter, setSessionFilter] = useState('all') // all | mine | saved
   // Work mode follows role, matching V1 (designer → design, tester → tester, else dev).
-  const workMode = user?.role === 'designer' ? 'design' : (user?.role === 'tester' ? 'tester' : 'developer')
+  const workMode = user?.role === 'designer' ? 'design' : (user?.role === 'tester' ? 'tester' : (user?.role === 'client_support' ? 'client_support' : 'developer'))
 
   const [status, setStatus] = useState('idle') // idle | connecting | live | exited | error
   const [viewOnly, setViewOnly] = useState(false) // read-only transcript view (no live PTY); show Resume to go live
@@ -1015,11 +1015,12 @@ function NavRail({ tab, setTab, isAdmin, onShowAdmin, pendingRequests = 0 }) {
   )
 }
 
-// Role tag for the board/header: designers and testers get a colored chip;
-// developers (the default) get nothing.
+// Role tag for the board/header: designers, testers and client support get a colored
+// chip; developers (the default) get nothing.
 function ModeTag({ mode }) {
   if (mode === 'design') return <span className="px-1 rounded text-[9px] font-semibold" style={{ backgroundColor: 'rgba(210,168,255,0.18)', color: '#d2a8ff' }}>design</span>
   if (mode === 'tester') return <span className="px-1 rounded text-[9px] font-semibold" style={{ backgroundColor: 'rgba(242,204,96,0.18)', color: '#f2cc60' }}>tester</span>
+  if (mode === 'client_support') return <span className="px-1 rounded text-[9px] font-semibold" style={{ backgroundColor: 'rgba(87,211,160,0.18)', color: '#57d3a0' }}>CS</span>
   return null
 }
 

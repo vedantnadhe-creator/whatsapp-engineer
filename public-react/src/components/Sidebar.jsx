@@ -38,6 +38,7 @@ import {
   FolderPlus,
   FolderGit2,
   ChevronLeft,
+  Headset,
 } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
 import {
@@ -488,6 +489,20 @@ function SessionItem({ session, isActive, onSelect, billingMode = 'api', onToggl
                 title="Tester-mode session"
               >
                 <FlaskConical size={10} /> Tester
+              </span>
+            )}
+            {session.mode === 'client_support' && (
+              <span
+                className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 uppercase"
+                style={{
+                  fontSize: '10px',
+                  backgroundColor: 'color-mix(in srgb, var(--c-accent) 18%, transparent)',
+                  border: '1px solid var(--c-accent)',
+                  color: 'var(--c-accent)',
+                }}
+                title="Client-support session"
+              >
+                <Headset size={10} /> CS
               </span>
             )}
             <span
