@@ -26,6 +26,11 @@ const KB_HINT = `[Context: Knowledge Base is a local git repo at ${KB_DIR}. Stru
 // reaches the next turn without a dashboard restart; cached by mtime so a hot loop
 // does not stat-and-read on every message.
 const CLIENT_PROMPT_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), 'roles', 'client-support.md');
+// Extra settings layered on top of the user's own (--settings is additive): a
+// PreToolUse hook that allow-lists which Bash commands and which skills a commercial
+// session may run. See roles/client-support-guard.js for what it blocks and why it is
+// a guard rather than a sandbox.
+const CLIENT_SETTINGS_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), 'roles', 'client-support.settings.json');
 let _clientPromptCache = { mtime: 0, text: '' };
 function clientSupportPrompt() {
     try {
@@ -399,10 +404,16 @@ class ClaudeManager extends EventEmitter {
             // scoped KB, and file-editing tools hard-disabled at the CLI. The persona
             // forbids touching code; the flags mean a prompt-injected client document
             // cannot talk the session into writing one anyway.
+            //
+            // --settings adds the PreToolUse guard, which is the part the persona and
+            // --disallowedTools do not cover: Bash stays available (they need psql,
+            // curl and python for sourcing) and ~/.claude/skills is a single global
+            // directory, so without it a client-facing session can still reach
+            // `uat-deployment`, `db-script-push` or `ssh uat.pluginlive.com`.
             if (s && s.mode === 'client_support') {
                 return {
                     preamble: clientSupportPrompt(),
-                    extraArgs: [`--disallowedTools=${EDIT_TOOLS}`],
+                    extraArgs: [`--disallowedTools=${EDIT_TOOLS}`, '--settings', CLIENT_SETTINGS_PATH],
                     kbHint: CLIENT_KB_HINT,
                 };
             }

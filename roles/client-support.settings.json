@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Skill",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"/home/ubuntu/whatsapp-engineer/roles/client-support-guard.js\""
+          }
+        ]
+      }
+    ]
+  }
+}
