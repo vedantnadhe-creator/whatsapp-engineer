@@ -826,7 +826,7 @@ class SessionStore {
     }
 
     upsertLastAssistantMessage(sessionId, content) {
-        const lastMsg = this.db.prepare('SELECT id, role FROM messages WHERE session_id = ? ORDER BY timestamp DESC LIMIT 1').get(sessionId);
+        const lastMsg = this.db.prepare('SELECT id, role FROM messages WHERE session_id = ? ORDER BY timestamp DESC, id DESC LIMIT 1').get(sessionId);
         if (lastMsg && lastMsg.role === 'assistant') {
             this.db.prepare('UPDATE messages SET content = ?, timestamp = CURRENT_TIMESTAMP WHERE id = ?').run(content, lastMsg.id);
         } else {
@@ -835,7 +835,7 @@ class SessionStore {
     }
 
     getMessages(sessionId, limit = 20) {
-        return this.db.prepare('SELECT * FROM messages WHERE session_id = ? ORDER BY timestamp DESC LIMIT ?').all(sessionId, limit).reverse();
+        return this.db.prepare('SELECT * FROM messages WHERE session_id = ? ORDER BY timestamp DESC, id DESC LIMIT ?').all(sessionId, limit).reverse();
     }
 
     getAllowedPhones() {
@@ -1616,7 +1616,7 @@ class SessionStore {
 
     getSessionSummaryMessages(sessionId, limit = 50) {
         return this.db.prepare(
-            `SELECT role, content, timestamp FROM messages WHERE session_id = ? ORDER BY timestamp DESC LIMIT ?`
+            `SELECT role, content, timestamp FROM messages WHERE session_id = ? ORDER BY timestamp DESC, id DESC LIMIT ?`
         ).all(sessionId, limit).reverse();
     }
 

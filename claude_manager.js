@@ -74,12 +74,26 @@ REPORTING — the bug report must contain ONLY these, nothing more:
 You MAY read code (read-only) to pin down the root cause, but you must NOT output any fix: no code suggestions, no diffs, no patches, no "you should change X to Y", no snippets of corrected code. Do NOT recommend how to fix it. Stop at WHAT + WHY. Fixing is the developer's job, not yours.
 Prefer producing test cases, test scripts, and bug reports over changing product code.`;
 
+// Injected into every turn, whatever the role or provider. A turn is one process:
+// when it exits, the session is idle and NOTHING the agent started is still able to
+// talk to the chat. Agents were promising "I'll post the link when it finishes",
+// ending the turn, and leaving the user watching a dead thread.
+const TURN_CONTRACT = `[TURN CONTRACT — how this session actually works]
+Your reply ends this turn and your process exits. There is no background: a job you launched with \`&\`, \`nohup\`, or a backgrounded sub-agent cannot post a message after you stop, and you will not be woken up when it finishes.
+So: do NOT promise to report back later ("I'll send the link when it's done", "it's running in the background, I'll update you"). Either finish the work in this turn and give the result, or stop and say plainly what is done, what is left, and what you need — long work is fine, taking a long time before replying is fine.
+If you do start something detached, say so explicitly and tell the user how to see the result (a file path, a command), because you will not be able to tell them yourself.`;
+
 // --dangerously-skip-permissions cannot be used as root — use settings-based permissions instead
 const IS_ROOT = process.getuid?.() === 0;
 const SKIP_PERMS = IS_ROOT ? [] : ['--dangerously-skip-permissions'];
 
 // Tools that mutate files — disabled (via --disallowedTools) for read-only testers.
 const EDIT_TOOLS = 'Edit,Write,NotebookEdit,MultiEdit';
+
+// How many times in a row a session may be continued automatically after ending on a
+// promise of later work. Two is enough to finish a job that was nearly done; more than
+// that is a model that will keep promising, and should stop and hand back to a human.
+const MAX_AUTO_CONTINUES = 2;
 
 // Designer role persona — injected for design-mode sessions that run inside a REAL
 // frontend repo (not the designs workspace). In the designs workspace the repo's own
@@ -130,6 +144,9 @@ class ClaudeManager extends EventEmitter {
         // short-lived upstream outage into a permanently failed user session.
         this.pendingCodexRecoveries = new Map();
         this.codexRecoveryAttempts = new Set();
+        // Consecutive automatic continuations per session — see _continueIfPromised.
+        // Any real user message resets the count.
+        this.autoContinues = new Map();
     }
 
     async startSession(userPhone, task, workingDir, imagePath = null, ownerId = null, model = 'claude-opus-4-8', opts = {}) {
@@ -335,6 +352,8 @@ class ClaudeManager extends EventEmitter {
         }
 
         this.store.addMessage(sessionId, 'user', followUp);
+        // A person is back in the loop — the automatic-continuation budget starts over.
+        this.autoContinues.delete(sessionId);
         if (sourceProvider !== targetProvider || recoverFailedCodex || recoverMissingCodexThread) {
             const context = this._buildForkContext(session, this.store.getMessages(sessionId, 30));
             const transition = (recoverFailedCodex || recoverMissingCodexThread)
@@ -482,7 +501,7 @@ class ClaudeManager extends EventEmitter {
         model = safeCodexModel(safeGrokModel(safeOllamaModel(model)));
         const fileRef = this._prepareFile(imagePath, workingDir);
         const { preamble, extraArgs, kbHint } = this._roleAugment(sessionId);
-        const head = [kbHint || KB_HINT, preamble].filter(Boolean).join('\n\n');
+        const head = [kbHint || KB_HINT, TURN_CONTRACT, preamble].filter(Boolean).join('\n\n');
         const fullPrompt = fileRef ? `${head}\n\n${fileRef}\n\n${prompt}` : `${head}\n\n${prompt}`;
         // Codex runs a different binary entirely — same persona/KB preamble, its own
         // CLI contract. The read-only tester gate becomes a sandbox mode there.
@@ -515,7 +534,7 @@ class ClaudeManager extends EventEmitter {
         if (isCodexModel(model)) {
             const { preamble } = this._roleAugment(sessionId);
             const fileRef = this._prepareFile(imagePath, workingDir);
-            const head = [preamble, fileRef].filter(Boolean).join('\n\n');
+            const head = [TURN_CONTRACT, preamble, fileRef].filter(Boolean).join('\n\n');
             const prompt = head ? `${head}\n\n${followUp}` : followUp;
             const args = this._codexTurn(sessionId, model, prompt, workingDir, claudeSessionId, imagePath);
             this._runPty(sessionId, config.CODEX_BIN, args, workingDir, baseCost, null, 'codex');
@@ -533,7 +552,7 @@ class ClaudeManager extends EventEmitter {
         // rule change (e.g. designers may now deploy to DEV) never reaches sessions that
         // are already running, and the model drifts on the rules it does still remember.
         const { preamble, extraArgs } = this._roleAugment(sessionId);
-        const head = [preamble, fileRef].filter(Boolean).join('\n\n');
+        const head = [TURN_CONTRACT, preamble, fileRef].filter(Boolean).join('\n\n');
         const fullFollowUp = head ? `${head}\n\n${followUp}` : followUp;
         // Ollama/Grok fallback: strip the provider tag for --model and inject the
         // Anthropic-override env so claude routes to the right local proxy.
@@ -760,7 +779,11 @@ class ClaudeManager extends EventEmitter {
             // on-disk transcript, which is written independently of this pty stream.
             // Codex writes its own session files, not a Claude transcript, so there is
             // nothing here to salvage from — skip rather than search the wrong store.
-            if (!entry.resultEmitted && exitCode === 0 && !entry.manualStop && provider !== 'codex') {
+            //
+            // A killed turn (SIGHUP from a dashboard restart, an OOM) is salvaged too:
+            // the transcript is written as the turn runs, so the answer is often already
+            // on disk. Restricting this to clean exits threw that away.
+            if (!entry.resultEmitted && !entry.manualStop && provider !== 'codex') {
                 this._salvageFromTranscript(sessionId, entry, workingDir);
             }
 
@@ -770,8 +793,89 @@ class ClaudeManager extends EventEmitter {
             this.codexRecoveryAttempts.delete(sessionId);
             if (!entry.manualStop) this.store.updateSession(sessionId, { status });
             this.processes.delete(sessionId);
+
+            // A turn that dies before writing a word used to end in silence: the web
+            // chat is muted for WhatsApp broadcasts, so the user saw their own message
+            // and nothing after it, with no way to tell whether anything was running.
+            if (!entry.manualStop && !entry.repliedText) {
+                const note = exitCode === 0
+                    ? '_(This turn ended without a reply — the agent stopped before answering. Nothing was lost: send a message to continue.)_'
+                    : `_(This turn was interrupted before it could reply (exit ${exitCode}). Nothing was lost: send a message and it will pick up from the saved transcript.)_`;
+                this.store.addMessage(sessionId, 'system', note);
+                this.emit('assistant_message', { sessionId, content: note });
+            }
+
             this.emit('session_end', { sessionId, code: exitCode, status, costUsd: entry.costUsd });
+
+            // "I'll post the link when it finishes" — but nothing is left running to
+            // post it. Continue the turn instead of ending on a promise no process can keep.
+            if (!entry.manualStop && exitCode === 0) this._continueIfPromised(sessionId, workingDir, entry);
         });
+    }
+
+    // A reply that hands off to work nobody is doing. Both halves have to be present:
+    // a promise to deliver something later AND the deferral that makes it impossible
+    // ("in the background", "as soon as it finishes"). "I'll add a test" on its own is
+    // a plan for the next turn, not a broken promise, and must not trigger a retry.
+    static PROMISE_RE = /\b(?:i'?ll|i will|we'?ll|going to)\b[^.!?\n]{0,90}\b(?:post|send|share|report|update|notify|let you know|ping|drop|come back)\b/i;
+    static DEFERRED_RE = /\b(?:in the background|running in background)\b|\b(?:once|when|after|as soon as)\s+(?:it|this|that|they|the\s+\w+)\b[^.!?\n]{0,24}\b(?:done|finish|finishes|finished|complete|completes|completed|ready|lands|ends)\b/i;
+
+    _promisedMoreWork(text) {
+        const body = String(text || '').replace(/<!--thinking-->[\s\S]*?<!--\/thinking-->/g, '').trim();
+        if (!body) return false;
+        return ClaudeManager.PROMISE_RE.test(body) && ClaudeManager.DEFERRED_RE.test(body);
+    }
+
+    /**
+     * Claude Code and Codex both run one turn per process. When that process exits the
+     * session is idle, so a turn that signs off with "it's running in the background,
+     * I'll post the result here when it's done" has just guaranteed a message that can
+     * never arrive — nothing is left alive to send it.
+     *
+     * Rather than leave the user watching a dead thread, continue the session once with
+     * that fact spelled out. Bounded per session and reset by any real user message, so
+     * a model that keeps promising cannot spend the night talking to itself.
+     */
+    _continueIfPromised(sessionId, workingDir, entry) {
+        try {
+            const session = this.store.getSession(sessionId);
+            if (!session || session.status === 'stopped') return;
+            if (this.processes.has(sessionId) || this.pendingCodexRecoveries.has(sessionId)) return;
+            // Resuming needs the provider's own thread id. Without one this would have
+            // to fabricate a fresh session, which is a bigger decision than a retry.
+            if (!session.claude_session_id) return;
+            const messages = this.store.getMessages(sessionId, 1);
+            const last = messages[messages.length - 1];
+            if (!last || last.role !== 'assistant' || !this._promisedMoreWork(last.content)) return;
+
+            const used = this.autoContinues.get(sessionId) || 0;
+            if (used >= MAX_AUTO_CONTINUES) {
+                const note = '_(The agent said it would report back later, but a turn cannot do that — its process has exited. Stopping here rather than continuing to retry; send a message to pick the work back up.)_';
+                this.store.addMessage(sessionId, 'system', note);
+                this.emit('assistant_message', { sessionId, content: note });
+                return;
+            }
+            this.autoContinues.set(sessionId, used + 1);
+
+            const directive = `[AUTOMATIC CONTINUATION — not a message from the user]\nYour last reply promised to deliver something later ("in the background", "when it finishes"). That cannot happen: your process exited when that turn ended, so nothing is running and no message can be sent on your behalf.\n\nFinish the work now, in this turn, and give the user the actual result. If it genuinely cannot be finished, do not promise again — say what is done, what is blocked, and exactly how the user can get the rest themselves.`;
+            console.log(`[Session] ${sessionId} ended on a promise of later work — continuing automatically (${used + 1}/${MAX_AUTO_CONTINUES}).`);
+            const note = '_(Continuing automatically — the previous turn ended by promising a result later, which a finished turn cannot deliver.)_';
+            this.store.addMessage(sessionId, 'system', note);
+            this.emit('assistant_message', { sessionId, content: note });
+
+            this.store.updateSession(sessionId, { status: 'running', thread_open: 1 });
+            this._spawnResume(
+                sessionId,
+                this.store.getSession(sessionId)?.claude_session_id,
+                directive,
+                workingDir || session.working_dir,
+                entry?.costUsd || 0,
+                null,
+                session.model,
+            );
+        } catch (err) {
+            console.error(`[Session] Auto-continuation failed for ${sessionId}: ${err.message}`);
+        }
     }
 
     _recoverCodexStream(sessionId, workingDir, entry) {
@@ -827,6 +931,7 @@ class ClaudeManager extends EventEmitter {
                 if (!content) continue;
                 console.log(`[Claude] Session ${sessionId} salvaged final reply from transcript (pty stream missed it)`);
                 this.store.upsertLastAssistantMessage(sessionId, content);
+                entry.repliedText = true;
                 entry.resultEmitted = true;
                 this.emit('result', { sessionId, content, costUsd: entry.costUsd || entry.baseCost || 0 });
                 return;
@@ -890,6 +995,7 @@ class ClaudeManager extends EventEmitter {
                 const thinkingBlock = entry?.thinkingLines?.length
                     ? `<!--thinking-->\n${entry.thinkingLines.join('\n')}\n<!--/thinking-->\n\n`
                     : '';
+                if (entry) entry.repliedText = true;
                 this.store.upsertLastAssistantMessage(sessionId, thinkingBlock + content);
                 this.emit('assistant_message', { sessionId, content: thinkingBlock + content });
             } else if (thinking && thinking.length > 0) {
@@ -915,6 +1021,7 @@ class ClaudeManager extends EventEmitter {
                 const thinkingBlock = entry?.thinkingLines?.length
                     ? `<!--thinking-->\n${entry.thinkingLines.join('\n')}\n<!--/thinking-->\n\n`
                     : '';
+                if (entry) entry.repliedText = true;
                 this.store.upsertLastAssistantMessage(sessionId, thinkingBlock + content);
                 this.emit('result', { sessionId, content: thinkingBlock + content, costUsd: currentCost });
             }
