@@ -66,6 +66,7 @@ export { pendingImages };
 // and sprint-only view are separate and unchanged.
 const TESTER_MODEL = 'haiku';
 const TESTER_CODEX_MODEL = 'codex:gpt-5.6-luna';
+const CLIENT_SUPPORT_MODEL = 'sonnet';
 const ROLE_MODEL_POLICY = {
     // Was Ollama-only for cost containment; Ollama left the dropdown on 2026-08-06,
     // which would have left BAs with an empty list, so they now share the tester's
@@ -74,6 +75,10 @@ const ROLE_MODEL_POLICY = {
     // Testers can switch between the fast Claude and Codex options. The API filters
     // the picker and enforces this same allow-list for starts, resumes, and forks.
     tester: { allow: (m) => m === TESTER_MODEL || m === TESTER_CODEX_MODEL, fallback: TESTER_MODEL },
+    // Client support runs multi-step work (staged TPO sourcing, Excel builds, client-
+    // facing writing), so haiku alone is too thin — sonnet is the default with haiku
+    // allowed for cheap lookups. No Codex/Ollama: nothing they do is code.
+    client_support: { allow: (m) => m === CLIENT_SUPPORT_MODEL || m === TESTER_MODEL, fallback: CLIENT_SUPPORT_MODEL },
 };
 function resolveModelForRole(role, model) {
     const safe = safeCodexModel(safeGrokModel(safeOllamaModel(model)));
@@ -976,11 +981,19 @@ a{color:#60a5fa;text-decoration:none}</style></head>
             if (projectId && !project) return res.status(404).json({ error: 'Project not found' });
             // Mode is role-driven: design → designs repo (or a chosen frontend repo),
             // tester → tester persona/gating, else developer.
-            const sessionMode = (mode === 'design' || mode === 'tester') ? mode : 'developer';
+            // client_support is forced from the USER's role, never taken from the request:
+            // a support user must not be able to ask for developer mode and land in a
+            // session that loads the developer CLAUDE.md and can edit files.
+            const sessionMode = req.user.role === 'client_support'
+                ? 'client_support'
+                : ((mode === 'design' || mode === 'tester') ? mode : 'developer');
             const isDesign = sessionMode === 'design';
             // Designers may build real UI in a frontend repo; `repo` is validated
-            // against the allowlist and falls back to the designs workspace.
-            const sessionWorkingDir = isDesign ? resolveDesignWorkingDir(repo) : null;
+            // against the allowlist and falls back to the designs workspace. Client
+            // support runs in the client desk, which sits outside /home/ubuntu so no
+            // developer CLAUDE.md is inherited from a parent directory.
+            const sessionWorkingDir = isDesign ? resolveDesignWorkingDir(repo)
+                : (sessionMode === 'client_support' ? config.CLIENT_DIR : null);
             // Testers' code-edit access comes from their user setting (JWT lacks can_edit → read from store).
             const testerEditAccess = sessionMode === 'tester'
                 ? (store.getUserById(req.user.id)?.can_edit !== 0)

@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PROD hotfix plan — release-v1.37-hotfix-1</title>
+<style>
+:root{--ink:#172033;--muted:#607087;--line:#dce3eb;--navy:#102746;--blue:#1769e0;--danger:#a82323;--bg:#f6f8fb}*{box-sizing:border-box}body{max-width:1100px;margin:0 auto;padding:48px 28px 80px;background:var(--bg);color:var(--ink);font:15px/1.6 Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}h1{margin:0 0 18px;color:var(--navy);font-size:clamp(30px,5vw,48px);line-height:1.08;letter-spacing:-.04em}h2{margin:42px 0 14px;padding-top:12px;border-top:1px solid var(--line);color:var(--navy);font-size:25px}h3{margin:28px 0 10px;color:#203b61;font-size:19px}p{max-width:900px}a{color:var(--blue)}code{padding:2px 5px;border-radius:4px;background:#eaf0f6;color:#23354e;font:13px ui-monospace,SFMono-Regular,Menlo,monospace}pre{overflow:auto;padding:16px;border-radius:8px;background:#102033;color:#eef5ff}pre code{padding:0;background:transparent;color:inherit}table{width:100%;margin:14px 0 24px;border-collapse:collapse;background:white}th,td{padding:11px 12px;border:1px solid var(--line);vertical-align:top;text-align:left}th{background:#eaf0f6;color:#34455f;font-size:12px;text-transform:uppercase}blockquote{margin-left:0;padding:12px 16px;border-left:4px solid var(--blue);background:white}strong{color:var(--danger)}li{margin:6px 0}@media(max-width:700px){body{padding:28px 16px}table{display:block;overflow-x:auto}}
+</style>
+</head>
+<body>
+<h1>PROD hotfix plan — <code>release-v1.37-hotfix-1</code></h1>
+<p>Prepared: 2026-08-14 UTC<br>Active sprint: sprint 34<br>Release type: hotfix<br>Expected baseline: current PROD release branches<br>Source changelog: <a href="https://bmv2bqg5gpcd.compat.objectstorage.ap-mumbai-1.oraclecloud.com/pl-uat-public-docs/reports/uat-promotion-changelog-2026-08-14.html">https://bmv2bqg5gpcd.compat.objectstorage.ap-mumbai-1.oraclecloud.com/pl-uat-public-docs/reports/uat-promotion-changelog-2026-08-14.html</a></p>
+<p>This is a readiness and execution plan. It does not authorize branch creation, SQL,
+environment/configmap changes, or deployment. Each mutation remains a separate gate.</p>
+<h2>1. Approved code changelog</h2>
+<h3>Full UAT promotion</h3>
+<table>
+<thead>
+<tr>
+<th>Service</th>
+<th>Current PROD branch</th>
+<th>Promotion</th>
+<th>Summary</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>institute-react-v2</code></td>
+<td><code>release-v1.37</code></td>
+<td>Full <code>origin/UAT</code> promotion</td>
+<td>TPO dashboard counters, filters, assessment management, diagnosis, schedules, reports, PDF and workbook fixes. The PROD-only containerization commit <code>063a9f7</code> must remain in the resulting hotfix branch.</td>
+</tr>
+<tr>
+<td><code>institute-node</code></td>
+<td><code>release-v1.37</code></td>
+<td>Full <code>origin/UAT</code> promotion</td>
+<td>Matching dashboard calculations, diagnosis pairing, recurring-report metrics, roster context and scheduled-run ordering.</td>
+</tr>
+</tbody></table>
+<h3>Explicit cherry-picks only</h3>
+<table>
+<thead>
+<tr>
+<th>Service</th>
+<th>Commit(s)</th>
+<th>Intended change</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>admin-node</code></td>
+<td><code>75c8be1</code></td>
+<td>Remove null JSON fields before audit-log writes for Prisma 4 compatibility.</td>
+</tr>
+<tr>
+<td><code>corporate-node</code></td>
+<td><code>2bbee205</code></td>
+<td>Align the Prisma client with UAT/PROD at Prisma 5.22.0.</td>
+</tr>
+<tr>
+<td><code>student-node</code></td>
+<td><code>7f2b2d59</code>, <code>c5283f9e</code></td>
+<td>Convert null JSON fields before profile updates and prevent empty master-sync requests from failing profile saves.</td>
+</tr>
+<tr>
+<td><code>form-data-normalization</code></td>
+<td><code>b3c9240</code></td>
+<td>Improve student-metrics analytics filters and export coverage, including tests.</td>
+</tr>
+<tr>
+<td><code>admin-react</code></td>
+<td><code>fc8fe1c5</code>, <code>ffb77768</code></td>
+<td>Show active campuses only; validate year values and de-duplicate campuses.</td>
+</tr>
+<tr>
+<td><code>search-service</code></td>
+<td><code>e64ab69</code></td>
+<td>Refresh course and events materialized views after course create/update/delete operations.</td>
+</tr>
+</tbody></table>
+<p>All listed cherry-pick objects were confirmed after refreshing the configured Git
+remote metadata, except <code>form-data-normalization</code>, which cannot yet be checked through
+the canonical repository configuration (see blockers).</p>
+<h3>Explicit exclusions</h3>
+<ul>
+<li>Do not promote any other repository wholesale.</li>
+<li>Exclude unrelated notifications, ATS, assessment and search work.</li>
+<li>Exclude the TPO Time Taken export and campus-toggle pending-badge changes in
+<code>student-node</code> unless separately approved.</li>
+<li>Exclude the joined-candidate placement count correction in <code>student-node</code> and
+<code>corporate-node</code> unless separately approved.</li>
+</ul>
+<h2>2. Confirmed blockers and stop conditions</h2>
+<h3>B1 — <code>student-node</code> PROD checkout is dirty</h3>
+<p>The configured PROD checkout is on <code>release-v1.37</code>, but contains an uncommitted change:</p>
+<pre><code class="language-text">M prisma/generated-assessment/schema.prisma
+383 insertions, 340 deletions
+</code></pre>
+<p>This is a hard preflight failure. The file must be attributed and intentionally
+committed, preserved, or reverted by an authorized owner before branch creation or
+deployment. The deployment agent must not repair it automatically.</p>
+<h3>B2 — <code>search-service</code> has no <code>release-v1.37</code> PROD baseline</h3>
+<p>The service is currently on <code>release-v1.36-hotfix-3</code> at <code>30a800c</code>. Under the configured
+branch-naming rules, its natural next hotfix would be <code>release-v1.36-hotfix-4</code>, not
+<code>release-v1.37-hotfix-1</code>.</p>
+<p>Before creating a uniform <code>release-v1.37-hotfix-1</code> branch, an owner must decide whether
+to:</p>
+<ol>
+<li>establish an approved <code>release-v1.37</code> baseline for <code>search-service</code>, then cut
+<code>release-v1.37-hotfix-1</code>; or</li>
+<li>retain its existing lineage and deploy a differently named service-specific branch.</li>
+</ol>
+<p>Do not silently create <code>release-v1.37-hotfix-1</code> from <code>release-v1.36-hotfix-3</code>, because
+the name would misrepresent its ancestry.</p>
+<h3>B3 — Search database prerequisites are unresolved</h3>
+<p>The saved PROD state records pending search-service migrations blocked by missing
+<code>institute.*_view</code> objects and authorization portability. Commit <code>e64ab69</code> refreshes
+course and events materialized views, so the exact PROD view names, existence,
+ownership and refresh permissions must be verified before deployment. A missing or
+unauthorized materialized view could turn course writes into runtime failures.</p>
+<h3>B4 — <code>form-data-normalization</code> is absent from <code>repos.json</code></h3>
+<p>The service is part of the approved changelog and prior deployment state, but has no
+canonical path, deploy name, namespace, deployment list, or env mapping in
+<code>repos.json</code>. The production workflow prohibits guessing these values.</p>
+<p>Before branch or deployment work, add/confirm its canonical configuration. Preserve
+the known PROD-only <code>BASE_URL</code> behavior and deploy its API, worker and cron workloads
+from one identical image, as required by the prior release history.</p>
+<h3>B5 — PROD-only commits must survive promotion</h3>
+<ul>
+<li><code>institute-react-v2</code>: preserve <code>063a9f7</code>, which provides the production Dockerfile,
+<code>.dockerignore</code>, and standalone Next.js output.</li>
+<li><code>admin-node</code>: preserve <code>c8fbe1f</code>, which restores the Dockerfile&#39;s
+<code>.env.${ENVIRONMENT}</code> copy behavior required by the production build process.</li>
+<li><code>form-data-normalization</code>: preserve its production <code>BASE_URL</code> correction.</li>
+</ul>
+<h3>B6 — DB and environment discovery is not complete</h3>
+<p>Pending SQL scripts and dated environment changes still need the formal read-only
+Phase 2 scan. No SQL or env/configmap application may be inferred from this code-only
+changelog.</p>
+<h3>B7 — Slack deploy credential must be available in memory</h3>
+<p>The last release deployed with Slack disabled. Before the final deploy gate, confirm
+that <code>INFRAHUB_SLACK_TOKEN</code> is available for in-memory use so start, periodic and final
+status messages reach <code>#infrahub</code>. Never write the token to a tracked file.</p>
+<h2>3. Deployment procedure</h2>
+<h3>Gate 1 — Resolve readiness blockers</h3>
+<ol>
+<li>Obtain an owner decision for the dirty <code>student-node</code> schema file.</li>
+<li>Obtain an owner decision for <code>search-service</code> branch ancestry.</li>
+<li>Verify search materialized-view prerequisites using sanctioned read-only PROD DB
+access.</li>
+<li>Add or confirm the canonical <code>form-data-normalization</code> deployment configuration.</li>
+<li>Complete the pending DB-script and environment discovery report.</li>
+</ol>
+<p>Stop if any result is unclear.</p>
+<h3>Gate 2 — Create branches</h3>
+<p>After the user explicitly says <strong>“yes, create these branches”</strong>:</p>
+<ol>
+<li>For each clean service based on <code>release-v1.37</code>, create
+<code>release-v1.37-hotfix-1</code> from the current PROD branch and push it.</li>
+<li>Handle <code>search-service</code> only according to the separately approved ancestry
+decision.</li>
+<li>Abort on a dirty tree, missing base/target branch, existing divergent branch, or
+rejected push.</li>
+</ol>
+<h3>Gate 3 — Assemble the hotfix code</h3>
+<p>On the new branches:</p>
+<ol>
+<li>Integrate full <code>origin/UAT</code> into <code>institute-react-v2</code> and <code>institute-node</code>, resolving
+conflicts explicitly and preserving the PROD-only commits listed above.</li>
+<li>Cherry-pick only the manifest commits for the remaining services, in the order
+shown in the changelog.</li>
+<li>Run service-appropriate build/test checks.</li>
+<li>Produce a final branch-to-branch diff proving that no unrelated UAT commits entered
+the six cherry-pick-only repositories.</li>
+<li>Stop and request review for any conflict, failing test, or unexpected diff.</li>
+</ol>
+<p>Branch assembly is a separate code mutation and requires explicit approval; it should
+not be assumed from branch-creation approval.</p>
+<h3>Gate 4 — Apply approved DB scripts</h3>
+<p>Only if the Phase 2 scan finds pending scripts:</p>
+<ol>
+<li>Show the ordered file list, summaries and destructive-operation flags.</li>
+<li>Ask <strong>“run these on PROD DB?”</strong></li>
+<li>Reconfirm any destructive file individually.</li>
+<li>Apply through the sanctioned PROD DB write path and verify each result.</li>
+<li>After success, update its DB-Scripts header to <code>PROD — applied 2026-08-14</code> and push
+that metadata update.</li>
+</ol>
+<h3>Gate 5 — Apply approved environment/configmap changes</h3>
+<p>Only if the Phase 2 scan finds pending values:</p>
+<ol>
+<li>Show service, exact keys, redacted secret values, and exact destination files.</li>
+<li>Ask <strong>“apply env for these services?”</strong></li>
+<li>Update frontend central env files; rebuild is required for baked variables.</li>
+<li>For APIs, update both the central env file and Kubernetes configmap, apply the
+configmap, and roll the deployment.</li>
+<li>Treat special services individually; do not guess their env mechanism.</li>
+</ol>
+<h3>Gate 6 — Deploy</h3>
+<p>After branches, code, DB and env checks are complete, show the final service list and
+require the explicit command:</p>
+<pre><code class="language-text">deploy release-v1.37-hotfix-1
+</code></pre>
+<p>Then:</p>
+<ol>
+<li>Preflight every configured checkout: target remote branch exists, working tree is
+clean except explicitly expected generated env files, and
+<code>~/autodeploy_noprune.sh</code> exists.</li>
+<li>Pass the Slack token in memory and run <code>prod_deploy_notify.sh</code> for configured
+services in parallel. It performs one Docker prune before parallel builds.</li>
+<li>Deploy <code>form-data-normalization</code> only through its verified one-image procedure,
+updating API, worker and cron together to the same image tag.</li>
+<li>Stop the run on any preflight/build/deploy failure; do not improvise a repair.</li>
+<li>Reapply any required restart policies.</li>
+</ol>
+<h3>Gate 7 — Post-deployment verification</h3>
+<ol>
+<li>Confirm each Kubernetes deployment is using the expected branch/image tag.</li>
+<li>Confirm ready replicas, pod health, restart counts and absence of crash loops.</li>
+<li>Verify <code>form-data-normalization</code> API/worker/cron all use the identical image.</li>
+<li>Smoke-test TPO dashboard, diagnosis/schedules/reports, profile saves, campus filters,
+analytics export, and search course/event refresh behavior.</li>
+<li>Confirm Slack start/final status delivery to <code>#infrahub</code>.</li>
+<li>Update <code>state.json</code> only after the deployed state is verified.</li>
+</ol>
+<h2>4. Current readiness verdict</h2>
+<p><strong>BLOCKED — do not create branches or deploy yet.</strong></p>
+<p>The immediate blockers are the dirty <code>student-node</code> checkout, unresolved
+<code>search-service</code> ancestry and DB prerequisites, missing canonical
+<code>form-data-normalization</code> configuration, and incomplete DB/env discovery.</p>
+</body>
+</html>

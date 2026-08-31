@@ -2,6 +2,9 @@ import { useState, useEffect, useCallback } from 'react'
 import { X, UserPlus, Trash2, KeyRound, Phone, Save, Clock, Check, XCircle, ToggleLeft, ToggleRight, AlertTriangle, RefreshCw, ExternalLink, Loader2, ShieldCheck } from 'lucide-react'
 import { apiFetch } from '../hooks/useApi'
 
+// snake_case roles don't survive `capitalize`; give them a real label.
+const ROLE_LABELS = { business_analyst: 'Business Analyst', client_support: 'Client Support' }
+
 export function AdminModal({ isOpen, onClose, title, children }) {
   if (!isOpen) return null
   return (
@@ -45,6 +48,7 @@ export function UsersPanel({ users = [], onAdd, onDelete, onResetPassword, onUpd
           <option value="designer">Designer</option>
           <option value="tester">Tester</option>
           <option value="business_analyst">Business Analyst</option>
+          <option value="client_support">Client Support</option>
           <option value="viewer">Viewer</option>
           <option value="admin">Admin</option>
         </select>
@@ -80,7 +84,7 @@ export function UsersPanel({ users = [], onAdd, onDelete, onResetPassword, onUpd
           <div key={u.id} className="flex items-center justify-between py-3">
             <div>
               <p className="text-sm font-medium text-text-primary">{u.display_name || u.email}</p>
-              <p className="text-xs text-text-muted">{u.email || 'No login access yet'} · <span className="capitalize">{u.role === 'business_analyst' ? 'Business Analyst' : u.role}</span>{u.is_admin ? ' · Admin' : ''}{u.role === 'tester' ? (u.sprint_only ? ' · Sprint only' : (u.can_edit ? ' · Chat · can edit' : ' · Chat · read-only')) : ''}</p>
+              <p className="text-xs text-text-muted">{u.email || 'No login access yet'} · <span className="capitalize">{ROLE_LABELS[u.role] || u.role}</span>{u.is_admin ? ' · Admin' : ''}{u.role === 'tester' ? (u.sprint_only ? ' · Sprint only' : (u.can_edit ? ' · Chat · can edit' : ' · Chat · read-only')) : ''}</p>
             </div>
             <div className="flex items-center gap-3">
               {onUpdateUser && (
@@ -94,6 +98,7 @@ export function UsersPanel({ users = [], onAdd, onDelete, onResetPassword, onUpd
                   <option value="designer">Designer</option>
                   <option value="tester">Tester</option>
                   <option value="business_analyst">Business Analyst</option>
+                  <option value="client_support">Client Support</option>
                   <option value="viewer">Viewer</option>
                   <option value="admin">Admin</option>
                 </select>

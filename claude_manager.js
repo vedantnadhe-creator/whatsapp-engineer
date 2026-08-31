@@ -13,11 +13,38 @@ import { projectContextBanner } from './project_doc.js';
 import { logSessionEvent } from './project_events.js';
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import os from 'os';
 
 const KB_DIR = config.KB_DIR;
 const KB_HINT = `[Context: Knowledge Base is a local git repo at ${KB_DIR}. Structure: pluginlive.md (company overview), Assessment/ (aptitude, communication, custom, role-based, scheduling), ATS/ (Admin, Corporate, Institute, Student, ElasticSearch), Infrastructure/ (servers, deployment, MCP, skills). To search: grep -rl "<term>" ${KB_DIR} --include="*.md". To read a doc: cat ${KB_DIR}/<path>. To update/create: write to ${KB_DIR}/<path> then cd ${KB_DIR} && git add -A && git commit -m "<msg>" && git push origin main. Read only what's relevant to the current task — do not read all docs upfront. The KB lives ONLY in this GitHub repo — there is no Outline wiki; never call app.getoutline.com or any Outline API.]`;
 
+
+// Client-support role persona (support / sales / lead generation). Kept in a file
+// rather than a const here: it is business copy that the commercial team edits, it is
+// long, and it must stay readable to non-engineers. Re-read per spawn so an edit
+// reaches the next turn without a dashboard restart; cached by mtime so a hot loop
+// does not stat-and-read on every message.
+const CLIENT_PROMPT_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), 'roles', 'client-support.md');
+let _clientPromptCache = { mtime: 0, text: '' };
+function clientSupportPrompt() {
+    try {
+        const mtime = fs.statSync(CLIENT_PROMPT_PATH).mtimeMs;
+        if (mtime !== _clientPromptCache.mtime) {
+            _clientPromptCache = { mtime, text: fs.readFileSync(CLIENT_PROMPT_PATH, 'utf8') };
+        }
+        return _clientPromptCache.text;
+    } catch (err) {
+        // Never fall through to an empty persona — an unscoped client-facing session is
+        // worse than a refused one, so the fallback is itself a hard boundary.
+        console.error(`[Role] client-support persona unreadable at ${CLIENT_PROMPT_PATH}: ${err.message}`);
+        return '[ROLE: CLIENT SUCCESS] Your role file could not be loaded. Do not proceed: tell the user the client-support persona is missing and stop. Do not read code, touch repos, deploy, or write to any database.';
+    }
+}
+
+// The KB is product truth, so client-support keeps it — but read-only, and without the
+// Infrastructure/ pointer or the commit-and-push instructions in the developer hint.
+const CLIENT_KB_HINT = `[Context: the PluginLive Knowledge Base is a local folder at ${KB_DIR} — this is product documentation, your source of truth for how features actually behave. Structure: pluginlive.md (company overview), Assessment/ (aptitude, communication, custom, role-based, scheduling), ATS/ (Admin, Corporate, Institute, Student). To search: grep -rl "<term>" ${KB_DIR} --include="*.md". To read: cat ${KB_DIR}/<path>. READ ONLY — never edit, commit or push the KB. Read only what the current question needs. Skip Infrastructure/ entirely; it is engineering material and not yours.]`;
 
 // Tester role persona — injected for sessions with mode === 'tester' (instead of a
 // separate repo CLAUDE.md like design mode, since testers work on the real code repo).
@@ -368,6 +395,17 @@ class ClaudeManager extends EventEmitter {
     _roleAugment(sessionId) {
         try {
             const s = this.store.getSession(sessionId);
+            // Client-support sessions are commercial, not technical: business persona,
+            // scoped KB, and file-editing tools hard-disabled at the CLI. The persona
+            // forbids touching code; the flags mean a prompt-injected client document
+            // cannot talk the session into writing one anyway.
+            if (s && s.mode === 'client_support') {
+                return {
+                    preamble: clientSupportPrompt(),
+                    extraArgs: [`--disallowedTools=${EDIT_TOOLS}`],
+                    kbHint: CLIENT_KB_HINT,
+                };
+            }
             // Design mode inside a real frontend repo: inject the designer contract,
             // because the repo's developer CLAUDE.md would otherwise be the only
             // persona. In the designs workspace that repo's own CLAUDE.md already
@@ -425,8 +463,8 @@ class ClaudeManager extends EventEmitter {
     _spawnNew(sessionId, prompt, workingDir, imagePath = null, model = 'claude-opus-4-8') {
         model = safeCodexModel(safeGrokModel(safeOllamaModel(model)));
         const fileRef = this._prepareFile(imagePath, workingDir);
-        const { preamble, extraArgs } = this._roleAugment(sessionId);
-        const head = [KB_HINT, preamble].filter(Boolean).join('\n\n');
+        const { preamble, extraArgs, kbHint } = this._roleAugment(sessionId);
+        const head = [kbHint || KB_HINT, preamble].filter(Boolean).join('\n\n');
         const fullPrompt = fileRef ? `${head}\n\n${fileRef}\n\n${prompt}` : `${head}\n\n${prompt}`;
         // Codex runs a different binary entirely — same persona/KB preamble, its own
         // CLI contract. The read-only tester gate becomes a sandbox mode there.

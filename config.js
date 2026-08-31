@@ -107,6 +107,12 @@ const config = {
     // Design workspace — design-mode sessions run here (separate CLAUDE.md + deploy flow)
     DESIGNS_DIR: process.env.DESIGNS_DIR || '/home/ubuntu/pluginlive-designs',
 
+    // Client-desk workspace — client-support sessions (support / sales / lead gen) run
+    // here. It is deliberately OUTSIDE /home/ubuntu: Claude Code loads CLAUDE.md from the
+    // cwd and every parent, so a dir under /home/ubuntu would inherit the developer
+    // CLAUDE.md (repo paths, deploy scripts, PROD SSH) into a client-facing session.
+    CLIENT_DIR: process.env.CLIENT_DIR || '/srv/pluginlive-clientdesk',
+
     // Projects — one `project_<slug>.md` context doc per project lives here. Kept out
     // of the code repos so a project doc never lands in someone's git diff.
     PROJECTS_DIR: process.env.PROJECTS_DIR || '/home/ubuntu/olibot-projects',

@@ -216,6 +216,28 @@
       "k8s_deploy": "institute-react-v2",
       "env_file": "/home/ubuntu/repositories/envs/ui/institute-react-v2.env",
       "env_note": "Next.js (not webpack). NEXT_PUBLIC_* baked at build time; server-only vars (INST_API_URL, AUTH_API_URL, ADMIN_API_URL, CORPORATE_API_URL) are read at RUNTIME from the pod, so they must be set on the Deployment as well as in this env file. Served same-origin at institute.pluginlive.com/v2 via a /v2 path on institute-react-ingress; the legacy app keeps /."
+    },
+    "assessment-react-v2": {
+      "autodeploy": "assessment-react-v2",
+      "num": 18,
+      "type": "frontend",
+      "path": "/home/ubuntu/repositories/frontend/assessment-react-v2",
+      "ocr": "pl-assessment-react-v2",
+      "k8s_ns": "frontend",
+      "k8s_deploy": "assessment-react-v2",
+      "env_file": "/home/ubuntu/repositories/envs/ui/assessment-react-v2.env",
+      "env_note": "Next.js (not webpack). NEXT_PUBLIC_* baked at build; server-only STD_API_URL/AUTH_API_URL/FASTAPI_URL are read at RUNTIME so they must ALSO be on the Deployment. Served same-origin at assessment.pluginlive.com/candidate-assessment-journey/v2. HARD DEPENDENCY of assessment-react v1.38+: commit f5858f3 redirects every candidate opening an assessment to this basePath with NO env gate - if this app or its ingress path is missing, candidates silently get the v1 SPA shell at a v2 URL (200, wrong app), not a 404. Runs 2 replicas (other frontends run 1) because it is a real Node BFF on the candidate hot path."
+    },
+    "admin-react-v2": {
+      "autodeploy": "admin-react-v2",
+      "num": 19,
+      "type": "frontend",
+      "path": "/home/ubuntu/repositories/frontend/admin-react-v2",
+      "ocr": "pl-admin-react-v2",
+      "k8s_ns": "frontend",
+      "k8s_deploy": "admin-react-v2",
+      "env_file": "/home/ubuntu/repositories/envs/ui/admin-react-v2.env",
+      "env_note": "Next.js (not webpack). NEXT_PUBLIC_* baked at build; server-only ADMIN_API_URL/AUTH_API_URL read at RUNTIME so they must ALSO be on the Deployment. Served same-origin at admin.pluginlive.com/v2. Lands DORMANT: both v1 entry points are env-gated (ADMIN_V2_MODULES in Nav/navItems.js, ADMIN_V2_CREATE_ASSESSMENT in Assessment/index.js) and neither key is set in admin-react.env - setting one + rebuilding admin-react is what exposes v2. NEXT_PUBLIC_LOGIN_URL must stay set: src/lib/auth.ts:47 falls back to the DEV auth host if absent."
     }
   },
   "env_apply_rules": {

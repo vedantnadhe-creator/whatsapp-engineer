@@ -268,6 +268,18 @@ claude.on('session_error', async ({ sessionId, error }) => {
 
 // ── WhatsApp message handler ──────────────────────────────────
 
+// Resolve the session mode from the sender's user role when the caller did not set
+// one (WhatsApp path). Only client_support is forced — every other role keeps the
+// existing default, so this cannot change behaviour for developers or testers.
+function resolveRoleMode({ mode, ownerId, phone }) {
+    if (mode) return { mode, workingDir: null };
+    try {
+        const user = (ownerId && store.getUserById(ownerId)) || (phone && store.getUserByPhone(String(phone)));
+        if (user?.role === 'client_support') return { mode: 'client_support', workingDir: config.CLIENT_DIR };
+    } catch (_) { /* unknown sender — fall through to the default */ }
+    return { mode, workingDir: null };
+}
+
 export async function handleIncomingMessage({ isWeb: explicitIsWeb, phone, text, pushName, groupJid, chatJid = null, imagePath = null, ownerId = null, model = null, workingDir = null, mode = null, editAccess = undefined, promptPrefix = null }) {
     try {
         // Evolution only emits sprint messages here — DMs from allowed teammates, plus
@@ -360,7 +372,12 @@ export async function handleIncomingMessage({ isWeb: explicitIsWeb, phone, text,
                 // Close any existing thread before starting fresh
                 if (currentThread) store.closeThread(threadKey);
                 const task = intent.task || text;
-                const { sessionId } = await claude.startSession(threadKey, task, workingDir, imagePath, ownerId, model || 'claude-opus-4-8', { mode, editAccess, promptPrefix });
+                // The dashboard forces client_support from the user's role, but a session
+                // started over WhatsApp arrives with mode === null. Without this, a support
+                // user texting the bot would get a developer session in /home/ubuntu — the
+                // one place their persona and workspace scoping do not apply.
+                const roleMode = resolveRoleMode({ mode, ownerId, phone });
+                const { sessionId } = await claude.startSession(threadKey, task, roleMode.workingDir ?? workingDir, imagePath, ownerId, model || 'claude-opus-4-8', { mode: roleMode.mode, editAccess, promptPrefix });
 
                 if (isWeb) {
                     webMutedSessions.add(sessionId);
