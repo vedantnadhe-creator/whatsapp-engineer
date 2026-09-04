@@ -6,7 +6,11 @@ const MODEL_NAMES = {
   'claude-opus-4-8': 'Opus 4.8',
   'claude-opus-4-7': 'Opus 4.7',
   'claude-sonnet-5': 'Sonnet 5',
-  'fable': 'Fable 5',
+  'claude-fable-5-1': 'Fable 5.1',
+  'claude-fable-5': 'Fable 5',
+  // Historical rows only. The bare alias tracks the latest Fable, so old spend under
+  // it can be either generation — don't claim a version the data doesn't carry.
+  'fable': 'Fable',
   'opus': 'Opus 4.6',
   'sonnet': 'Sonnet 4.6',
   'haiku': 'Haiku 4.5',

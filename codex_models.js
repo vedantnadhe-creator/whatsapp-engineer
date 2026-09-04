@@ -19,6 +19,12 @@ export const DEFAULT_CODEX_MODEL = `${CODEX_PREFIX}gpt-5.6-terra`;
 
 // Codex model IDs accepted with a ChatGPT-backed Codex login.  A bare
 // `gpt-5.6` is an API-style alias and Codex rejects it for ChatGPT accounts.
+//
+// Checked 2026-09-04 against the CLI, not the docs: `gpt-6-astra` is listed as
+// Codex's most capable model but our login gets HTTP 400 "not supported when
+// using Codex with a ChatGPT account" (it ships through the Trusted Access
+// Program). Do not add it back without re-testing — an unusable entry in this
+// list spawns a session that dies on its first turn.
 const CODEX_CATALOG = [
     { slug: 'gpt-5.6-terra', name: 'OpenAI · GPT-5.6 Terra', description: 'Balanced Codex model for everyday engineering work', default: true },
     { slug: 'gpt-5.6-sol', name: 'OpenAI · GPT-5.6 Sol', description: 'Highest-capability Codex model for complex work' },

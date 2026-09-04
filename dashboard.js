@@ -540,7 +540,13 @@ a{color:#60a5fa;text-decoration:none}</style></head>
         const claudeModels = [
             { id: 'claude-opus-5', name: 'Opus 5', description: 'Latest Opus — new frontier default, strongest on coding & knowledge work' },
             { id: 'claude-opus-4-8', name: 'Opus 4.8', description: 'Previous Opus generation — most capable for complex work' },
-            { id: 'fable', name: 'Fable 5', description: 'Most capable for hardest, long-running tasks · ~2× faster than Opus but uses ~2× the tokens' },
+            // Pin the exact ids, never the bare `fable` alias: the CLI resolves that
+            // alias to whatever the latest Fable is (today 5.1), so a row labelled
+            // "Fable 5" would silently start running a different model on a Claude
+            // Code update. Sessions already stored as `fable` keep resuming — it is
+            // still a valid alias, it just isn't offered any more.
+            { id: 'claude-fable-5-1', name: 'Fable 5.1', description: 'Newest Fable — best judgement on the hardest, long-running work · ~2× faster than Opus, ~2× the tokens' },
+            { id: 'claude-fable-5', name: 'Fable 5', description: 'Previous Fable generation' },
             { id: 'claude-sonnet-5', name: 'Sonnet 5', description: 'Latest Sonnet — strong for everyday tasks', default: true },
             { id: 'claude-opus-4-7', name: 'Opus 4.7', description: 'Previous Opus generation' },
             { id: 'opus', name: 'Opus 4.6', description: 'Older Opus generation' },
