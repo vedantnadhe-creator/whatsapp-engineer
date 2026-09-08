@@ -31,7 +31,13 @@ export default class EvolutionWhatsApp extends EventEmitter {
     constructor(store) {
         super();
         this.store = store;
-        this.sock = null; // compatibility with existing dashboard/session delivery guards
+        // Sending through Evolution is a stateless HTTP call — it does not need a live
+        // socket the way Baileys does. The delivery guards elsewhere read `wa.sock` as
+        // "is WhatsApp usable", so leaving it null until connect() succeeds made a single
+        // failed boot-time handshake silently swallow every outgoing message for the life
+        // of the process. Present from the start, with `connected` still reporting the
+        // real pairing state for the dashboard.
+        this.sock = { connected: false };
         this.botNumber = cleanId(config.EVOLUTION_BOT_NUMBER);
         this._processed = new Set();
         // Configured lids plus any this instance has already learned about itself.

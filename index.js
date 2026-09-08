@@ -117,7 +117,13 @@ const WA_MAX = 3800; // safe WhatsApp message size
  * Chunks large outputs into sequential messages to avoid truncation.
  */
 async function sendContent(phone, content, prefix = '') {
-    if (!content || !wa?.sock) return;
+    if (!content) return;
+    // Never drop a reply in silence: "Oli ignored me" and "Oli answered and the send was
+    // skipped" look identical from the group, and only the log can tell them apart.
+    if (!wa?.sock) {
+        console.error(`[WhatsApp] Not connected — dropped a ${content.length}-char reply to ${phone}.`);
+        return;
+    }
     const full = prefix ? `${prefix}\n\n${content}` : content;
     if (full.length <= WA_MAX) {
         await wa.sendMessage(phone, full);
@@ -612,9 +618,16 @@ if (config.WHATSAPP_ENABLED === false) {
         console.log('🤖 WhatsApp is ONLINE!');
     });
 
-    wa.connect().catch(err => {
-        console.error('[WhatsApp] Failed to connect:', err.message);
-        console.warn('[WhatsApp] Dashboard is still running. WhatsApp will retry on next restart.');
-        // Do NOT exit — dashboard stays up
-    });
+    // Retry rather than waiting for a human. This process and the Evolution container
+    // start together, so losing the race means `connect()` fails once — and "retry on
+    // next restart" then meant days of Oli reading group tags, doing the work, and
+    // never being able to answer. Backs off to 5 minutes and keeps trying; the
+    // dashboard stays up throughout either way.
+    const connectWithRetry = (delay = 15_000) => {
+        wa.connect().catch(err => {
+            console.error(`[WhatsApp] Failed to connect: ${err.message} — retrying in ${Math.round(delay / 1000)}s.`);
+            setTimeout(() => connectWithRetry(Math.min(delay * 2, 5 * 60_000)), delay).unref();
+        });
+    };
+    connectWithRetry();
 }
