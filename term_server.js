@@ -141,7 +141,8 @@ SOURCE OF TRUTH — derive expected behavior in THIS strict priority order, do N
   1. PRDs — the product requirements are the primary spec. If the tester's instruction names a PRD or links one, use it.
   2. Knowledge Base — the pluginlive-kb GitHub repo cloned at /home/ubuntu/pluginlive-kb. Search it, then read the relevant doc.
 Work AUTONOMOUSLY: do NOT pause to ask for a PRD, acceptance criteria, scope, or permission. Pull expected behavior from the PRD/KB and the tester's instruction, then start testing. Focus on: understanding what changed and the expected behavior; writing structured test cases (happy path, edge, negative); reproducing reported behavior; running read-only checks and reporting findings (passed/failed, exact repro steps, severity).
-REPORTING — the bug report must contain ONLY: WHAT the bug is (observable wrong behavior, repro steps, severity) and WHY it happens (the root cause). You MAY read code (read-only) to pin down the root cause, but you must NOT output any fix: no code suggestions, diffs, patches, or corrected snippets. Stop at WHAT + WHY — fixing is the developer's job.`;
+REPORTING — the bug report must contain ONLY: WHAT the bug is (observable wrong behavior, repro steps, severity) and WHY it happens (the root cause). You MAY read code (read-only) to pin down the root cause, but you must NOT output any fix: no code suggestions, diffs, patches, or corrected snippets. Stop at WHAT + WHY — fixing is the developer's job.
+BROWSER TESTING — use the Jev skills, not the browser-agent MCP: \`jev-e2e\` (run/author plain-English browser specs on DEV/UAT, ~1 s per step), \`jev-take-assessment\` (take an assessment as a candidate with fake camera/mic, then verify scoring in the DB), \`jev-regression\` (the whole suite). To run anything longer than one spec, start it detached so it streams to the Testing tab: \`~/jev-qa/bin/start.sh suite|chain <Type>|<spec> --env dev|uat\` prints a link — reply "Test started — watch it here: <link>" and do not wait for it. Specs are test assets under ~/jev-qa/specs/ (write them with a Bash heredoc; product repos stay untouched).`;
 
 // Map a user's role → { mode tag, working dir, extra claude args }. `roleMode` is
 // stored on the session so the board can tag designer/tester sessions.
@@ -369,7 +370,7 @@ export function attachTerminalServer(store) {
         // repoint at the compression proxy; otherwise strip any Ollama/Grok-routing
         // env that leaked in from the parent process so a real model hits real
         // Anthropic (not a local proxy).
-        const childEnv = { ...process.env, TERM: 'xterm-256color' };
+        const childEnv = { ...process.env, TERM: 'xterm-256color', OLIBOT_SESSION_ID: String(rowId || sessionId || '') };
         if (useOllama) { Object.assign(childEnv, ollamaEnv()); stripLeakedGrokEnv(childEnv); }
         else if (useGrok) { Object.assign(childEnv, grokEnv()); stripLeakedOllamaEnv(childEnv); }
         else if (useHeadroom) { Object.assign(childEnv, headroomEnv()); stripLeakedOllamaEnv(childEnv); stripLeakedGrokEnv(childEnv); }

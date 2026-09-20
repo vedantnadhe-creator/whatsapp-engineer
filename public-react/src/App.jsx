@@ -11,6 +11,7 @@ import SprintBoard from './components/SprintBoard'
 import AgentsView from './components/AgentsView'
 import AgentRunPage from './components/AgentRunPage'
 import CostView from './components/CostView'
+import TestsView from './components/TestsView'
 import Login from './pages/Login'
 import ShareSessionModal from './components/ShareSessionModal'
 import MergeDialog from './components/MergeDialog'
@@ -19,7 +20,7 @@ import { ThemeProvider } from './context/ThemeContext'
 
 function Dashboard() {
   const { user, loading, logout } = useAuth()
-  const { id: urlSessionId } = useParams()
+  const { id: urlSessionId, runId: urlRunId } = useParams()
   const navigate = useNavigate()
   const location = useLocation()
 
@@ -35,6 +36,9 @@ function Dashboard() {
   const [learningsLoading, setLearningsLoading] = useState(false)
   const [adminSettings, setAdminSettings] = useState({})
   const [view, setView] = useState('chat') // 'chat' or 'issues'
+  // /tests/<runId> deep links (the link Claude posts when a test starts) open the Testing tab on that run
+  const isTestsRoute = location.pathname.startsWith('/tests')
+  useEffect(() => { if (isTestsRoute) setView('tests') }, [isTestsRoute, urlRunId])
   const [notification, setNotification] = useState(null)
   const [authError, setAuthError] = useState(false)
   const [shareSessionId, setShareSessionId] = useState(null)
@@ -480,7 +484,22 @@ function Dashboard() {
       />
       )}
       <div className="flex-1 min-w-0 min-h-0 h-full overflow-hidden">
-        {view === 'cost' ? (
+        {view === 'tests' ? (
+          <TestsView
+            runId={isTestsRoute ? urlRunId : null}
+            sessionId={activeSession?.id || null}
+            onOpenRun={(id) => navigate(`/tests/${id}`)}
+            onBack={() => navigate('/tests')}
+            onGoToSession={(sessionId) => {
+              if (!sessionId) return
+              const found = sessions.find(s => s.id === sessionId)
+              if (found) handleSelectSession(found)
+              else { setActiveSession({ id: sessionId }); setIsNewSession(false) }
+              setView('chat')
+              navigate(`/s/${sessionId}`)
+            }}
+          />
+        ) : view === 'cost' ? (
           <CostView
             cost={cost}
             loading={costLoading}
@@ -724,6 +743,8 @@ export default function App() {
             <Route path="/share/:token" element={<SharePage />} />
             <Route path="/v2" element={<TerminalPage />} />
             <Route path="/s/:id" element={<Dashboard />} />
+            <Route path="/tests/:runId" element={<Dashboard />} />
+            <Route path="/tests" element={<Dashboard />} />
             <Route path="*" element={<Dashboard />} />
           </Routes>
         </BrowserRouter>

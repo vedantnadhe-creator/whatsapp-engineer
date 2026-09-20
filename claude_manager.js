@@ -11,6 +11,7 @@ import { isCodexModel, codexModelName, codexEnv, safeCodexModel, buildCodexArgs 
 import { translateCodexEvent } from './codex_events.js';
 import { projectContextBanner } from './project_doc.js';
 import { logSessionEvent } from './project_events.js';
+import { canUsePosthog } from './posthog_access.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -72,7 +73,8 @@ REPORTING — the bug report must contain ONLY these, nothing more:
   • WHAT the bug is — the observable wrong behavior (symptom, where it happens, repro steps, severity).
   • WHY it happens — the root cause: the single explanation of what is going wrong (e.g. "the API returns the image URL but the frontend deletes the file before render").
 You MAY read code (read-only) to pin down the root cause, but you must NOT output any fix: no code suggestions, no diffs, no patches, no "you should change X to Y", no snippets of corrected code. Do NOT recommend how to fix it. Stop at WHAT + WHY. Fixing is the developer's job, not yours.
-Prefer producing test cases, test scripts, and bug reports over changing product code.`;
+Prefer producing test cases, test scripts, and bug reports over changing product code.
+BROWSER TESTING — use the Jev skills, not the browser-agent MCP: \`jev-e2e\` (run/author plain-English browser specs on DEV/UAT, ~1 s per step), \`jev-take-assessment\` (take an assessment as a candidate with fake camera/mic, then verify scoring in the DB), \`jev-regression\` (the whole suite). To run anything longer than one spec, start it detached so it streams to the Testing tab: \`~/jev-qa/bin/start.sh suite|chain <Type>|<spec> --env dev|uat\` prints a link — reply "Test started — watch it here: <link>" and do not wait for it. Specs are test assets under ~/jev-qa/specs/ (write them with a Bash heredoc; product repos stay untouched).`;
 
 // Injected into every turn, whatever the role or provider. A turn is one process:
 // when it exits, the session is idle and NOTHING the agent started is still able to
@@ -89,6 +91,7 @@ const SKIP_PERMS = IS_ROOT ? [] : ['--dangerously-skip-permissions'];
 
 // Tools that mutate files — disabled (via --disallowedTools) for read-only testers.
 const EDIT_TOOLS = 'Edit,Write,NotebookEdit,MultiEdit';
+const POSTHOG_TOOLS = 'mcp__posthog__*';
 
 // How many times in a row a session may be continued automatically after ending on a
 // promise of later work. Two is enough to finish a job that was nearly done; more than
@@ -432,7 +435,7 @@ class ClaudeManager extends EventEmitter {
             if (s && s.mode === 'client_support') {
                 return {
                     preamble: clientSupportPrompt(),
-                    extraArgs: [`--disallowedTools=${EDIT_TOOLS}`, '--settings', CLIENT_SETTINGS_PATH],
+                    extraArgs: [`--disallowedTools=${EDIT_TOOLS},${POSTHOG_TOOLS}`, '--settings', CLIENT_SETTINGS_PATH],
                     kbHint: CLIENT_KB_HINT,
                 };
             }
@@ -443,8 +446,8 @@ class ClaudeManager extends EventEmitter {
             if (s && s.mode === 'design') {
                 const inDesignsRepo = String(s.working_dir || '').startsWith(config.DESIGNS_DIR);
                 return inDesignsRepo
-                    ? { preamble: '', extraArgs: [] }
-                    : { preamble: DESIGNER_PROMPT, extraArgs: [] };
+                    ? { preamble: '', extraArgs: [`--disallowedTools=${POSTHOG_TOOLS}`] }
+                    : { preamble: DESIGNER_PROMPT, extraArgs: [`--disallowedTools=${POSTHOG_TOOLS}`] };
             }
             if (!s || s.mode !== 'tester') return { preamble: '', extraArgs: [] };
             const canEdit = s.edit_access !== 0;
@@ -455,7 +458,7 @@ class ClaudeManager extends EventEmitter {
             // space-separated value would greedily swallow the trailing positional prompt.
             return {
                 preamble: `${TESTER_PROMPT}\n${editLine}`,
-                extraArgs: canEdit ? [] : [`--disallowedTools=${EDIT_TOOLS}`],
+                extraArgs: [`--disallowedTools=${canEdit ? POSTHOG_TOOLS : `${EDIT_TOOLS},${POSTHOG_TOOLS}`}`],
             };
         } catch { return { preamble: '', extraArgs: [] }; }
     }
@@ -491,6 +494,7 @@ class ClaudeManager extends EventEmitter {
             canEdit,
             imagePath,
             confined,
+            canUsePosthog: canUsePosthog(session?.mode),
         });
         const gate = confined ? ' | workspace sandbox' : (canEdit ? '' : ' | read-only sandbox');
         console.log(`[Codex] ${threadId ? 'RESUME' : 'NEW'} session ${sessionId} | model: ${realModel} | cwd: ${workingDir}${gate}`);
@@ -661,7 +665,9 @@ class ClaudeManager extends EventEmitter {
     }
 
     _buildEnv(sessionId, provider = null) {
-        const env = { ...process.env };
+        // OLIBOT_SESSION_ID lets tools started from inside the session (jev-qa/bin/start.sh) tag their output
+        // with the session that started them, so the Testing tab can link a run back to its chat.
+        const env = { ...process.env, OLIBOT_SESSION_ID: String(sessionId) };
         try {
             const session = this.store.getSession(sessionId);
             if (session?.owner_id) {

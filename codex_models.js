@@ -20,12 +20,11 @@ export const DEFAULT_CODEX_MODEL = `${CODEX_PREFIX}gpt-5.6-terra`;
 // Codex model IDs accepted with a ChatGPT-backed Codex login.  A bare
 // `gpt-5.6` is an API-style alias and Codex rejects it for ChatGPT accounts.
 //
-// Checked 2026-09-04 against the CLI, not the docs: `gpt-6-astra` is listed as
-// Codex's most capable model but our login gets HTTP 400 "not supported when
-// using Codex with a ChatGPT account" (it ships through the Trusted Access
-// Program). Do not add it back without re-testing — an unusable entry in this
-// list spawns a session that dies on its first turn.
+// Keep this list limited to models verified with the dashboard's ChatGPT-backed
+// Codex login. An unusable entry spawns a session that dies on its first turn.
+// `gpt-6-astra` was verified on 2026-09-10 with Codex CLI 0.154.0.
 const CODEX_CATALOG = [
+    { slug: 'gpt-6-astra', name: 'OpenAI · GPT-6 Astra', description: 'Most capable Codex model for the hardest end-to-end work' },
     { slug: 'gpt-5.6-terra', name: 'OpenAI · GPT-5.6 Terra', description: 'Balanced Codex model for everyday engineering work', default: true },
     { slug: 'gpt-5.6-sol', name: 'OpenAI · GPT-5.6 Sol', description: 'Highest-capability Codex model for complex work' },
     { slug: 'gpt-5.6-luna', name: 'OpenAI · GPT-5.6 Luna', description: 'Fastest GPT-5.6 Codex model for quick tasks' },
@@ -88,7 +87,7 @@ export function codexSandbox(canEdit) {
 
 // Argument list for a turn. `threadId` resumes an existing Codex session; omit it
 // to start a new one. Prompt is passed as a positional arg, matching the CLI.
-export function buildCodexArgs({ model, prompt, threadId = null, workingDir, canEdit = true, imagePath = null, confined = false }) {
+export function buildCodexArgs({ model, prompt, threadId = null, workingDir, canEdit = true, imagePath = null, confined = false, canUsePosthog = true }) {
     const args = ['exec'];
     const isResume = Boolean(threadId);
     if (isResume) args.push('resume', threadId);
@@ -131,6 +130,7 @@ export function buildCodexArgs({ model, prompt, threadId = null, workingDir, can
         args.push('-c', 'approval_policy="never"');
     }
     if (model) args.push('--model', model);
+    if (!canUsePosthog) args.push('-c', 'mcp_servers.posthog.enabled=false');
     if (!isResume && workingDir) args.push('--cd', workingDir);
     // One flag per file — `--image <FILE>...` is variadic, so `--image a b` would
     // swallow the prompt positional. Repeat the flag instead.

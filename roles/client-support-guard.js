@@ -60,6 +60,13 @@ const ALLOWED_HEADS = new Set([
     'awk', 'basename', 'cat', 'cd', 'cut', 'date', 'df', 'dirname', 'du', 'echo',
     'env', 'file', 'find', 'grep', 'head', 'jq', 'ls', 'mkdir', 'node', 'nl', 'paste',
     'pip', 'pip3', 'printf', 'psql', 'pwd', 'python', 'python3', 'readlink', 'realpath',
+    // ro-query.sh is the SELECT-only helper for DEV/UAT/PROD. It is safe to expose
+    // because the limit is not in the script: it connects as `pl_tester_ro`, a role
+    // that holds SELECT and nothing else, so a write returns "permission denied"
+    // server-side even if this guard were bypassed entirely.
+    // cs-query.sh is the CS read/write entry point (role `pl_cs_rw`): SELECT on every
+    // schema, INSERT/UPDATE/DELETE on the four client-data schemas, and nothing else.
+    'ro-query.sh', 'cs-query.sh',
     'sed', 'seq', 'sort', 'stat', 'tail', 'tee', 'test', 'tr', 'true', 'uniq', 'wc',
     'which', 'xargs', 'curl', 'wget', 'sleep', 'touch', 'cp', 'mv', 'diff', 'md5sum',
     'base64', 'iconv', 'openssl', 'aws', 'unzip', 'zip', 'gzip', 'gunzip', 'tar',
@@ -76,12 +83,19 @@ const DENIED_TOKENS = [
     'nginx', 'certbot', 'terraform', 'ansible', 'helm', 'oci',
 ];
 
-// Writes to the platform databases. Read-only is the whole point: this role reports on
-// client data and never edits it, so a stray UPDATE cannot come from a support session.
-// No trailing \b: an alternative ending in \w ("update s") is followed by more word
-// characters ("update students"), and \b would then fail to match — silently letting
-// every real UPDATE through. Caught by the unit checks at the bottom of this file.
-const SQL_WRITE = /\b(insert\s+into\s|update\s+[\w"]|delete\s+from\s|drop\s+(table|database|schema|index)\s|truncate\s|alter\s+(table|type|schema)\s|create\s+(table|database|schema|index|type)\s|grant\s|revoke\s)/i;
+// Schema-destroying and privilege statements. INSERT/UPDATE/DELETE are deliberately
+// NOT here — the CS team edits client data directly, by decision on 2026-09-08. What
+// stays blocked is the shape of statement that cannot be undone by editing a row back:
+// dropping or altering a table, truncating one, or granting privileges.
+//
+// This is defence in depth, not the actual limit. `pl_cs_rw` owns nothing and holds no
+// CREATE or TRUNCATE, so the database refuses all of this anyway. The guard repeats it
+// because a CS session can read admin credentials out of scripts/rw-query.sh and reach
+// DEV/UAT through plain `psql`, where the DB-side limit would not apply.
+//
+// No trailing \b: an alternative ending in \w ("alter table") is followed by more word
+// characters, and \b would then fail to match.
+const SQL_DESTRUCTIVE = /\b(drop\s+(table|database|schema|index|view|type)\s|truncate\s|alter\s+(table|type|schema|role|user)\s|create\s+(table|database|schema|index|type|role|user)\s|grant\s|revoke\s)/i;
 
 function checkBash(command) {
     const cmd = String(command);
@@ -95,8 +109,17 @@ function checkBash(command) {
         }
     }
 
-    if (SQL_WRITE.test(cmd)) {
-        return 'Blocked for client-support sessions: this looks like a write to a platform database. This role is read-only on client data — report what the data says, and route any change request to the team that owns it.';
+    if (SQL_DESTRUCTIVE.test(cmd)) {
+        return [
+            'Blocked for client-support sessions: this changes the database structure or',
+            'permissions, rather than the data in it.',
+            '',
+            'Editing client records is allowed and needs no approval — use:',
+            '  /home/ubuntu/whatsapp-engineer/scripts/cs-query.sh <dev|uat|prod> "UPDATE ... WHERE ..."',
+            '',
+            'Creating, altering, dropping or truncating a table, and granting privileges, are',
+            'engineering changes. Write up what is needed and hand it to the team that owns it.',
+        ].join('\n');
     }
 
     // rm is denied outright rather than path-scoped: there is nothing in a sourcing or
@@ -123,8 +146,15 @@ function commandHeads(cmd) {
         .map((seg) => seg.trim().replace(/^\(+\s*/, ''))
         .filter(Boolean)
         .map((seg) => {
-            const words = seg.split(/\s+/).filter((w) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(w));
-            const first = words[0] || '';
+            // Strip leading VAR=value assignments, where value may be quoted and
+            // contain spaces. Splitting on whitespace first gets this wrong:
+            // `PSQL_EXTRA="-A -F,"  ro-query.sh` would treat `-F,"` as the head and
+            // deny a legitimate command for a nonsense reason.
+            const stripped = seg.replace(
+                /^\s*(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S*)\s+)*/,
+                ''
+            );
+            const first = stripped.split(/\s+/).filter(Boolean)[0] || '';
             return first.replace(/^.*\//, '').replace(/^['"]|['"]$/g, '');
         })
         .filter(Boolean);
@@ -134,7 +164,7 @@ function commandHeads(cmd) {
 // ~/.claude/skills is a single global directory, so a client-support session lists the
 // engineering skills alongside its own. Allow-list the ones that belong to this role;
 // everything else is denied by name so the refusal is legible rather than mysterious.
-const ALLOWED_SKILLS = new Set(['lead-gen', 'create-prd', 'dataviz', 'brainstorming']);
+const ALLOWED_SKILLS = new Set(['lead-gen', 'people-search', 'create-prd', 'dataviz', 'brainstorming', 'tnpj-candidate-search']);
 
 function checkSkill(skill) {
     const name = String(skill).replace(/^\//, '').trim();

@@ -856,6 +856,17 @@ function SidebarContent({
           Agents
         </button>
         <button
+          onClick={() => onViewChange?.('tests')}
+          className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded text-xs font-medium cursor-pointer transition-colors"
+          style={{
+            backgroundColor: view === 'tests' ? 'var(--c-surface-2)' : 'transparent',
+            color: view === 'tests' ? 'var(--c-text)' : 'var(--c-text-secondary)',
+          }}
+        >
+          <FlaskConical size={12} />
+          Testing
+        </button>
+        <button
           onClick={() => onViewChange?.('cost')}
           className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded text-xs font-medium cursor-pointer transition-colors"
           style={{

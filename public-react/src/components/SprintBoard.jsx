@@ -757,7 +757,7 @@ export default function SprintBoard({
         <table className="w-full border-collapse" style={{ minWidth: 1500, borderTop: '1px solid var(--c-border)', borderLeft: '1px solid var(--c-border)' }}>
           <thead className="sticky top-0 z-10">
             <tr className="text-left" style={{ color: 'var(--c-text-secondary)', backgroundColor: 'var(--c-surface)' }}>
-              {['S.NO', 'Platform', 'Feature / Story', 'Type', 'Dev', 'QA Owner', 'Dev Status', 'Deadline', 'TC', 'Testing Deadline', 'QA Status', 'Bugs', 'Crit', 'Done %', 'QA Comments', ''].map((h, i) => (
+              {['S.NO', 'Platform', 'Feature / Story', 'Created', 'Type', 'Dev', 'QA Owner', 'Dev Status', 'Deadline', 'TC', 'Testing Deadline', 'QA Status', 'Bugs', 'Crit', 'Done %', 'QA Comments', ''].map((h, i) => (
                 <th key={i} className="px-2.5 py-2 font-semibold whitespace-nowrap text-[11px]" style={{ borderBottom: '1px solid var(--c-border)', borderRight: '1px solid var(--c-border)' }}>{h}</th>
               ))}
             </tr>
@@ -776,12 +776,12 @@ export default function SprintBoard({
               />
             ))}
             {features.length > 0 && filteredFeatures.length === 0 && (
-              <tr><td colSpan={16} className="px-4 py-10 text-center text-xs" style={{ color: 'var(--c-text-muted)' }}>
+              <tr><td colSpan={17} className="px-4 py-10 text-center text-xs" style={{ color: 'var(--c-text-muted)' }}>
                 No features match the filters. <button onClick={clearFilters} className="underline cursor-pointer" style={{ color: 'var(--c-accent)' }}>Clear filters</button>
               </td></tr>
             )}
             {features.length === 0 && (
-              <tr><td colSpan={16} className="px-4 py-10 text-center text-xs" style={{ color: 'var(--c-text-muted)' }}>
+              <tr><td colSpan={17} className="px-4 py-10 text-center text-xs" style={{ color: 'var(--c-text-muted)' }}>
                 {isBacklogView ? 'Backlog is empty — move features here with the archive icon.' : activeSprintId === '__all__' ? 'No features yet.' : 'No features in this sprint yet — add one below.'}
               </td></tr>
             )}
@@ -883,6 +883,9 @@ function FeatureRow({ f, idx, members, isTester, expanded, isBacklogView, select
         </td>
         <td className="px-2 py-2" style={cellBorder}><EditText value={f.platform} list="platform-suggestions" onCommit={(v) => upd({ platform: v })} placeholder="—" /></td>
         <td className="px-2 py-2 min-w-[280px] max-w-[420px] align-top" style={cellBorder}><EditTitle value={f.title} onCommit={(v) => upd({ title: v })} placeholder="Feature title" /></td>
+        <td className="px-2 py-2 whitespace-nowrap font-mono text-[11px] tabular-nums" style={{ ...cellBorder, color: 'var(--c-text-muted)' }} title={createdTitle(f)}>
+          {fmtIST(f.created_at)}
+        </td>
         <td className="px-2 py-2" style={cellBorder}>
           <PillSelect value={f.type || 'feature'} onChange={(v) => upd({ type: v })} options={TYPES} fg={TYPE_PILL[f.type || 'feature'] || TYPE_PILL.feature} />
         </td>
@@ -959,7 +962,7 @@ function FeatureRow({ f, idx, members, isTester, expanded, isBacklogView, select
       </tr>
       {expanded && (
         <tr>
-          <td colSpan={17} style={{ borderBottom: '2px solid var(--c-border)', borderRight: '1px solid var(--c-border)', backgroundColor: 'var(--c-surface)' }}>
+          <td colSpan={18} style={{ borderBottom: '2px solid var(--c-border)', borderRight: '1px solid var(--c-border)', backgroundColor: 'var(--c-surface)' }}>
             <FeatureDetail f={f} isTester={isTester} members={members} onUpdate={upd} onCreateIssue={onCreateIssue} onGoToSession={onGoToSession} model={model} refreshIssues={refreshIssues} />
           </td>
         </tr>
@@ -967,6 +970,19 @@ function FeatureRow({ f, idx, members, isTester, expanded, isBacklogView, select
     </>
   )
 }
+
+// Issue timestamps come from SQLite `datetime('now')` — UTC with no zone marker — so they
+// must be pinned to UTC before rendering, or the browser reads them as local. Always IST:
+// the team is in one timezone and a drifting "created" column is worse than none.
+const asUTC = (s) => !s ? null : /[TZ+]/.test(s) ? new Date(s) : new Date(s.replace(' ', 'T') + 'Z')
+function fmtIST(s, { year = false, seconds = false } = {}) {
+  const d = asUTC(s)
+  if (!d || isNaN(d)) return '—'
+  // Composed by hand: en-IN spells "Sept" and en-US puts the month first.
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Kolkata', hourCycle: 'h23', day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' }).formatToParts(d).map(x => [x.type, x.value]))
+  return `${p.day} ${p.month}${year ? ` ${p.year}` : ''}, ${p.hour}:${p.minute}${seconds ? `:${p.second}` : ''}`
+}
+const createdTitle = (f) => `Created ${fmtIST(f.created_at, { year: true, seconds: true })} IST${f.creator_name ? ` by ${f.creator_name}` : ''}`
 
 function DateCell({ value, onChange }) {
   // value may be a plain date "YYYY-MM-DD" or an auto-stamped IST datetime "YYYY-MM-DD HH:MM".
@@ -1014,6 +1030,7 @@ function FeatureDetail({ f, isTester, members, onUpdate, onCreateIssue, onGoToSe
   const testerMembers = (members || []).filter(m => m.role === 'tester')
   return (
     <div className="px-6 py-4 flex flex-col gap-6">
+      <div className="-mb-3 font-mono text-[11px] tabular-nums" style={{ color: 'var(--c-text-muted)' }}>{createdTitle(f)}</div>
       <DescriptionBlock f={f} onUpdate={onUpdate} />
       <AttachmentsBlock f={f} isTester={isTester} onUpdate={onUpdate} />
       <SubtasksPanel f={f} isTester={isTester} members={members} devMembers={devMembers} testerMembers={testerMembers} onUpdate={onUpdate} onCreateIssue={onCreateIssue} onGoToSession={onGoToSession} model={model} refreshIssues={refreshIssues} />

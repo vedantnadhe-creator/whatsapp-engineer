@@ -214,7 +214,11 @@ One Excel workbook (`openpyxl` / `pandas`), these sheets in this order:
 4. **All Role-Fit Colleges** — the shortlist, contact or not, **ranked by role fit**: the addressable market.
 5. **No Contact Found** — the gap list, so the next run starts where this one stopped.
 
-Upload with the **`s3-upload` MCP** (bucket `pl-uat-public-docs`, prefix `sourcing/`), then **verify the link returns HTTP 200** before sending it. Keep working files under `/home/ubuntu/tpo-sourcing/`.
+Upload with the **`s3-upload` MCP** (bucket `pl-uat-public-docs`), then **verify the link returns HTTP 200** before sending it. Keep working files under `/home/ubuntu/tpo-sourcing/`.
+
+**One folder per engagement.** The key is `sourcing/<client-or-role-slug>/<YYYY-MM-DD>-<what-it-is>.xlsx` — e.g. `sourcing/alpha-alternatives-cfo/2026-09-03-amc-universe.xlsx`. A run is rarely a one-off: the follow-up, the expanded region and the corrected list all belong beside the first file, not scattered across the root with near-identical names.
+
+**Call `list_files` with prefix `sourcing/` first, and reuse the folder that is already there.** Object storage has no real directories — a mistyped prefix does not error, it silently creates a second folder — so `alpha-alternatives-cfo/` and `alpha_alternatives_CFO/` will happily coexist and split one client's history in two. Only invent a slug when the listing shows none that fits.
 
 Reply with: the S3 link, counts per tier and per stage, **who to call first** (the `engaged` rows, by name), and the honest gap — how many region campuses you could not reach and what closing it would take.
 

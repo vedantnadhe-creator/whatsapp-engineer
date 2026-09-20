@@ -10,6 +10,7 @@ import { WebSocketServer } from 'ws';
 import { S3Client, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
 import config from './config.js';
 import { attachTerminalServer } from './term_server.js';
+import { registerTestRoutes } from './test_runs.js';
 // orchestrator import removed — Claude prompt is now file-based (CLAUDE.md)
 import {
     signJwt, requireAuth, optionalAuth, requireAdmin,
@@ -1315,6 +1316,9 @@ Do NOT ask for confirmation — proceed through each step automatically. If any 
             'Then begin. Do not summarise the workflow back to the user.',
         ].join('\n');
     }
+
+    // Testing tab — Jev browser-test runs (see test_runs.js)
+    registerTestRoutes(app, { requireAuth, store });
 
     app.get('/api/agents', requireAuth, (req, res) => {
         try { res.json({ agents: listAgents() }); }
@@ -2668,8 +2672,10 @@ The user may ask follow-up questions about the changelog — answer based on the
     // ── Sprint status email (daily 6 AM IST + manual) ───────────────────
 
     // Recipients default to the whole team — every user account that has an email — so a
-    // new joiner is covered without a config change. An explicit `sprint_status_recipients`
-    // setting still wins when someone wants a narrower stakeholder list.
+    // new joiner is covered without a config change. Client-support accounts are excluded:
+    // they use the dashboard for support sessions, not sprint work, so the engineering
+    // status mail is noise for them. An explicit `sprint_status_recipients` setting still
+    // wins when someone wants a narrower stakeholder list.
     function getStatusRecipients() {
         try {
             const parsed = JSON.parse(store.getSetting('sprint_status_recipients') || '[]');
@@ -2677,9 +2683,19 @@ The user may ask follow-up questions about the changelog — answer based on the
         } catch (_) { /* malformed setting — fall back to the roster */ }
         return [...new Set(
             store.getAllUsers()
+                .filter(u => u.role !== 'client_support')
                 .map(u => String(u.email || '').trim())
                 .filter(e => e.includes('@'))
         )];
+    }
+
+    // Status mail reports only the sprint's top-level issues. Subtasks are execution
+    // detail beneath those rows and must not inflate either the table or its totals.
+    function getSprintStatusData(sprintId) {
+        return {
+            progress: store.getSprintProgress(sprintId, { includeSubtasks: false }),
+            issues: store.getIssuesBySprint(sprintId, { includeSubtasks: false }),
+        };
     }
 
     // Preview the exact email that would be sent — lets you see it before it goes out.
@@ -2687,8 +2703,7 @@ The user may ask follow-up questions about the changelog — answer based on the
         try {
             const sprint = store.getSprint(req.params.id);
             if (!sprint) return res.status(404).json({ error: 'Sprint not found' });
-            const progress = store.getSprintProgress(sprint.id);
-            const issues = store.getIssuesBySprint(sprint.id);
+            const { progress, issues } = getSprintStatusData(sprint.id);
             const { subject, html } = buildSprintStatusEmail(sprint, progress, issues, { trigger: 'manual', triggeredBy: req.user.displayName });
             res.json({ subject, html, recipients: getStatusRecipients() });
         } catch (err) { res.status(500).json({ error: err.message }); }
@@ -2705,8 +2720,7 @@ The user may ask follow-up questions about the changelog — answer based on the
             if (sprint.status !== SPRINT_ACTIVE) {
                 return res.status(409).json({ error: `"${sprint.name}" is not running — start the sprint before sending its status email.` });
             }
-            const progress = store.getSprintProgress(sprint.id);
-            const issues = store.getIssuesBySprint(sprint.id);
+            const { progress, issues } = getSprintStatusData(sprint.id);
             const recipients = getStatusRecipients();
             const result = await sendSprintStatusEmail(sprint, progress, issues, recipients, { trigger: 'manual', triggeredBy: req.user.displayName });
             store.setSetting(`sprint_status_last_sent:${sprint.id}`, new Date().toISOString());
@@ -2731,8 +2745,7 @@ The user may ask follow-up questions about the changelog — answer based on the
         }
         for (const sprint of active) {
             try {
-                const progress = store.getSprintProgress(sprint.id);
-                const issues = store.getIssuesBySprint(sprint.id);
+                const { progress, issues } = getSprintStatusData(sprint.id);
                 const recipients = getStatusRecipients();
                 await sendSprintStatusEmail(sprint, progress, issues, recipients, { trigger: 'scheduled' });
                 store.setSetting(`sprint_status_last_sent:${sprint.id}`, new Date().toISOString());

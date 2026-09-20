@@ -19,14 +19,14 @@
     "clone": "https://github.com/PluginLive-Technologies/DB-Scripts.git",
     "access": "clone with the vedantnadhe-creator PAT (see the db-script-push skill); the GitHub MCP account cannot read this repo",
     "naming": "New files: <YYYYMMDDTHHMMSSZ>__<snake_case>.sql (UTC timestamp = global run order). Legacy files: NNN_ per feature folder.",
-    "header_env_block": "Each file header has an 'Environments applied' block: 'PROD \u2014 pending' vs 'PROD \u2014 applied YYYY-MM-DD'."
+    "header_env_block": "Each file header has an 'Environments applied' block: 'PROD — pending' vs 'PROD — applied YYYY-MM-DD'."
   },
   "slack": {
     "channel_id": "C0BF1GTHZ6G",
     "channel_name": "#infrahub",
     "bot_user": "infrahub2",
     "token_env": "INFRAHUB_SLACK_TOKEN",
-    "_note": "Token is read from env INFRAHUB_SLACK_TOKEN by prod_deploy_notify.sh \u2014 do NOT hard-code it in git-tracked files."
+    "_note": "Token is read from env INFRAHUB_SLACK_TOKEN by prod_deploy_notify.sh — do NOT hard-code it in git-tracked files."
   },
   "branch_naming": {
     "release_pattern": "release-v<MAJOR>.<MINOR>",
@@ -34,7 +34,7 @@
     "rules": {
       "hotfix": "From current prod branch release-vX.Y[-hotfix-N]: next = release-vX.Y-hotfix-(N+1). If current has no -hotfix suffix, next = release-vX.Y-hotfix-1. Base the new branch off the current prod branch.",
       "release": "From current prod release-vX.Y: next = release-vX.(Y+1) by default (minor bump). Major bump (v(X+1).0) only if the user explicitly asks. Base the new release off UAT.",
-      "example": "Current prod (all repos, 2026-07): release-v1.35-hotfix-3 \u2192 next hotfix release-v1.35-hotfix-4, next release release-v1.36."
+      "example": "Current prod (all repos, 2026-07): release-v1.35-hotfix-3 → next hotfix release-v1.35-hotfix-4, next release release-v1.36."
     }
   },
   "apps": {
@@ -238,11 +238,42 @@
       "k8s_deploy": "admin-react-v2",
       "env_file": "/home/ubuntu/repositories/envs/ui/admin-react-v2.env",
       "env_note": "Next.js (not webpack). NEXT_PUBLIC_* baked at build; server-only ADMIN_API_URL/AUTH_API_URL read at RUNTIME so they must ALSO be on the Deployment. Served same-origin at admin.pluginlive.com/v2. Lands DORMANT: both v1 entry points are env-gated (ADMIN_V2_MODULES in Nav/navItems.js, ADMIN_V2_CREATE_ASSESSMENT in Assessment/index.js) and neither key is set in admin-react.env - setting one + rebuilding admin-react is what exposes v2. NEXT_PUBLIC_LOGIN_URL must stay set: src/lib/auth.ts:47 falls back to the DEV auth host if absent."
+    },
+    "corporate-react-v2": {
+      "autodeploy": null,
+      "num": 20,
+      "type": "frontend",
+      "path": "/home/ubuntu/repositories/frontend/corporate-react-v2",
+      "ocr": "pl-corporate-react-v2",
+      "k8s_ns": "frontend",
+      "k8s_deploy": "corporate-react-v2",
+      "env_file": "/home/ubuntu/repositories/envs/ui/corporate-react-v2.env",
+      "build_note": "NOT registered in autodeploy.sh or autodeploy_noprune.sh, so prod_deploy_notify.sh CANNOT deploy it. Built by /home/ubuntu/build-corp-v2.sh (copy it per release, e.g. build-corp-v2-139.sh, and set BR). That script builds corporate-node-v2 AND corporate-react-v2 from one file with no `docker system prune`.",
+      "env_note": "Next.js (not webpack). NEXT_PUBLIC_* baked at build; server-only CORP_V2_API_URL / AUTH_API_URL / CORPORATE_API_URL / ADMIN_API_URL are read at RUNTIME so they must ALSO be set on the Deployment, not just in this env file. THREE distinct upstreams: CORP_V2_API_URL=corporate-node-v2 (Roles/hiring), CORPORATE_API_URL=corporate-node V1 (assessment dashboard reads), ADMIN_API_URL=admin-node (/assessment/* create-float flow + report-bundle SSE). In-cluster DNS is SAFE for all three: every consumer is `import \"server-only\"` and Route Handlers PROXY the upstream response rather than handing a base to the browser (verified on the SSE export-events route too). NEXT_PUBLIC_APPLY_BASE is intentionally unset - src/lib/applicationForm.ts falls back to window.location.origin, which is correct in prod.",
+      "depends_on": "admin-node - the assessment-creation wizard calls admin-node /assessment/* endpoints verbatim. Ship corporate-react-v2 together with a matching admin-node build. Auth quirk: admin-node's verifyToken feeds the whole Authorization header into jwt.verify(), so the RAW token is sent, NOT Bearer-prefixed.",
+      "served_at": "corporate.pluginlive.com/v2 (basePath /v2 via a path on corporate-react-ingress; legacy corporate-react keeps /). The v1 nav entry point is gated by CORPORATE_V2_ASSESSMENTS_ENABLED in envs/ui/corporate-react.env - currently true."
+    },
+    "corporate-node-v2": {
+      "autodeploy": null,
+      "num": 21,
+      "type": "api",
+      "path": "/home/ubuntu/repositories/api/corporate-node-v2",
+      "ocr": "pl-corporate-api-v2",
+      "k8s_ns": "api",
+      "k8s_deploy": "corporate-node-v2",
+      "env_file": "/home/ubuntu/repositories/envs/api/corporate-node-v2.env",
+      "configmap": null,
+      "build_note": "NOT in autodeploy*.sh - built by /home/ubuntu/build-corp-v2.sh alongside corporate-react-v2. IMPORTANT: the deployment corporate-node-v2-worker SHARES this image and must be bumped to the SAME tag in the same wave, or you recreate the mixed-version-worker shape that caused the FDN incident.",
+      "extra_deploys": [
+        "corporate-node-v2-worker"
+      ],
+      "env_note": "No K8s configmap exists for this service - env comes ONLY from the central env file baked into the image as .env.prod. So the api env_apply_rule's step (2) does not apply here; a rebuild is the only way to change its env."
     }
   },
   "env_apply_rules": {
-    "frontend": "Add/update the var in the central env file (env_file above). autodeploy.sh copies it to <repo>/.env.prod at build time (and to <repo>/.env for student-react). The value is baked into the webpack bundle \u2014 a rebuild/redeploy is required for it to take effect.",
-    "api": "Two places, BOTH required: (1) the central env file (env_file) \u2014 copied to <repo>/.env.prod and baked into the image; AND (2) the K8s configmap (configmaps_dir/<configmap>) which is the pod's runtime env \u2014 edit the yaml then `kubectl apply -f <configmap>` and restart/rollout the deployment for it to take effect.",
-    "special": "resume-parser / jdparser read env differently (no central .env file) \u2014 inspect the service before touching; flag to the user rather than guessing."
+    "frontend": "Add/update the var in the central env file (env_file above). autodeploy.sh copies it to <repo>/.env.prod at build time (and to <repo>/.env for student-react). The value is baked into the webpack bundle — a rebuild/redeploy is required for it to take effect.",
+    "api": "Two places, BOTH required: (1) the central env file (env_file) — copied to <repo>/.env.prod and baked into the image; AND (2) the K8s configmap (configmaps_dir/<configmap>) which is the pod's runtime env — edit the yaml then `kubectl apply -f <configmap>` and restart/rollout the deployment for it to take effect.",
+    "special": "resume-parser / jdparser read env differently (no central .env file) — inspect the service before touching; flag to the user rather than guessing.",
+    "corporate_v2_note": "corporate-react-v2 and corporate-node-v2 are absent from autodeploy*.sh and were excluded from every release before v1.39, which is how corporate-react-v2 silently drifted 90 commits behind. Include them explicitly in scope each run."
   }
 }

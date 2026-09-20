@@ -1319,8 +1319,12 @@ class SessionStore {
         return issue?.type === 'bug' && this.featureCompletion(issue) < 100;
     }
 
-    getSprintProgress(sprintId) {
-        const rows = this.db.prepare('SELECT type, is_critical, dev_status, dev_percent, qa_status, open_bugs, critical_bugs FROM issues WHERE sprint_id = ?').all(sprintId);
+    getSprintProgress(sprintId, { includeSubtasks = true } = {}) {
+        const subtaskClause = includeSubtasks ? '' : ' AND parent_issue_id IS NULL';
+        const rows = this.db.prepare(
+            `SELECT type, is_critical, dev_status, dev_percent, qa_status, open_bugs, critical_bugs
+             FROM issues WHERE sprint_id = ?${subtaskClause}`
+        ).all(sprintId);
         const total = rows.length;
         const done = rows.filter(r => r.dev_status === 'done').length;
         const inProgress = rows.filter(r => r.dev_status === 'in_progress' || r.dev_status === 'dev_completed').length;
@@ -1620,14 +1624,15 @@ class SessionStore {
         ).all(sessionId, limit).reverse();
     }
 
-    getIssuesBySprint(sprintId) {
+    getIssuesBySprint(sprintId, { includeSubtasks = true } = {}) {
+        const subtaskClause = includeSubtasks ? '' : ' AND i.parent_issue_id IS NULL';
         return this.db.prepare(
             `SELECT i.*, u.display_name as creator_name, a.display_name as assignee_name,
              ${ASSIGNEE_NAMES_SQL}
              FROM issues i
              LEFT JOIN users u ON i.created_by = u.id
              LEFT JOIN users a ON i.assigned_to = a.id
-             WHERE i.sprint_id = ?
+             WHERE i.sprint_id = ?${subtaskClause}
              ORDER BY i.sort_order ASC, i.created_at DESC`
         ).all(sprintId);
     }
