@@ -887,11 +887,12 @@ export default function Workspace({
   const [jevBrowser, setJevBrowser] = useState('chromium');
   const [regressionBusy, setRegressionBusy] = useState(false);
   const deployAgo = (at) => { const m = Math.round((Date.now() - at) / 60000); return m < 1 ? 'just now' : m < 60 ? `${m}m ago` : m < 1440 ? `${Math.round(m / 60)}h ago` : `${Math.round(m / 1440)}d ago`; };
+  const effBrowser = jevDevice === 'ios' ? 'webkit' : jevBrowser;
   const askJevTask = (env) => [
-    `The work in this session was just deployed to ${env.toUpperCase()}. Test exactly what was added or changed, with Jev (use the jev-e2e skill; jev-take-assessment if the candidate flow is involved). Device: ${jevDevice}, browser: ${jevBrowser} — already chosen, do not ask again.`,
+    `The work in this session was just deployed to ${env.toUpperCase()}. Test exactly what was added or changed, with Jev (use the jev-e2e skill; jev-take-assessment if the candidate flow is involved). Device: ${jevDevice}, browser: ${effBrowser}${jevDevice === 'ios' ? ' (iOS = Safari/WebKit; the candidate flow cannot run there — WebKit has no camera/mic, use android for that)' : ''} — already chosen, do not ask again.`,
     `1. From this session's history and the diff of the pushed commits, list the user-visible behaviours that changed (screens, buttons, flows, API calls).`,
     `2. Reuse specs in ~/jev-qa/specs/ where they already cover a behaviour; otherwise write one spec per behaviour in ~/jev-qa/specs/<feature>.mjs (plain-English steps, assert claims, request checks). Iterate the wording with ~/jev-qa/bin/run.sh <spec> --env ${env} --until N until every step is green or a real failure is isolated.`,
-    `3. Start the final run so it streams to the Testing tab: ~/jev-qa/bin/start.sh <spec …> --env ${env} --device ${jevDevice} --browser ${jevBrowser} — post "Test started — watch it here: <link>" immediately, then poll ~/jev-qa/runs/<id>/run.json until status is done (up to 10 minutes) and report.`,
+    `3. Start the final run so it streams to the Testing tab: ~/jev-qa/bin/start.sh <spec …> --env ${env} --device ${jevDevice} --browser ${effBrowser} — post "Test started — watch it here: <link>" immediately, then poll ~/jev-qa/runs/<id>/run.json until status is done (up to 10 minutes) and report.`,
     `4. Report WHAT + WHY for every failure (spec-wording problems are yours to fix, product bugs are reported, never fixed). Product repos are read-only for you; specs under ~/jev-qa/ are yours.`,
   ].join('\n');
   const deployBanner = lastDeploy && !isNewSession && session?.mode !== 'tester' ? (
@@ -909,7 +910,7 @@ export default function Workspace({
         <option value="android">Android</option>
         <option value="ios">iOS</option>
       </select>
-      <select value={jevBrowser} onChange={(e) => setJevBrowser(e.target.value)} className="text-[11px] px-1.5 py-1 rounded" style={{ backgroundColor: colors.surface2, color: colors.text, border: `1px solid ${colors.border}` }} title="Browser">
+      <select value={jevDevice === 'ios' ? 'webkit' : jevBrowser} disabled={jevDevice === 'ios'} onChange={(e) => setJevBrowser(e.target.value)} className="text-[11px] px-1.5 py-1 rounded disabled:opacity-70" style={{ backgroundColor: colors.surface2, color: colors.text, border: `1px solid ${colors.border}` }} title={jevDevice === 'ios' ? 'iOS always runs on Safari (WebKit)' : 'Browser'}>
         <option value="chromium">Chrome / Edge</option>
         <option value="firefox">Firefox</option>
         <option value="webkit">Safari (WebKit)</option>
@@ -927,7 +928,7 @@ export default function Workspace({
       )}
       {onRunRegression && (
         <button
-          onClick={async () => { setRegressionBusy(true); try { await onRunRegression(lastDeploy.env, jevDevice, jevBrowser); } finally { setRegressionBusy(false); } }}
+          onClick={async () => { setRegressionBusy(true); try { await onRunRegression(lastDeploy.env, jevDevice, effBrowser); } finally { setRegressionBusy(false); } }}
           disabled={regressionBusy}
           className="px-3 py-1.5 rounded text-xs font-medium cursor-pointer disabled:opacity-50"
           style={{ backgroundColor: colors.surface2, color: colors.text, border: `1px solid ${colors.border}` }}

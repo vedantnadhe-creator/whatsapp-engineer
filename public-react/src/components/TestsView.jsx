@@ -77,7 +77,7 @@ function RunView({ runId, onBack, onGoToSession }) {
         <div className="min-w-0 flex-1">
           <div className="text-sm font-semibold truncate" style={{ color: 'var(--c-text)' }}>{run?.title || runId}</div>
           <div className="text-[11px] font-mono" style={{ color: 'var(--c-text-muted)' }}>
-            {run?.env?.toUpperCase()} · {run?.specs?.join(', ')} · started {ago(run?.startedAt)}{run?.endedAt ? ` · ${dur(run.startedAt, run.endedAt)}` : ''}
+            {run?.env?.toUpperCase()}{run?.device ? ` · ${run.device}${run.browser ? '/' + run.browser : ''}` : ''} · {run?.specs?.join(', ')} · started {ago(run?.startedAt)}{run?.endedAt ? ` · ${dur(run.startedAt, run.endedAt)}` : ''}
           </div>
         </div>
         {run?.session && (
@@ -156,6 +156,9 @@ export default function TestsView({ runId, onOpenRun, onBack, onGoToSession, ses
   const [onlyMine, setOnlyMine] = useState(false);
   const [target, setTarget] = useState('suite');
   const [env, setEnv] = useState('dev');
+  const [device, setDevice] = useState('pc');
+  const [browser, setBrowser] = useState('chromium');
+  const effBrowser = device === 'ios' ? 'webkit' : browser;   // iOS is Safari, always
   const [launching, setLaunching] = useState(false);
   const [err, setErr] = useState(null);
 
@@ -168,7 +171,7 @@ export default function TestsView({ runId, onOpenRun, onBack, onGoToSession, ses
   const launch = async () => {
     setLaunching(true); setErr(null);
     try {
-      const body = target.startsWith('chain:') ? { target: 'chain', type: target.slice(6), env, sessionId } : { target, env, sessionId };
+      const body = { ...(target.startsWith('chain:') ? { target: 'chain', type: target.slice(6) } : { target }), env, device, browser: effBrowser, sessionId };
       const r = await apiFetch('/api/tests/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       await refresh(); if (r.id) onOpenRun?.(r.id);
     } catch (e) { setErr(e.message); } finally { setLaunching(false); }
@@ -192,6 +195,16 @@ export default function TestsView({ runId, onOpenRun, onBack, onGoToSession, ses
         <select value={env} onChange={(e) => setEnv(e.target.value)} className="text-xs px-2 py-1 rounded" style={{ backgroundColor: 'var(--c-surface)', color: 'var(--c-text)', border: '1px solid var(--c-border)' }}>
           <option value="dev">DEV</option>
           <option value="uat">UAT</option>
+        </select>
+        <select value={device} onChange={(e) => setDevice(e.target.value)} className="text-xs px-2 py-1 rounded" style={{ backgroundColor: 'var(--c-surface)', color: 'var(--c-text)', border: '1px solid var(--c-border)' }} title="Device">
+          <option value="pc">PC</option>
+          <option value="android">Android</option>
+          <option value="ios" disabled={target.startsWith('chain:')}>iOS (Safari)</option>
+        </select>
+        <select value={effBrowser} disabled={device === 'ios'} onChange={(e) => setBrowser(e.target.value)} className="text-xs px-2 py-1 rounded disabled:opacity-70" style={{ backgroundColor: 'var(--c-surface)', color: 'var(--c-text)', border: '1px solid var(--c-border)' }} title={device === 'ios' ? 'iOS always runs on Safari (WebKit)' : 'Browser'}>
+          <option value="chromium">Chrome / Edge</option>
+          <option value="firefox">Firefox</option>
+          <option value="webkit">Safari (WebKit)</option>
         </select>
         <button onClick={launch} disabled={launching} className="flex items-center gap-1 text-xs font-medium px-3 py-1.5 rounded cursor-pointer disabled:opacity-50" style={{ backgroundColor: 'var(--c-accent)', color: '#fff' }}>
           {launching ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />} Run
@@ -221,7 +234,7 @@ export default function TestsView({ runId, onOpenRun, onBack, onGoToSession, ses
               <div className="min-w-0 flex-1">
                 <div className="text-xs font-medium truncate" style={{ color: 'var(--c-text)' }}>{r.title}</div>
                 <div className="text-[11px] font-mono truncate" style={{ color: 'var(--c-text-muted)' }}>
-                  {r.env?.toUpperCase()} · {r.specs?.join(', ')}{r.summary?.length ? ` · ${r.summary.map((s) => `${s.passed}/${s.planned}`).join(' ')}` : ''}
+                  {r.env?.toUpperCase()}{r.device ? ` · ${r.device}${r.browser ? '/' + r.browser : ''}` : ''} · {r.specs?.join(', ')}{r.summary?.length ? ` · ${r.summary.map((s) => `${s.passed}/${s.planned}`).join(' ')}` : ''}
                 </div>
               </div>
               {r.session && (
