@@ -47,6 +47,9 @@ export const SPRINT_STATUS = [
 ]
 export const sprintStatusMeta = (v) => SPRINT_STATUS.find(s => s.v === v) || SPRINT_STATUS[0]
 export const isSprintRunning = (sprint) => sprint?.status === 'active'
+// The "Ideas" bin is a parking lot, not a sprint — the API lists it first and the
+// tab strips give it a lightbulb instead of a status dot. Keyed on name, like the API.
+export const isIdeaBin = (sprint) => sprint?.name?.trim().toLowerCase() === 'ideas'
 
 // Feature completion %, driven by the QA lifecycle (mirrors session_store.js featureCompletion):
 //   QA Pass / Done → 100 · Dev Completed (no open bugs) → 100 · Dev Completed + open QA bug → 50

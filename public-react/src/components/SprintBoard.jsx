@@ -3,7 +3,7 @@ import {
   Plus, Play, MessageSquare, Bug, FlaskConical, Trash2, ChevronDown, ChevronRight,
   GitFork, Check, X, Loader2, FileText, RefreshCw, CornerDownRight, ArrowLeft, ArrowRight, Archive,
   Paperclip, ListTree, FileSpreadsheet, Download, Upload, ExternalLink, Sun, Moon, Mail,
-  Rows3, Columns3, Square,
+  Rows3, Columns3, Square, Lightbulb,
 } from 'lucide-react'
 import { useTheme } from '../context/ThemeContext'
 import {
@@ -21,7 +21,7 @@ import {
   memberName, DEV_STATUS, QA_STATUS, TYPES, PLATFORM_SUGGESTIONS,
   devStatusMeta, featureCompletion, completionColor, isOpenBugRow,
   TYPE_PILL, ASSIGNEE_PILL, QA_OWNER_PILL, assigneeIds,
-  sprintStatusMeta, isSprintRunning,
+  sprintStatusMeta, isSprintRunning, isIdeaBin,
 } from './sprintMeta'
 import SprintKanban from './SprintKanban'
 
@@ -525,7 +525,9 @@ export default function SprintBoard({
                 className="text-[11px] px-2 py-1 rounded cursor-pointer flex items-center gap-1"
                 style={{ backgroundColor: activeSprintId === s.id ? 'var(--c-surface-2)' : 'transparent', color: activeSprintId === s.id ? 'var(--c-text)' : 'var(--c-text-secondary)' }}
               >
-                <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: sprintStatusMeta(s.status).color }} title={sprintStatusMeta(s.status).label} />
+                {isIdeaBin(s)
+                  ? <Lightbulb size={11} />
+                  : <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: sprintStatusMeta(s.status).color }} title={sprintStatusMeta(s.status).label} />}
                 {s.name}
               </button>
             ))}

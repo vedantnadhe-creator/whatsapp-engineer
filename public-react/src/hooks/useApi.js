@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { isIdeaBin } from '../components/sprintMeta';
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -830,7 +831,11 @@ export function useSprints() {
     refresh();
   }, [refresh]);
 
-  return { sprints: data ?? [], loading, error, refresh, createSprint, updateSprint, deleteSprint };
+  // The "Ideas" bin is a parking lot, not a sprint — float it to the front so it sits
+  // beside Backlog in every tab strip. Stable sort keeps the API's active→planning order.
+  const sprints = useMemo(() => [...(data ?? [])].sort((x, y) => isIdeaBin(y) - isIdeaBin(x)), [data]);
+
+  return { sprints, loading, error, refresh, createSprint, updateSprint, deleteSprint };
 }
 
 // ---------------------------------------------------------------------------

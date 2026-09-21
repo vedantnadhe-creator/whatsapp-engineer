@@ -34,7 +34,9 @@ import {
   FlaskConical,
   Rocket,
   CheckCheck,
+  Lightbulb,
 } from 'lucide-react';
+import { isIdeaBin } from './sprintMeta';
 
 // SQLite CURRENT_TIMESTAMP returns 'YYYY-MM-DD HH:MM:SS' without timezone.
 function parseUTC(ts) {
@@ -1012,6 +1014,7 @@ function SprintBar({ sprints, activeSprint, onSelectSprint, onCreateSprint, onUp
               border: activeSprint === s.id ? `1px solid ${colors.accent}40` : '1px solid transparent',
             }}
           >
+            {isIdeaBin(s) && <Lightbulb size={11} />}
             {s.name}
             <span className="text-[9px] font-mono opacity-60">{s.completed_count}/{s.issue_count}</span>
             <button
