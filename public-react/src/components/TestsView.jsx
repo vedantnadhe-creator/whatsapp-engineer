@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { FlaskConical, Play, RefreshCw, ArrowLeft, CheckCircle2, XCircle, MinusCircle, Loader2, MessageSquare, ExternalLink, Camera } from 'lucide-react';
+import { FlaskConical, Play, Square, RefreshCw, ArrowLeft, CheckCircle2, XCircle, MinusCircle, Loader2, MessageSquare, ExternalLink, Camera } from 'lucide-react';
 import { apiFetch, apiUrl } from '../hooks/useApi';
 
 // Testing tab — Jev browser-test runs. A run is started from a chat session (`~/jev-qa/bin/start.sh`), from the
@@ -18,7 +18,7 @@ const dur = (a, b) => (a && b ? `${((b - a) / 1000).toFixed(1)} s` : '');
 
 function ResultBadge({ status, result }) {
   const live = status === 'running';
-  const color = live ? 'var(--c-accent)' : result === 'PASS' ? 'var(--c-success, #22c55e)' : result === 'FAIL' ? 'var(--c-danger, #ef4444)' : 'var(--c-text-muted)';
+  const color = live ? 'var(--c-accent)' : result === 'PASS' ? 'var(--c-success, #22c55e)' : result === 'FAIL' ? 'var(--c-danger, #ef4444)' : result === 'ABORTED' ? 'var(--c-warning, #f59e0b)' : 'var(--c-text-muted)';
   return (
     <span className="inline-flex items-center gap-1 text-[11px] font-mono font-semibold px-1.5 py-0.5 rounded" style={{ color, border: `1px solid ${color}` }}>
       {live ? <Loader2 size={11} className="animate-spin" /> : result === 'PASS' ? <CheckCircle2 size={11} /> : result === 'FAIL' ? <XCircle size={11} /> : <MinusCircle size={11} />}
@@ -34,6 +34,20 @@ function StepIcon({ status }) {
 }
 
 const stepLabel = (e) => Array.isArray(e.step) ? e.step.join(' · ') : String(e.step ?? '');
+
+// Stop a live run: kills the worker (bin/stop.sh), the run is finalised as ABORTED and the browser released.
+function StopButton({ runId, small = false, onStopped }) {
+  const [busy, setBusy] = useState(false);
+  const stop = async (e) => {
+    e.stopPropagation(); if (!window.confirm('Stop this test run?')) return;
+    setBusy(true); try { await apiFetch(`/api/tests/${runId}/stop`, { method: 'POST' }); onStopped?.(); } catch (err) { alert(err.message); } finally { setBusy(false); }
+  };
+  return (
+    <button onClick={stop} disabled={busy} title="Stop this run" className={`flex items-center gap-1 rounded cursor-pointer disabled:opacity-50 ${small ? 'p-1' : 'px-2.5 py-1 text-xs font-medium'}`} style={{ color: 'var(--c-danger, #ef4444)', border: '1px solid var(--c-danger, #ef4444)' }}>
+      {busy ? <Loader2 size={12} className="animate-spin" /> : <Square size={12} />}{!small && ' Stop'}
+    </button>
+  );
+}
 
 // ── One run: step list + screenshot ──────────────────────────────────────────
 function RunView({ runId, onBack, onGoToSession }) {
@@ -85,6 +99,7 @@ function RunView({ runId, onBack, onGoToSession }) {
             <MessageSquare size={12} /> {run.session.name || 'session'}
           </button>
         )}
+        {live && <StopButton runId={runId} onStopped={() => setRun((prev) => ({ ...(prev || {}), status: 'done', result: 'ABORTED' }))} />}
         <ResultBadge status={run?.status} result={run?.result} />
       </div>
 
@@ -229,7 +244,7 @@ export default function TestsView({ runId, onOpenRun, onBack, onGoToSession, ses
         )}
         <div className="flex flex-col gap-1.5">
           {shown.map((r) => (
-            <button key={r.id} onClick={() => onOpenRun?.(r.id)} className="text-left rounded px-3 py-2 flex items-center gap-3 cursor-pointer" style={{ backgroundColor: 'var(--c-surface)', border: '1px solid var(--c-border)' }}>
+            <div key={r.id} role="button" tabIndex={0} onClick={() => onOpenRun?.(r.id)} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpenRun?.(r.id); } }} className="text-left rounded px-3 py-2 flex items-center gap-3 cursor-pointer" style={{ backgroundColor: 'var(--c-surface)', border: '1px solid var(--c-border)' }}>
               <ResultBadge status={r.status} result={r.result} />
               <div className="min-w-0 flex-1">
                 <div className="text-xs font-medium truncate" style={{ color: 'var(--c-text)' }}>{r.title}</div>
@@ -243,8 +258,8 @@ export default function TestsView({ runId, onOpenRun, onBack, onGoToSession, ses
                 </span>
               )}
               <span className="text-[11px] font-mono whitespace-nowrap" style={{ color: 'var(--c-text-muted)' }}>{ago(r.startedAt)}{r.endedAt ? ` · ${dur(r.startedAt, r.endedAt)}` : ''}</span>
-              <ExternalLink size={12} style={{ color: 'var(--c-text-muted)' }} />
-            </button>
+              {r.status === 'running' ? <StopButton runId={r.id} small onStopped={refresh} /> : <ExternalLink size={12} style={{ color: 'var(--c-text-muted)' }} />}
+            </div>
           ))}
         </div>
       </div>

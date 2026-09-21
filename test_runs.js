@@ -62,6 +62,15 @@ export function registerTestRoutes(app, { requireAuth, store }) {
         res.sendFile(p);
     });
 
+    app.post('/api/tests/:id/stop', requireAuth, (req, res) => {
+        if (!ID_RE.test(req.params.id)) return res.status(400).json({ error: 'bad run id' });
+        if (!readRun(req.params.id)) return res.status(404).json({ error: 'run not found' });
+        execFile('bash', [path.join(QA_DIR, 'bin', 'stop.sh'), req.params.id], { cwd: QA_DIR, timeout: 15000 }, (err, stdout, stderr) => {
+            if (err) return res.status(500).json({ error: (stderr || err.message).trim().split('\n')[0] });
+            res.json({ ok: true, run: readRun(req.params.id), message: stdout.trim() });
+        });
+    });
+
     // Launch from the UI. body: { target: 'suite' | 'chain' | '<spec>' | ['spec', …], env: 'dev'|'uat', sessionId?, type? }
     app.post('/api/tests/run', requireAuth, (req, res) => {
         const { target, env = 'dev', sessionId, type, device = 'pc', browser = 'chromium' } = req.body || {};
