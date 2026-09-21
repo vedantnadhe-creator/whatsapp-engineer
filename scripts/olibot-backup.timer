@@ -1,0 +1,11 @@
+[Unit]
+Description=Run OliBot DB backup every 12 hours
+
+[Timer]
+# 00:00 and 12:00 UTC = 05:30 and 17:30 IST. Persistent catches up a run missed during a reboot.
+OnCalendar=*-*-* 00,12:00:00 UTC
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

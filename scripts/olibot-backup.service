@@ -1,0 +1,9 @@
+[Unit]
+Description=OliBot SQLite backup (local + OCI pl-dev-olibot-backups)
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/home/ubuntu/whatsapp-engineer
+Environment=HOME=/home/ubuntu
+ExecStart=/home/ubuntu/.nvm/versions/node/v20.20.2/bin/node /home/ubuntu/whatsapp-engineer/scripts/backup_olibot_db.mjs
