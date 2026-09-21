@@ -589,6 +589,7 @@ export default function Workspace({
   onForkTriggerConsumed,
   onTestFork,
   testForking = false,
+  onRunRegression,
   newSessionProject = null,
   onClearNewSessionProject,
 }) {
@@ -877,6 +878,67 @@ export default function Workspace({
   };
 
   // --- Header ---
+  // "Ask Jev to test it" — shown once the session announced a DEV/UAT deploy ([[DEV_DEPLOYED]] / [[UAT_DEPLOYED]]).
+  // Two buttons: a tester-mode fork that derives what changed and writes/runs Jev specs for it, and the plain
+  // regression suite (no Claude at all). Device + browser are chosen here so the fork never has to ask.
+  let lastDeploy = null;
+  try { lastDeploy = session?.last_deploy ? (typeof session.last_deploy === 'string' ? JSON.parse(session.last_deploy) : session.last_deploy) : null; } catch { lastDeploy = null; }
+  const [jevDevice, setJevDevice] = useState('pc');
+  const [jevBrowser, setJevBrowser] = useState('chromium');
+  const [regressionBusy, setRegressionBusy] = useState(false);
+  const deployAgo = (at) => { const m = Math.round((Date.now() - at) / 60000); return m < 1 ? 'just now' : m < 60 ? `${m}m ago` : m < 1440 ? `${Math.round(m / 60)}h ago` : `${Math.round(m / 1440)}d ago`; };
+  const askJevTask = (env) => [
+    `The work in this session was just deployed to ${env.toUpperCase()}. Test exactly what was added or changed, with Jev (use the jev-e2e skill; jev-take-assessment if the candidate flow is involved). Device: ${jevDevice}, browser: ${jevBrowser} — already chosen, do not ask again.`,
+    `1. From this session's history and the diff of the pushed commits, list the user-visible behaviours that changed (screens, buttons, flows, API calls).`,
+    `2. Reuse specs in ~/jev-qa/specs/ where they already cover a behaviour; otherwise write one spec per behaviour in ~/jev-qa/specs/<feature>.mjs (plain-English steps, assert claims, request checks). Iterate the wording with ~/jev-qa/bin/run.sh <spec> --env ${env} --until N until every step is green or a real failure is isolated.`,
+    `3. Start the final run so it streams to the Testing tab: ~/jev-qa/bin/start.sh <spec …> --env ${env} --device ${jevDevice} --browser ${jevBrowser} — post "Test started — watch it here: <link>" immediately, then poll ~/jev-qa/runs/<id>/run.json until status is done (up to 10 minutes) and report.`,
+    `4. Report WHAT + WHY for every failure (spec-wording problems are yours to fix, product bugs are reported, never fixed). Product repos are read-only for you; specs under ~/jev-qa/ are yours.`,
+  ].join('\n');
+  const deployBanner = lastDeploy && !isNewSession && session?.mode !== 'tester' ? (
+    <div
+      className="flex items-center gap-2 px-4 py-2 text-xs flex-wrap flex-shrink-0"
+      style={{ backgroundColor: colors.surface, borderBottom: `1px solid ${colors.border}`, color: colors.textSecondary }}
+    >
+      <FlaskConical size={13} style={{ color: colors.accent }} />
+      <span>
+        Deployed to <span className="font-mono font-semibold" style={{ color: colors.text }}>{String(lastDeploy.env).toUpperCase()}</span> {deployAgo(lastDeploy.at)}
+      </span>
+      <div className="flex-1" />
+      <select value={jevDevice} onChange={(e) => setJevDevice(e.target.value)} className="text-[11px] px-1.5 py-1 rounded" style={{ backgroundColor: colors.surface2, color: colors.text, border: `1px solid ${colors.border}` }} title="Device">
+        <option value="pc">PC</option>
+        <option value="android">Android</option>
+        <option value="ios">iOS</option>
+      </select>
+      <select value={jevBrowser} onChange={(e) => setJevBrowser(e.target.value)} className="text-[11px] px-1.5 py-1 rounded" style={{ backgroundColor: colors.surface2, color: colors.text, border: `1px solid ${colors.border}` }} title="Browser">
+        <option value="chromium">Chrome / Edge</option>
+        <option value="firefox">Firefox</option>
+        <option value="webkit">Safari (WebKit)</option>
+      </select>
+      {onTestFork && (
+        <button
+          onClick={() => onTestFork(askJevTask(lastDeploy.env))}
+          disabled={testForking}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium cursor-pointer disabled:opacity-50"
+          style={{ backgroundColor: colors.accent, color: '#fff' }}
+          title="Fork a tester session that works out what changed, writes Jev specs for it and runs them"
+        >
+          <FlaskConical size={12} /> {testForking ? 'Forking…' : 'Ask Jev to test it'}
+        </button>
+      )}
+      {onRunRegression && (
+        <button
+          onClick={async () => { setRegressionBusy(true); try { await onRunRegression(lastDeploy.env, jevDevice, jevBrowser); } finally { setRegressionBusy(false); } }}
+          disabled={regressionBusy}
+          className="px-3 py-1.5 rounded text-xs font-medium cursor-pointer disabled:opacity-50"
+          style={{ backgroundColor: colors.surface2, color: colors.text, border: `1px solid ${colors.border}` }}
+          title="Run the existing Jev regression suite on this env (no Claude involved)"
+        >
+          {regressionBusy ? 'Starting…' : 'Regression suite'}
+        </button>
+      )}
+    </div>
+  ) : null;
+
   const header = session ? (
     <div
       className="h-14 flex items-center justify-between px-4 pl-14 md:pl-4 sticky top-0 z-10 flex-shrink-0"
@@ -1572,6 +1634,7 @@ export default function Workspace({
       style={{ backgroundColor: colors.bg, color: colors.text }}
     >
       {header}
+      {deployBanner}
       {isNewSession ? newSessionView : messagesView}
       {showTestGate ? testGate : (hasAccess ? inputArea : noAccessFooter)}
       {forkDialog}

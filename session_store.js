@@ -304,6 +304,9 @@ class SessionStore {
             // copied from the tester's setting when a session is forked for testing.
             "ALTER TABLE users ADD COLUMN can_edit INTEGER DEFAULT 1",
             "ALTER TABLE sessions ADD COLUMN edit_access INTEGER DEFAULT 1",
+            // Last DEV/UAT deploy announced by the session ([[DEV_DEPLOYED]] / [[UAT_DEPLOYED]] markers):
+            // JSON {env, at}. Drives the "Ask Jev to test it" banner in the workspace.
+            "ALTER TABLE sessions ADD COLUMN last_deploy TEXT",
             // Tester access scope: 0 = chat access (can chat with the bot, current tester),
             // 1 = sprint-only (can only view & edit the sprint board, no chat / no sessions).
             "ALTER TABLE users ADD COLUMN sprint_only INTEGER DEFAULT 0",
@@ -1103,6 +1106,12 @@ class SessionStore {
     // Returns the updated issue if a change was made, else null.
     // The dev session signalling completion (UAT push / agent decides done) moves the feature to
     // "Dev Completed" so QA can pick it up. Final "QA Pass" (100%) is set by QA on the board.
+    setSessionDeploy(sessionId, env) {
+        const deploy = { env, at: Date.now() };
+        this.db.prepare('UPDATE sessions SET last_deploy = ? WHERE id = ?').run(JSON.stringify(deploy), sessionId);
+        return deploy;
+    }
+
     markFeatureDoneBySession(sessionId) {
         const issue = this.getFeatureBySession(sessionId);
         if (!issue) return null;

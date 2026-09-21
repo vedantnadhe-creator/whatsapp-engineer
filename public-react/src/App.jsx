@@ -158,6 +158,11 @@ function Dashboard() {
       wsOn('sprint_deleted', () => { refreshSprints() }),
       // Claude auth errors
       wsOn('auth_error', () => { setAuthError(true) }),
+      // A session announced a DEV/UAT deploy → its workspace shows the "Ask Jev to test it" banner.
+      wsOn('session_deployed', ({ sessionId, deploy }) => {
+        if (activeSession?.id === sessionId) setActiveSession((prev) => prev ? { ...prev, last_deploy: deploy } : prev)
+        refreshSessions()
+      }),
       // Session deleted elsewhere
       wsOn('session_deleted', ({ sessionId }) => {
         if (activeSession?.id === sessionId) { setActiveSession(null); setIsNewSession(true); navigate('/') }
@@ -330,6 +335,13 @@ function Dashboard() {
     return result
   }, [activeSession?.id, activeSession?.task, navigate, refreshSessions, refreshMessages])
   const [handleTestFork, testForking] = useAction(_testFork)
+
+  // "Regression suite" on the deploy banner: start the Jev library on that env, mapped to this session, open the run.
+  const handleRunRegression = useCallback(async (env, device = 'pc', browser = 'chromium') => {
+    if (!activeSession?.id) return
+    const r = await apiFetch('/api/tests/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ target: 'suite', env, device, browser, sessionId: activeSession.id }) })
+    if (r?.id) navigate(`/tests/${r.id}`)
+  }, [activeSession?.id, navigate])
 
   // Reticle Verify "Test": spawn an Ollama/minimax-m3 verification session that
   // runtime-checks this session's frontend work (DEV dev-server, pre-deploy) and open it.
@@ -600,6 +612,7 @@ function Dashboard() {
             user={user}
             onTest={handleTestSession}
             onTestFork={handleTestFork}
+            onRunRegression={handleRunRegression}
             testForking={testForking}
             onUploadFile={uploadFile}
             onTranscribe={transcribeAudio}

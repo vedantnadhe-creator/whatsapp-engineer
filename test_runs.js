@@ -64,12 +64,13 @@ export function registerTestRoutes(app, { requireAuth, store }) {
 
     // Launch from the UI. body: { target: 'suite' | 'chain' | '<spec>' | ['spec', …], env: 'dev'|'uat', sessionId?, type? }
     app.post('/api/tests/run', requireAuth, (req, res) => {
-        const { target, env = 'dev', sessionId, type } = req.body || {};
+        const { target, env = 'dev', sessionId, type, device = 'pc', browser = 'chromium' } = req.body || {};
+        if (!['pc', 'android', 'ios'].includes(device) || !['chromium', 'firefox', 'webkit'].includes(browser)) return res.status(400).json({ error: 'bad device/browser' });
         const specs = Array.isArray(target) ? target : [String(target || 'suite')];
         if (!['dev', 'uat'].includes(env)) return res.status(400).json({ error: 'env must be dev or uat' });
         if (!specs.every((s) => /^[\w-]+$/.test(s))) return res.status(400).json({ error: 'bad spec name' });
         const args = [...specs]; if (specs[0] === 'chain') args.push(String(type || 'Aptitude').replace(/[^\w]/g, ''));
-        args.push('--env', env); if (sessionId) args.push('--session', String(sessionId));
+        args.push('--env', env, '--device', device, '--browser', browser); if (sessionId) args.push('--session', String(sessionId));
         execFile('bash', [path.join(QA_DIR, 'bin', 'start.sh'), ...args], { cwd: QA_DIR, timeout: 15000 }, (err, stdout, stderr) => {
             if (err) return res.status(500).json({ error: (stderr || err.message).trim().split('\n')[0] });
             const id = (stdout.match(/tests\/(\S+)/) || [])[1];

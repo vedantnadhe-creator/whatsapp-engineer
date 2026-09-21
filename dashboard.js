@@ -3284,7 +3284,11 @@ Steps:
         // UAT deploy (the [[UAT_DEPLOYED]] marker). Any other "done" stays manual.
         const checkFeatureDone = (sessionId, content) => {
             try {
-                if (!content || !content.includes('[[UAT_DEPLOYED]]')) return;
+                if (!content) return;
+                // Any announced deploy → remember it on the session so the workspace can offer "Ask Jev to test it".
+                const env = content.includes('[[UAT_DEPLOYED]]') ? 'uat' : content.includes('[[DEV_DEPLOYED]]') ? 'dev' : null;
+                if (env && store.setSessionDeploy) wsBroadcast('session_deployed', { sessionId, deploy: store.setSessionDeploy(sessionId, env) });
+                if (env !== 'uat') return;
                 const updated = store.markFeatureDoneBySession(sessionId);
                 if (updated) wsBroadcast('issue_updated', { issue: updated });
             } catch (_) { /* non-fatal */ }
