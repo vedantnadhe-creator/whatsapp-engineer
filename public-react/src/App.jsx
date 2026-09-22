@@ -337,9 +337,9 @@ function Dashboard() {
   const [handleTestFork, testForking] = useAction(_testFork)
 
   // "Regression suite" on the deploy banner: start the Jev library on that env, mapped to this session, open the run.
-  const handleRunRegression = useCallback(async (env, device = 'pc', browser = 'chromium') => {
+  const handleRunRegression = useCallback(async (env, device = 'pc', browser = 'chromium', target = 'suite') => {
     if (!activeSession?.id) return
-    const r = await apiFetch('/api/tests/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ target: 'suite', env, device, browser, sessionId: activeSession.id }) })
+    const r = await apiFetch('/api/tests/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ target, env, device, browser, sessionId: activeSession.id }) })
     if (r?.id) navigate(`/tests/${r.id}`)
   }, [activeSession?.id, navigate])
 

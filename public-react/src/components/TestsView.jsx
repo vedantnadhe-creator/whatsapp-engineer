@@ -49,8 +49,40 @@ function StopButton({ runId, small = false, onStopped }) {
   );
 }
 
+// ── Sanity run: one card per assessment type, each a child chain running in parallel ─────────────
+function ChildrenGrid({ children, onOpenRun, compact = false }) {
+  if (!children?.length) return null;
+  return (
+    <div className={compact ? 'flex flex-wrap gap-1.5' : 'grid gap-2 p-4'} style={compact ? undefined : { gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))' }}>
+      {children.map((c) => {
+        const passed = c.summary?.reduce((a, s) => a + (s.passed || 0), 0);
+        const planned = c.summary?.reduce((a, s) => a + (s.planned || 0), 0);
+        return compact ? (
+          <span key={c.id} onClick={(e) => { e.stopPropagation(); onOpenRun?.(c.id); }} className="inline-flex items-center gap-1 text-[11px] font-mono px-1.5 py-0.5 rounded cursor-pointer" style={{ border: '1px solid var(--c-border)', color: 'var(--c-text-secondary)' }} title={c.title}>
+            <ResultBadge status={c.status} result={c.result} /> {c.type}
+          </span>
+        ) : (
+          <div key={c.id} role="button" tabIndex={0} onClick={() => onOpenRun?.(c.id)} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpenRun?.(c.id); } }} className="rounded px-3 py-2 flex flex-col gap-1 cursor-pointer" style={{ backgroundColor: 'var(--c-surface)', border: '1px solid var(--c-border)' }}>
+            <div className="flex items-center gap-2">
+              <ResultBadge status={c.status} result={c.result} />
+              <span className="text-xs font-semibold" style={{ color: 'var(--c-text)' }}>{c.type}</span>
+              <span className="flex-1" />
+              {c.status === 'running' && <StopButton runId={c.id} small />}
+              <ExternalLink size={12} style={{ color: 'var(--c-text-muted)' }} />
+            </div>
+            <div className="text-[11px] truncate" style={{ color: 'var(--c-text-secondary)' }}>{c.title}</div>
+            <div className="text-[11px] font-mono truncate" style={{ color: 'var(--c-text-muted)' }}>
+              {c.assessment ? `${c.assessment} · ` : ''}{planned ? `${passed}/${planned} steps · ` : ''}{c.startedAt ? (c.endedAt ? dur(c.startedAt, c.endedAt) : ago(c.startedAt)) : 'queued'}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // ── One run: step list + screenshot ──────────────────────────────────────────
-function RunView({ runId, onBack, onGoToSession }) {
+function RunView({ runId, onBack, onGoToSession, onOpenRun }) {
   const [run, setRun] = useState(null);
   const [events, setEvents] = useState([]);
   const [selected, setSelected] = useState(null);   // index into step events; null = follow the latest
@@ -66,7 +98,7 @@ function RunView({ runId, onBack, onGoToSession }) {
         const r = await apiFetch(`/api/tests/${runId}/events?after=${seen.current}`);
         if (stop) return;
         if (r.events.length) { seen.current += r.events.length; setEvents((prev) => [...prev, ...r.events]); }
-        setRun((prev) => ({ ...(prev || {}), ...r }));
+        setRun((prev) => ({ ...(prev || {}), ...r, ...(r.children ? { children: r.children } : {}) }));
         if (!haveMeta.current) { const d = await apiFetch(`/api/tests/${runId}`); haveMeta.current = true; if (!stop) setRun((prev) => ({ ...(prev || {}), ...d.run, status: r.status, result: r.result, summary: r.summary })); }
         if (r.status === 'running') timer = setTimeout(tick, 1500);
       } catch (e) { if (!stop) { setError(e.message); timer = setTimeout(tick, 4000); } }
@@ -86,7 +118,7 @@ function RunView({ runId, onBack, onGoToSession }) {
   return (
     <div className="h-full flex flex-col" style={{ backgroundColor: 'var(--c-bg)' }}>
       <div className="flex items-center gap-3 px-4 py-3" style={{ borderBottom: '1px solid var(--c-border)' }}>
-        <button onClick={onBack} className="p-1 rounded cursor-pointer" style={{ color: 'var(--c-text-secondary)' }} title="All runs"><ArrowLeft size={16} /></button>
+        <button onClick={() => (run?.parentId && onOpenRun ? onOpenRun(run.parentId) : onBack?.())} className="p-1 rounded cursor-pointer" style={{ color: 'var(--c-text-secondary)' }} title={run?.parentId ? 'Back to the sanity run' : 'All runs'}><ArrowLeft size={16} /></button>
         <FlaskConical size={16} style={{ color: 'var(--c-accent)' }} />
         <div className="min-w-0 flex-1">
           <div className="text-sm font-semibold truncate" style={{ color: 'var(--c-text)' }}>{run?.title || runId}</div>
@@ -105,6 +137,15 @@ function RunView({ runId, onBack, onGoToSession }) {
 
       {error && <div className="px-4 py-2 text-xs" style={{ color: 'var(--c-danger, #ef4444)' }}>{error}</div>}
 
+      {run?.kind === 'sanity' ? (
+        <div className="flex-1 min-h-0 overflow-y-auto">
+          <div className="px-4 pt-4 text-xs" style={{ color: 'var(--c-text-secondary)' }}>
+            One browser per assessment type, all running at the same time — open a card to follow that chain step by step.
+            {run.env === 'prod' && <span className="ml-1 font-semibold" style={{ color: 'var(--c-warning, #f59e0b)' }}>PROD: confined to the QA entity and QA candidate configured in ~/jev-qa/.env.</span>}
+          </div>
+          <ChildrenGrid children={run.children} onOpenRun={onOpenRun} />
+        </div>
+      ) : (
       <div className="flex-1 min-h-0 flex">
         {/* steps */}
         <div ref={listRef} className="w-[420px] shrink-0 overflow-y-auto" style={{ borderRight: '1px solid var(--c-border)' }}>
@@ -161,6 +202,7 @@ function RunView({ runId, onBack, onGoToSession }) {
           )}
         </div>
       </div>
+      )}
     </div>
   );
 }
@@ -180,7 +222,7 @@ export default function TestsView({ runId, onOpenRun, onBack, onGoToSession, ses
   const refresh = async () => { try { const r = await apiFetch('/api/tests'); setRuns(r.runs); } catch (e) { setErr(e.message); } };
   useEffect(() => { refresh(); const t = setInterval(refresh, 5000); return () => clearInterval(t); }, []);
 
-  if (runId) return <RunView runId={runId} onBack={onBack} onGoToSession={onGoToSession} />;
+  if (runId) return <RunView runId={runId} onBack={onBack} onGoToSession={onGoToSession} onOpenRun={onOpenRun} />;
 
   const shown = (runs || []).filter((r) => !onlyMine || (sessionId && r.sessionId === sessionId));
   const launch = async () => {
@@ -197,10 +239,11 @@ export default function TestsView({ runId, onOpenRun, onBack, onGoToSession, ses
       <div className="flex items-center gap-3 px-4 py-3 flex-wrap" style={{ borderBottom: '1px solid var(--c-border)' }}>
         <FlaskConical size={16} style={{ color: 'var(--c-accent)' }} />
         <div className="text-sm font-semibold" style={{ color: 'var(--c-text)' }}>Testing</div>
-        <div className="text-[11px]" style={{ color: 'var(--c-text-muted)' }}>Jev browser tests · DEV / UAT · every step recorded with a screenshot</div>
+        <div className="text-[11px]" style={{ color: 'var(--c-text-muted)' }}>Jev browser tests · DEV / UAT (PROD: sanity only) · every step recorded with a screenshot</div>
         <div className="flex-1" />
-        <select value={target} onChange={(e) => setTarget(e.target.value)} className="text-xs px-2 py-1 rounded" style={{ backgroundColor: 'var(--c-surface)', color: 'var(--c-text)', border: '1px solid var(--c-border)' }}>
+        <select value={target} onChange={(e) => { setTarget(e.target.value); if (e.target.value !== 'sanity' && env === 'prod') setEnv('dev'); }} className="text-xs px-2 py-1 rounded" style={{ backgroundColor: 'var(--c-surface)', color: 'var(--c-text)', border: '1px solid var(--c-border)' }}>
           <option value="suite">Regression suite</option>
+          <option value="sanity">Sanity — every assessment type in parallel (+ Mix &amp; Match)</option>
           <option value="admin-login-smoke">Admin login smoke</option>
           <option value="admin-float-aptitude">Float Aptitude</option>
           <option value="admin-float-communication">Float Communication</option>
@@ -210,11 +253,12 @@ export default function TestsView({ runId, onOpenRun, onBack, onGoToSession, ses
         <select value={env} onChange={(e) => setEnv(e.target.value)} className="text-xs px-2 py-1 rounded" style={{ backgroundColor: 'var(--c-surface)', color: 'var(--c-text)', border: '1px solid var(--c-border)' }}>
           <option value="dev">DEV</option>
           <option value="uat">UAT</option>
+          <option value="prod" disabled={target !== 'sanity'}>PROD (sanity only)</option>
         </select>
         <select value={device} onChange={(e) => setDevice(e.target.value)} className="text-xs px-2 py-1 rounded" style={{ backgroundColor: 'var(--c-surface)', color: 'var(--c-text)', border: '1px solid var(--c-border)' }} title="Device">
           <option value="pc">PC</option>
           <option value="android">Android</option>
-          <option value="ios" disabled={target.startsWith('chain:')}>iOS (Safari)</option>
+          <option value="ios" disabled={target.startsWith('chain:') || target === 'sanity'}>iOS (Safari)</option>
         </select>
         <select value={effBrowser} disabled={device === 'ios'} onChange={(e) => setBrowser(e.target.value)} className="text-xs px-2 py-1 rounded disabled:opacity-70" style={{ backgroundColor: 'var(--c-surface)', color: 'var(--c-text)', border: '1px solid var(--c-border)' }} title={device === 'ios' ? 'iOS always runs on Safari (WebKit)' : 'Browser'}>
           <option value="chromium">Chrome / Edge</option>
@@ -249,8 +293,9 @@ export default function TestsView({ runId, onOpenRun, onBack, onGoToSession, ses
               <div className="min-w-0 flex-1">
                 <div className="text-xs font-medium truncate" style={{ color: 'var(--c-text)' }}>{r.title}</div>
                 <div className="text-[11px] font-mono truncate" style={{ color: 'var(--c-text-muted)' }}>
-                  {r.env?.toUpperCase()}{r.device ? ` · ${r.device}${r.browser ? '/' + r.browser : ''}` : ''} · {r.specs?.join(', ')}{r.summary?.length ? ` · ${r.summary.map((s) => `${s.passed}/${s.planned}`).join(' ')}` : ''}
+                  {r.env?.toUpperCase()}{r.device ? ` · ${r.device}${r.browser ? '/' + r.browser : ''}` : ''} · {r.specs?.join(', ')}{r.summary?.length && r.kind !== 'sanity' ? ` · ${r.summary.map((s) => `${s.passed}/${s.planned}`).join(' ')}` : ''}
                 </div>
+                {r.kind === 'sanity' && <div className="mt-1"><ChildrenGrid children={r.children} onOpenRun={onOpenRun} compact /></div>}
               </div>
               {r.session && (
                 <span onClick={(e) => { e.stopPropagation(); onGoToSession?.(r.session.id); }} className="flex items-center gap-1 text-[11px] truncate max-w-[200px]" style={{ color: 'var(--c-text-secondary)' }} title="Open session">

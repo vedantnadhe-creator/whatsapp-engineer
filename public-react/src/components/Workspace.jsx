@@ -932,9 +932,20 @@ export default function Workspace({
           disabled={regressionBusy}
           className="px-3 py-1.5 rounded text-xs font-medium cursor-pointer disabled:opacity-50"
           style={{ backgroundColor: colors.surface2, color: colors.text, border: `1px solid ${colors.border}` }}
-          title="Run the existing Jev regression suite on this env (no Claude involved)"
+          title="Run the existing Jev regression suite on this env (no LLM involved)"
         >
           {regressionBusy ? 'Starting…' : 'Regression suite'}
+        </button>
+      )}
+      {onRunRegression && jevDevice !== 'ios' && (
+        <button
+          onClick={async () => { setRegressionBusy(true); try { await onRunRegression(lastDeploy.env, jevDevice, 'chromium', 'sanity'); } finally { setRegressionBusy(false); } }}
+          disabled={regressionBusy}
+          className="px-3 py-1.5 rounded text-xs font-medium cursor-pointer disabled:opacity-50"
+          style={{ backgroundColor: colors.surface2, color: colors.text, border: `1px solid ${colors.border}` }}
+          title="Sanity: float + take + verify every assessment type in parallel, plus a corporate Mix & Match float (no LLM involved)"
+        >
+          Sanity (all types)
         </button>
       )}
     </div>

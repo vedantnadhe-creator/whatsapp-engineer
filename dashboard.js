@@ -61,22 +61,25 @@ export { pendingImages };
 // escape it — the dropdown filtering in /api/models uses the same policy.
 // Broken Ollama models are separately redirected (safeOllamaModel) so no session
 // can crash on invalid tool_use IDs.
-//   business_analyst → Ollama only, default minimax-m3
-//   tester           → Haiku or GPT Luna (fast, lower-cost QA options)
+//   business_analyst → Haiku
+//   tester           → GPT-5.6 Sol (Codex) ONLY — mandated 2026-09-22: every testing session (tester role,
+//                      "Test it" / "Ask Jev to test it" forks, generated test cases) runs on GPT Sol, never on a
+//                      Claude model. TESTING_MODEL is applied wherever a session is created in tester mode, whatever
+//                      the caller's own role, so a developer's "Ask Jev to test it" click lands on GPT Sol too.
 // Only MODELS are restricted here — the tester QA persona, read-only edit gating
 // and sprint-only view are separate and unchanged.
-const TESTER_MODEL = 'haiku';
-const TESTER_CODEX_MODEL = 'codex:gpt-5.6-luna';
+const BA_MODEL = 'haiku';
+const TESTING_MODEL = 'codex:gpt-5.6-sol';
 const CLIENT_SUPPORT_MODEL = 'claude-opus-5';
 const CLIENT_SUPPORT_CODEX_MODEL = 'codex:gpt-5.6-terra';
 const ROLE_MODEL_POLICY = {
     // Was Ollama-only for cost containment; Ollama left the dropdown on 2026-08-06,
     // which would have left BAs with an empty list, so they now share the tester's
     // cheapest-Claude-tier policy.
-    business_analyst: { allow: (m) => m === TESTER_MODEL, fallback: TESTER_MODEL },
-    // Testers can switch between the fast Claude and Codex options. The API filters
-    // the picker and enforces this same allow-list for starts, resumes, and forks.
-    tester: { allow: (m) => m === TESTER_MODEL || m === TESTER_CODEX_MODEL, fallback: TESTER_MODEL },
+    business_analyst: { allow: (m) => m === BA_MODEL, fallback: BA_MODEL },
+    // Testers get exactly one model. The API filters the picker and enforces this
+    // same allow-list for starts, resumes, and forks.
+    tester: { allow: (m) => m === TESTING_MODEL, fallback: TESTING_MODEL },
     // Client support runs long multi-step work (staged TPO sourcing, Excel builds,
     // client-facing writing), so the list is deliberately just two strong models:
     // Opus 5 as the default, and GPT-5.6 Terra as the alternate. Sonnet 5 and Haiku were
@@ -94,6 +97,11 @@ function resolveModelForRole(role, model) {
     const policy = ROLE_MODEL_POLICY[role];
     if (policy && !policy.allow(safe)) return policy.fallback;
     return safe;
+}
+// Testing is done on GPT Sol regardless of who starts the session: a tester-mode session, a "Test it" /
+// "Ask Jev to test it" fork or a generate-test-cases fork never runs on a Claude model.
+function resolveModelForMode(role, mode, model) {
+    return mode === 'tester' ? TESTING_MODEL : resolveModelForRole(role, model);
 }
 
 // Changelog section heading per issue type. Mirrors TYPES in SprintBoard.jsx /
@@ -563,7 +571,7 @@ a{color:#60a5fa;text-decoration:none}</style></head>
 
         // Restricted roles see ONLY the models their policy allows (same policy the
         // routes enforce, so the dropdown can never offer something that would be
-        // coerced server-side). Business Analyst → Haiku; Tester → Haiku or GPT Luna.
+        // coerced server-side). Business Analyst → Haiku; Tester → GPT-5.6 Sol only.
         const policy = ROLE_MODEL_POLICY[req.user.role];
         if (policy) {
             const allowed = all.filter(m => policy.allow(m.id) && !m.disabled);
@@ -1030,7 +1038,7 @@ a{color:#60a5fa;text-decoration:none}</style></head>
             const phone = req.body.phone || req.user.phone || req.user.email || req.user.id;
             const startInstruction = /^(start fresh|new task|ignore previous)/i.test(text) ? text : `[start fresh] ${text}`;
             const imagePath = takePendingImages(req.body);
-            const result = await messageHandler({ isWeb: true, phone: String(phone), text: startInstruction, pushName: req.user.displayName || 'Dashboard', imagePath, ownerId: req.user.id, model: resolveModelForRole(req.user.role, model || 'claude-opus-4-8'), workingDir: sessionWorkingDir, mode: sessionMode, editAccess: testerEditAccess, promptPrefix: project ? projectContextBanner([project]) : null });
+            const result = await messageHandler({ isWeb: true, phone: String(phone), text: startInstruction, pushName: req.user.displayName || 'Dashboard', imagePath, ownerId: req.user.id, model: resolveModelForMode(req.user.role, sessionMode, model || 'claude-opus-4-8'), workingDir: sessionWorkingDir, mode: sessionMode, editAccess: testerEditAccess, promptPrefix: project ? projectContextBanner([project]) : null });
             // Attach sprint + type + tags + name and auto-create a session task issue
             if (result?.sessionId) {
                 const sessionName = (typeof name === 'string' && name.trim())
@@ -1258,7 +1266,7 @@ Do NOT ask for confirmation — proceed through each step automatically. If any 
             const task = (typeof req.body?.text === 'string' && req.body.text.trim())
                 ? req.body.text.trim()
                 : `Run a QA pass on the work in session ${parentId}. Review what changed by reading the code/diff and session history yourself, infer the expected behavior, then propose and run test cases and report findings. Do not pause to ask for a PRD or acceptance criteria — proceed autonomously.`;
-            const result = await executionEngine.forkSession(parentId, task, String(phone), req.user.id, resolveModelForRole(req.user.role, req.body?.model || null), { mode: 'tester', editAccess });
+            const result = await executionEngine.forkSession(parentId, task, String(phone), req.user.id, resolveModelForMode(req.user.role, 'tester', req.body?.model || null), { mode: 'tester', editAccess });
             res.json({ success: true, sessionId: result.sessionId, forkedFrom: result.forkedFrom, editAccess });
         } catch (err) { res.status(500).json({ error: err.message }); }
     });
@@ -2651,7 +2659,7 @@ The user may ask follow-up questions about the changelog — answer based on the
             const issue = store.getIssue(req.params.id);
             if (!issue) return res.status(404).json({ error: 'Feature not found' });
             const phone = req.body.phone || req.user.phone || req.user.email || req.user.id;
-            const model = req.body.model || 'claude-opus-4-8';
+            const model = TESTING_MODEL;   // test cases are written on GPT Sol, never a Claude model
             const tcPrompt = `Write a thorough set of QA test cases for feature "${issue.title}"${issue.platform ? ` (${issue.platform})` : ''}.\n${issue.description || ''}\n\nCover happy path, edge cases, and negative cases. For EACH test case output a line in EXACTLY this format so it can be imported:\nTESTCASE | <title> | <steps> | <expected result>\nDerive expected behavior from the PRD/knowledge base first, code only if needed.`;
             let result;
             if (issue.session_id && store.getSession(issue.session_id)) {
