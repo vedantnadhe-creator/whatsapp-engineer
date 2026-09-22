@@ -31,6 +31,7 @@ import ShareSessionModal from './ShareSessionModal';
 import { getSessionFeature, setSessionFeatureStatus, useFrontendRepos } from '../hooks/useApi';
 import { useAttachments, attachmentMarkdown } from '../hooks/useAttachments';
 import AttachmentStrip from './AttachmentStrip';
+import AskJevDialog from './AskJevDialog';
 
 // Sprint feature lifecycle, surfaced at the top of a feature's session.
 const FEATURE_STATUS = [
@@ -888,13 +889,7 @@ export default function Workspace({
   const [regressionBusy, setRegressionBusy] = useState(false);
   const deployAgo = (at) => { const m = Math.round((Date.now() - at) / 60000); return m < 1 ? 'just now' : m < 60 ? `${m}m ago` : m < 1440 ? `${Math.round(m / 60)}h ago` : `${Math.round(m / 1440)}d ago`; };
   const effBrowser = jevDevice === 'ios' ? 'webkit' : jevBrowser;
-  const askJevTask = (env) => [
-    `The work in this session was just deployed to ${env.toUpperCase()}. Test exactly what was added or changed, with Jev (use the jev-e2e skill; jev-take-assessment if the candidate flow is involved). Device: ${jevDevice}, browser: ${effBrowser}${jevDevice === 'ios' ? ' (iOS = Safari/WebKit; the candidate flow cannot run there — WebKit has no camera/mic, use android for that)' : ''} — already chosen, do not ask again.`,
-    `1. From this session's history and the diff of the pushed commits, list the user-visible behaviours that changed (screens, buttons, flows, API calls).`,
-    `2. Reuse specs in ~/jev-qa/specs/ where they already cover a behaviour; otherwise write one spec per behaviour in ~/jev-qa/specs/<feature>.mjs (plain-English steps, assert claims, request checks). Iterate the wording with ~/jev-qa/bin/run.sh <spec> --env ${env} --until N until every step is green or a real failure is isolated.`,
-    `3. Start the final run so it streams to the Testing tab: ~/jev-qa/bin/start.sh <spec …> --env ${env} --device ${jevDevice} --browser ${effBrowser} — post "Test started — watch it here: <link>" immediately, then poll ~/jev-qa/runs/<id>/run.json until status is done (up to 10 minutes) and report.`,
-    `4. Report WHAT + WHY for every failure (spec-wording problems are yours to fix, product bugs are reported, never fixed). Product repos are read-only for you; specs under ~/jev-qa/ are yours.`,
-  ].join('\n');
+  const [askJev, setAskJev] = useState(false);   // the Ask-Jev dialog (env/device/browser + notes); the server builds the task
   const deployBanner = lastDeploy && !isNewSession && session?.mode !== 'tester' ? (
     <div
       className="flex items-center gap-2 px-4 py-2 text-xs flex-wrap flex-shrink-0"
@@ -917,7 +912,7 @@ export default function Workspace({
       </select>
       {onTestFork && (
         <button
-          onClick={() => onTestFork(askJevTask(lastDeploy.env))}
+          onClick={() => setAskJev(true)}
           disabled={testForking}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium cursor-pointer disabled:opacity-50"
           style={{ backgroundColor: colors.accent, color: '#fff' }}
@@ -1647,6 +1642,14 @@ export default function Workspace({
     >
       {header}
       {deployBanner}
+      {askJev && lastDeploy && (
+        <AskJevDialog
+          subject={`What this session deployed to ${String(lastDeploy.env).toUpperCase()}`}
+          defaultEnv={lastDeploy.env}
+          onClose={() => setAskJev(false)}
+          onStart={async (jev) => { await onTestFork({ jev }); setAskJev(false); }}
+        />
+      )}
       {isNewSession ? newSessionView : messagesView}
       {showTestGate ? testGate : (hasAccess ? inputArea : noAccessFooter)}
       {forkDialog}

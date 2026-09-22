@@ -12,7 +12,7 @@ import {
   getSubtasks, uploadFile,
   openSprintSheet, getSprintTemplate, importSprintSheet, moveIssuesToSprint, apiUrl,
   deleteIssue, uploadAttachment, attachmentUrl,
-  previewSprintStatus, sendSprintStatus, getSprintStatusLastSent,
+  previewSprintStatus, sendSprintStatus, getSprintStatusLastSent, askJevForIssue,
 } from '../hooks/useApi'
 
 // Option sets and completion maths live in sprintMeta so the table and the Kanban
@@ -24,6 +24,7 @@ import {
   sprintStatusMeta, isSprintRunning, isIdeaBin,
 } from './sprintMeta'
 import SprintKanban from './SprintKanban'
+import AskJevDialog from './AskJevDialog'
 
 // A <select> styled as a soft colored pill (tinted background, colored text) — works on the dark sheet.
 function PillSelect({ value, onChange, options, fg, placeholder = '—', disabled }) {
@@ -850,6 +851,7 @@ export default function SprintBoard({
 function FeatureRow({ f, idx, members, isTester, expanded, isBacklogView, selected, onSelect, sprints, onMoveToSprint, onToggle, onUpdate, onDelete, onCreateIssue, onStartSession, busyStart, onGoToSession, model, refreshIssues }) {
   const dev = devStatusMeta(f.dev_status)
   const upd = (patch) => onUpdate(f.id, patch)
+  const [askJev, setAskJev] = useState(false)   // "Ask Jev to test" dialog for this feature
   const cellBorder = { borderBottom: '1px solid var(--c-border)', borderRight: '1px solid var(--c-border)' }
   const rowBg = idx % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.025)'
   // Dev column lists developers/designers; QA Owner lists testers.
@@ -876,6 +878,15 @@ function FeatureRow({ f, idx, members, isTester, expanded, isBacklogView, select
               <button onClick={() => onGoToSession(f.session_id)} title="Open dev session" className="p-1 rounded cursor-pointer hover:bg-[var(--c-surface-2)]" style={{ color: 'var(--c-accent)' }}><MessageSquare size={15} /></button>
             ) : (
               <button onClick={() => onStartSession(f)} disabled={busyStart} title="Start dev session" className="p-1 rounded cursor-pointer hover:bg-[var(--c-surface-2)] disabled:opacity-40" style={{ color: '#4ade80' }}>{busyStart ? <Loader2 size={15} className="animate-spin" /> : <Play size={15} />}</button>
+            )}
+            <button onClick={() => setAskJev(true)} title={f.qa_session_id ? 'Ask Jev to test this feature (a previous Jev session exists — open it via the QA column)' : 'Ask Jev to test this feature'} className="p-1 rounded cursor-pointer hover:bg-[var(--c-surface-2)]" style={{ color: 'var(--c-accent)' }}><FlaskConical size={15} /></button>
+            {askJev && (
+              <AskJevDialog
+                subject={`${f.title}${f.platform ? ` · ${f.platform}` : ''}`}
+                defaultEnv={f.dev_status === 'dev_completed' || f.dev_status === 'qa_pass' ? 'uat' : 'dev'}
+                onClose={() => setAskJev(false)}
+                onStart={async (jev) => { const r = await askJevForIssue(f.id, jev); setAskJev(false); refreshIssues?.(); if (r?.sessionId) onGoToSession(r.sessionId) }}
+              />
             )}
             <button onClick={onToggle} className="inline-flex items-center gap-1 cursor-pointer" style={{ color: 'var(--c-text-muted)' }}>
               {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}

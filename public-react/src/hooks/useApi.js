@@ -612,6 +612,10 @@ export async function deleteTestCase(tcId) {
   return apiFetch(`/api/test-cases/${tcId}`, { method: 'DELETE' });
 }
 
+export async function askJevForIssue(issueId, jev) {
+  return apiFetch(`/api/issues/${issueId}/ask-jev`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(jev) })
+}
+
 export async function generateTestCases(issueId, model) {
   return apiFetch(`/api/issues/${issueId}/generate-test-cases`, {
     method: 'POST',
@@ -659,11 +663,12 @@ export async function mergeSessions(sessionIds, text, model) {
 }
 
 // Tester "Test it" — forks a shared session into a tester-mode session.
+// text: free-form "Test it" instruction, or { jev: { env, device, browser, notes } } from the Ask-Jev dialog
 export async function testForkSession(sessionId, text = null) {
   return apiFetch(`/api/sessions/${sessionId}/test-fork`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(text ? { text } : {}),
+    body: JSON.stringify(text && typeof text === 'object' ? text : text ? { text } : {}),
   });
 }
 

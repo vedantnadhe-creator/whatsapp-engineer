@@ -37,6 +37,21 @@ export function listRuns({ sessionId, limit = 100 } = {}) {
     return (sessionId ? runs.filter((r) => r.sessionId === sessionId) : runs).slice(0, limit);
 }
 
+// The task handed to an "Ask Jev to test it" tester fork. One builder for every entry point (deploy banner, sprint row)
+// so the instructions never drift. `subject` says what to test, `notes` is whatever the person typed in the dialog.
+export function jevTask({ env = 'dev', device = 'pc', browser = 'chromium', notes = '', subject = 'the work in this session' }) {
+    const eff = device === 'ios' ? 'webkit' : browser;
+    const e = String(env).toLowerCase();
+    return [
+        `Test ${subject} on ${e.toUpperCase()} with Jev (use the jev-e2e skill; jev-take-assessment if the candidate flow is involved). Device: ${device}, browser: ${eff}${device === 'ios' ? ' (iOS = Safari/WebKit; the candidate flow cannot run there — WebKit has no camera/mic, use android for that)' : ''} — already chosen, do not ask again.`,
+        notes.trim() ? `Notes from the person who asked (treat as requirements/focus):\n${notes.trim()}` : null,
+        `1. From this session's history, the feature description and the diff of the pushed commits, list the user-visible behaviours that changed (screens, buttons, flows, API calls).`,
+        `2. Reuse specs in ~/jev-qa/specs/ where they already cover a behaviour; otherwise write one spec per behaviour in ~/jev-qa/specs/<feature>.mjs (plain-English steps, assert claims, request checks). Iterate the wording with ~/jev-qa/bin/run.sh <spec> --env ${e} --until N until every step is green or a real failure is isolated.`,
+        `3. Start the final run so it streams to the Testing tab: ~/jev-qa/bin/start.sh <spec …> --env ${e} --device ${device} --browser ${eff} — post "Test started — watch it here: <link>" immediately, then poll ~/jev-qa/runs/<id>/run.json until status is done (up to 10 minutes) and report.`,
+        `4. Report WHAT + WHY for every failure (spec-wording problems are yours to fix, product bugs are reported, never fixed). Product repos are read-only for you; specs under ~/jev-qa/ are yours.`,
+    ].filter(Boolean).join('\n');
+}
+
 export function registerTestRoutes(app, { requireAuth, store }) {
     const withSession = (r) => {
         if (!r?.sessionId || !store?.getSession) return r;

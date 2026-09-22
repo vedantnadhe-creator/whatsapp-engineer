@@ -10,7 +10,7 @@ import { WebSocketServer } from 'ws';
 import { S3Client, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
 import config from './config.js';
 import { attachTerminalServer } from './term_server.js';
-import { registerTestRoutes } from './test_runs.js';
+import { registerTestRoutes, jevTask } from './test_runs.js';
 // orchestrator import removed — Claude prompt is now file-based (CLAUDE.md)
 import {
     signJwt, requireAuth, optionalAuth, requireAdmin,
@@ -1263,7 +1263,10 @@ Do NOT ask for confirmation — proceed through each step automatically. If any 
             if (!parent) return res.status(404).json({ error: 'Session not found' });
             const phone = req.user.phone || req.user.email || req.user.id;
             const editAccess = store.getUserById(req.user.id)?.can_edit !== 0;
-            const task = (typeof req.body?.text === 'string' && req.body.text.trim())
+            // { jev: { env, device, browser, notes } } = "Ask Jev to test it" from the deploy banner; { text } = free-form "Test it".
+            const task = req.body?.jev && typeof req.body.jev === 'object'
+                ? jevTask({ ...req.body.jev, subject: `the work in this session (deployed to ${String(req.body.jev.env || 'dev').toUpperCase()})` })
+                : (typeof req.body?.text === 'string' && req.body.text.trim())
                 ? req.body.text.trim()
                 : `Run a QA pass on the work in session ${parentId}. Review what changed by reading the code/diff and session history yourself, infer the expected behavior, then propose and run test cases and report findings. Do not pause to ask for a PRD or acceptance criteria — proceed autonomously.`;
             const result = await executionEngine.forkSession(parentId, task, String(phone), req.user.id, resolveModelForMode(req.user.role, 'tester', req.body?.model || null), { mode: 'tester', editAccess });
@@ -2666,6 +2669,36 @@ The user may ask follow-up questions about the changelog — answer based on the
                 result = await executionEngine.forkSession(issue.session_id, tcPrompt, String(phone), req.user.id, model);
             } else {
                 result = await messageHandler({ isWeb: true, phone: String(phone), text: `[start fresh] ${tcPrompt}`, pushName: req.user.displayName || 'Dashboard', ownerId: req.user.id, model, mode: 'developer' });
+            }
+            res.json({ success: true, sessionId: result?.sessionId });
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    // "Ask Jev to test" on a sprint row: a tester-mode session (GPT Sol) that tests this feature with Jev. Forks the
+    // feature's dev session when there is one (keeps the context of what was built), otherwise starts fresh from the
+    // feature's title/description. body: { env, device, browser, notes }
+    app.post('/api/issues/:id/ask-jev', requireAuth, async (req, res) => {
+        try {
+            if (!executionEngine) return res.status(500).json({ error: 'Execution engine not attached' });
+            const issue = store.getIssue(req.params.id);
+            if (!issue) return res.status(404).json({ error: 'Feature not found' });
+            const { env = 'dev', device = 'pc', browser = 'chromium', notes = '' } = req.body || {};
+            if (!['dev', 'uat'].includes(env)) return res.status(400).json({ error: 'env must be dev or uat' });
+            if (!['pc', 'android', 'ios'].includes(device) || !['chromium', 'firefox', 'webkit'].includes(browser)) return res.status(400).json({ error: 'bad device/browser' });
+            const subject = `the feature "${issue.title}"${issue.platform ? ` (${issue.platform})` : ''}${issue.description ? `:\n${String(issue.description).slice(0, 2000)}\n` : ''}`;
+            const task = jevTask({ env, device, browser, notes: String(notes || '').slice(0, 4000), subject });
+            const phone = req.user.phone || req.user.email || req.user.id;
+            const editAccess = store.getUserById(req.user.id)?.can_edit !== 0;
+            let result;
+            if (issue.session_id && store.getSession(issue.session_id)) {
+                result = await executionEngine.forkSession(issue.session_id, task, String(phone), req.user.id, TESTING_MODEL, { mode: 'tester', editAccess });
+            } else {
+                result = await messageHandler({ isWeb: true, phone: String(phone), text: `[start fresh] ${task}`, pushName: req.user.displayName || 'Dashboard', ownerId: req.user.id, model: TESTING_MODEL, mode: 'tester', editAccess });
+            }
+            if (result?.sessionId) {
+                store.updateSession(result.sessionId, { sprint_id: issue.sprint_id || null, name: `Jev test: ${issue.title}`.slice(0, 120) });
+                store.updateIssue(issue.id, { qa_session_id: result.sessionId });
+                wsBroadcast('issue_updated', { issue: store.getIssue(issue.id) });
             }
             res.json({ success: true, sessionId: result?.sessionId });
         } catch (err) { res.status(500).json({ error: err.message }); }

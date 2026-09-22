@@ -323,9 +323,9 @@ function Dashboard() {
   const [handleForkSession, forkingSession] = useAction(_forkSession)
 
   // Tester "Test it": fork the shared session into a tester-mode session and open it.
-  const _testFork = useCallback(async (text = null) => {
+  const _testFork = useCallback(async (textOrJev = null) => {
     if (!activeSession?.id) return
-    const result = await testForkSession(activeSession.id, text)
+    const result = await testForkSession(activeSession.id, textOrJev)
     if (result?.sessionId) {
       setActiveSession({ id: result.sessionId, task: activeSession.task, status: 'running', mode: 'tester', is_mine: true })
       setIsNewSession(false)
