@@ -253,6 +253,15 @@ class SessionStore {
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
             );
             CREATE INDEX IF NOT EXISTS idx_bugs_issue ON bugs(issue_id);
+            -- Discussion thread under a QA bug (repro notes, "can't reproduce", decisions).
+            CREATE TABLE IF NOT EXISTS bug_comments (
+                id TEXT PRIMARY KEY,
+                bug_id TEXT NOT NULL,
+                body TEXT NOT NULL,
+                created_by TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_bug_comments_bug ON bug_comments(bug_id);
             CREATE TABLE IF NOT EXISTS test_cases (
                 id TEXT PRIMARY KEY,
                 issue_id TEXT NOT NULL,
@@ -1172,10 +1181,43 @@ class SessionStore {
 
     getBugsByIssue(issueId) {
         return this.db.prepare(
-            `SELECT b.*, u.display_name as creator_name FROM bugs b
+            `SELECT b.*, u.display_name as creator_name,
+                    (SELECT count(*) FROM bug_comments c WHERE c.bug_id = b.id) AS comment_count
+             FROM bugs b
              LEFT JOIN users u ON b.created_by = u.id
              WHERE b.issue_id = ? ORDER BY b.created_at DESC`
         ).all(issueId);
+    }
+
+    getBugComments(bugId) {
+        return this.db.prepare(
+            `SELECT c.*, u.display_name as author_name FROM bug_comments c
+             LEFT JOIN users u ON c.created_by = u.id
+             WHERE c.bug_id = ? ORDER BY c.created_at ASC`
+        ).all(bugId);
+    }
+
+    addBugComment({ bugId, body, createdBy = null }) {
+        const id = `BC-${Date.now().toString(36)}${Math.floor(Math.random() * 1000)}`;
+        this.db.prepare('INSERT INTO bug_comments (id, bug_id, body, created_by) VALUES (?, ?, ?, ?)').run(id, bugId, body, createdBy);
+        this.db.prepare('UPDATE bugs SET updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(bugId);
+        return this.getBugComment(id);
+    }
+
+    getBugComment(id) {
+        return this.db.prepare('SELECT c.*, u.display_name as author_name FROM bug_comments c LEFT JOIN users u ON c.created_by = u.id WHERE c.id = ?').get(id);
+    }
+
+    deleteBugComment(id) { this.db.prepare('DELETE FROM bug_comments WHERE id = ?').run(id); }
+
+    // Every distinct tag in use across all issues — the board's tag catalogue.
+    // ponytail: derived from usage, so a tag with no rows left disappears and there is
+    // no rename/colour; upgrade path is a `tags` table if that starts to hurt.
+    getIssueLabels() {
+        return this.db.prepare(
+            `SELECT DISTINCT j.value AS label FROM issues i, json_each(i.labels) j
+             WHERE json_valid(i.labels) AND j.value <> '' ORDER BY lower(j.value)`
+        ).all().map(r => String(r.label));
     }
 
     /**

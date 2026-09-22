@@ -567,6 +567,27 @@ export async function deleteBug(bugId) {
   return apiFetch(`/api/bugs/${bugId}`, { method: 'DELETE' });
 }
 
+export async function getBugComments(bugId) {
+  return apiFetch(`/api/bugs/${bugId}/comments`);
+}
+
+export async function addBugComment(bugId, body) {
+  return apiFetch(`/api/bugs/${bugId}/comments`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ body }),
+  });
+}
+
+export async function deleteBugComment(commentId) {
+  return apiFetch(`/api/bug-comments/${commentId}`, { method: 'DELETE' });
+}
+
+// Every tag in use across all issues — options for the board's Tags column and filter.
+export async function getIssueLabels() {
+  return apiFetch('/api/issues/labels');
+}
+
 // action: 'fork' (new session off the dev session) | 'send' (add to current dev session)
 export async function forkBug(bugId, model, action = 'fork') {
   return apiFetch(`/api/bugs/${bugId}/fork`, {

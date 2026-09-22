@@ -2365,6 +2365,10 @@ The user may ask follow-up questions about the changelog — answer based on the
                 if (req.body[key] !== undefined) updates[key] = req.body[key];
             }
             if (updates.attachments !== undefined) updates.attachments = sanitizeAttachments(updates.attachments);
+            if (updates.labels !== undefined) {
+                if (!Array.isArray(updates.labels)) return res.status(400).json({ error: 'labels must be an array of strings' });
+                updates.labels = [...new Set(updates.labels.map(v => String(v).trim().slice(0, 40)).filter(Boolean))];
+            }
             // A feature's dev team: ids only, deduped, and never longer than the roster.
             // The store keeps `assigned_to` pointing at the first of them.
             if (updates.assignees !== undefined) {
@@ -2562,6 +2566,44 @@ The user may ask follow-up questions about the changelog — answer based on the
             }
             res.json(bug);
         } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    // Comment thread under a bug.
+    app.get('/api/bugs/:id/comments', requireAuth, (req, res) => {
+        try { res.json(store.getBugComments(req.params.id)); }
+        catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    app.post('/api/bugs/:id/comments', requireAuth, (req, res) => {
+        try {
+            const body = String(req.body?.body || '').trim();
+            if (!body) return res.status(400).json({ error: 'body is required' });
+            if (body.length > 5000) return res.status(400).json({ error: 'comment too long (max 5000 chars)' });
+            const bug = store.getBug(req.params.id);
+            if (!bug) return res.status(404).json({ error: 'Bug not found' });
+            const comment = store.addBugComment({ bugId: bug.id, body, createdBy: req.user.id });
+            const issue = store.getIssue(bug.issue_id);
+            wsBroadcast('issue_updated', { issue });
+            logIssueEvent(store, issue, `💬 ${req.user.displayName || 'Someone'} on bug "${bug.title}": ${body.length > 200 ? body.slice(0, 200) + '…' : body}`);
+            res.json(comment);
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    // Only the author or an admin can remove a comment.
+    app.delete('/api/bug-comments/:id', requireAuth, (req, res) => {
+        try {
+            const c = store.getBugComment(req.params.id);
+            if (!c) return res.status(404).json({ error: 'Comment not found' });
+            if (c.created_by !== req.user.id && !req.user.isAdmin) return res.status(403).json({ error: 'Not your comment' });
+            store.deleteBugComment(c.id);
+            res.json({ success: true });
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
+    // Tag catalogue for the sprint board's Tags column / filter.
+    app.get('/api/issues/labels', requireAuth, (req, res) => {
+        try { res.json(store.getIssueLabels()); }
+        catch (err) { res.status(500).json({ error: err.message }); }
     });
 
     app.delete('/api/bugs/:id', requireAuth, (req, res) => {

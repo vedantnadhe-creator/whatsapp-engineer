@@ -3,11 +3,12 @@ import {
   Plus, Play, MessageSquare, Bug, FlaskConical, Trash2, ChevronDown, ChevronRight,
   GitFork, Check, X, Loader2, FileText, RefreshCw, CornerDownRight, ArrowLeft, ArrowRight, Archive,
   Paperclip, ListTree, FileSpreadsheet, Download, Upload, ExternalLink, Sun, Moon, Mail,
-  Rows3, Columns3, Square, Lightbulb,
+  Rows3, Columns3, Square, Lightbulb, MessageCircle,
 } from 'lucide-react'
 import { useTheme } from '../context/ThemeContext'
 import {
   startFeatureSession, getBugs, createBug, updateBug, deleteBug, forkBug,
+  getBugComments, addBugComment, deleteBugComment, getIssueLabels,
   getTestCases, createTestCase, updateTestCase, deleteTestCase, generateTestCases,
   getSubtasks, uploadFile,
   openSprintSheet, getSprintTemplate, importSprintSheet, moveIssuesToSprint, apiUrl,
@@ -46,8 +47,9 @@ function PillSelect({ value, onChange, options, fg, placeholder = '—', disable
 // devs). Collapsed it reads "Ravi +2"; open it is a checkbox list, so adding a second
 // dev never means un-picking the first. Unknown ids (a member dropped from the roster)
 // are shown rather than silently discarded.
-function MultiPillSelect({ value = [], onChange, options, fg, placeholder = '—', disabled }) {
+function MultiPillSelect({ value = [], onChange, options, fg, placeholder = '—', disabled, onCreate, emptyText = 'No devs on the roster.', title, collapsed }) {
   const [open, setOpen] = useState(false)
+  const [newName, setNewName] = useState('')
   // Picks the server has not confirmed yet. onUpdate refetches the whole list rather
   // than patching it, so without this a tick would not appear until the round-trip
   // lands, and a quick second tick would send a list built from the pre-first-tick
@@ -88,11 +90,13 @@ function MultiPillSelect({ value = [], onChange, options, fg, placeholder = '—
         onClick={() => { if (!open) setDraft(null); setOpen(o => !o) }}
         aria-haspopup="listbox"
         aria-expanded={open}
-        title={names.length ? names.join(', ') : 'Assign developers'}
+        title={names.length ? names.join(', ') : (title || placeholder)}
         className="text-[11px] font-medium rounded-full px-2 py-0.5 cursor-pointer outline-none border-0 text-center whitespace-nowrap overflow-hidden align-middle disabled:opacity-60 disabled:cursor-default"
-        style={{ backgroundColor: current.length ? fg + '22' : 'var(--c-surface-2)', color: current.length ? fg : 'var(--c-text-muted)', maxWidth: 170, textOverflow: 'ellipsis' }}
+        style={collapsed !== undefined
+          ? { backgroundColor: 'transparent', color: fg, maxWidth: 170, textOverflow: 'ellipsis' }
+          : { backgroundColor: current.length ? fg + '22' : 'var(--c-surface-2)', color: current.length ? fg : 'var(--c-text-muted)', maxWidth: 170, textOverflow: 'ellipsis' }}
       >
-        {current.length === 0 ? placeholder : `${names[0]}${current.length > 1 ? ` +${current.length - 1}` : ''}`}
+        {collapsed !== undefined ? collapsed : current.length === 0 ? placeholder : `${names[0]}${current.length > 1 ? ` +${current.length - 1}` : ''}`}
       </button>
       {open && (
         <div
@@ -101,7 +105,26 @@ function MultiPillSelect({ value = [], onChange, options, fg, placeholder = '—
           className="absolute z-30 mt-1 left-0 rounded-lg p-1 min-w-[170px] max-h-56 overflow-auto"
           style={{ backgroundColor: 'var(--c-surface)', border: '1px solid var(--c-border)', boxShadow: '0 8px 24px rgba(0,0,0,0.35)' }}
         >
-          {options.length === 0 && <div className="text-[11px] px-2 py-1" style={{ color: 'var(--c-text-muted)' }}>No devs on the roster.</div>}
+          {onCreate && (
+            <input
+              value={newName}
+              onChange={e => setNewName(e.target.value)}
+              onKeyDown={e => {
+                if (e.key !== 'Enter') return
+                const v = newName.trim()
+                if (!v) return
+                const existing = options.find(o => String(o.label ?? o.v ?? o.id).toLowerCase() === v.toLowerCase())
+                const id = existing ? (existing.v ?? existing.id) : onCreate(v)
+                if (id && !current.includes(id)) commit([...current, id])
+                setNewName('')
+              }}
+              placeholder="New tag… ↵"
+              aria-label="Create a new tag"
+              className="w-full text-[11px] px-2 py-1 mb-1 rounded outline-none"
+              style={{ backgroundColor: 'var(--c-bg)', color: 'var(--c-text)', border: '1px solid var(--c-border)' }}
+            />
+          )}
+          {options.length === 0 && !onCreate && <div className="text-[11px] px-2 py-1" style={{ color: 'var(--c-text-muted)' }}>{emptyText}</div>}
           {options.map(o => {
             const id = o.v ?? o.id
             const on = current.includes(id)
@@ -127,18 +150,22 @@ function MultiPillSelect({ value = [], onChange, options, fg, placeholder = '—
   )
 }
 
-// Compact dropdown for the filter bar — shows the placeholder until a value is picked.
-function FilterSelect({ value, onChange, placeholder, options }) {
+// Filter-bar multi-select: reads as the placeholder until something is ticked, then
+// "Dev Status · 2". Same popover as the Dev cell so the two feel like one control.
+function FilterMulti({ value, onChange, placeholder, options }) {
   return (
-    <select
-      value={value || ''}
-      onChange={(e) => onChange(e.target.value)}
-      className="text-[11px] rounded px-2 py-1 cursor-pointer outline-none appearance-none"
-      style={{ backgroundColor: value ? 'var(--c-accent)' : 'var(--c-surface-2)', color: value ? '#fff' : 'var(--c-text-secondary)', border: '1px solid var(--c-border)', maxWidth: 160 }}
-    >
-      <option value="" style={{ color: 'var(--c-text)', backgroundColor: 'var(--c-surface)' }}>{placeholder}</option>
-      {options.map(o => <option key={o.v} value={o.v} style={{ color: 'var(--c-text)', backgroundColor: 'var(--c-surface)' }}>{o.label}</option>)}
-    </select>
+    <span className="inline-flex items-center rounded" style={{ border: '1px solid var(--c-border)', backgroundColor: value.length ? 'var(--c-accent)' : 'var(--c-surface-2)' }}>
+      <MultiPillSelect
+        value={value}
+        onChange={onChange}
+        options={options}
+        fg={value.length ? '#ffffff' : 'var(--c-text-secondary)'}
+        placeholder={placeholder}
+        title={`Filter by ${placeholder}`}
+        emptyText="Nothing to filter by."
+        collapsed={value.length ? `${placeholder} · ${value.length}` : placeholder}
+      />
+    </span>
   )
 }
 
@@ -337,18 +364,32 @@ export default function SprintBoard({
   }, [])
 
   // Filters — view-only narrowing of the rows (sprint progress stays full-sprint).
-  const [filters, setFilters] = useState({ dev: '', qa: '', dev_assignee: '', qa_owner: '', platform: '', type: '' })
+  // Each filter is a list: picking two devs shows rows owned by either, two statuses
+  // shows both. An empty list means "any".
+  const NO_FILTERS = { dev: [], qa: [], dev_assignee: [], qa_owner: [], platform: [], type: [], tags: [] }
+  const [filters, setFilters] = useState(NO_FILTERS)
   const setFilter = (k, v) => setFilters(prev => ({ ...prev, [k]: v }))
-  const clearFilters = () => setFilters({ dev: '', qa: '', dev_assignee: '', qa_owner: '', platform: '', type: '' })
-  const activeFilterCount = Object.values(filters).filter(Boolean).length
+  const clearFilters = () => setFilters(NO_FILTERS)
+  const activeFilterCount = Object.values(filters).filter(v => v.length).length
   const platforms = useMemo(() => [...new Set((features || []).map(f => f.platform).filter(Boolean))].sort(), [features])
+  // Tag catalogue = every tag on any issue (server) ∪ tags on the rows in view, so a tag
+  // typed a second ago is offered on the next row before the refetch lands.
+  const [serverTags, setServerTags] = useState([])
+  useEffect(() => { getIssueLabels().then(t => setServerTags(Array.isArray(t) ? t : [])).catch(() => {}) }, [features])
+  const tagOptions = useMemo(() => {
+    const all = new Set(serverTags)
+    for (const f of features || []) for (const t of parseLabels(f)) all.add(t)
+    return [...all].sort((a, b) => a.localeCompare(b)).map(t => ({ v: t, label: t }))
+  }, [serverTags, features])
+  const any = (list, val) => !list.length || list.includes(val)
   const filteredFeatures = useMemo(() => features.filter(f =>
-    (!filters.dev || f.dev_status === filters.dev) &&
-    (!filters.qa || (f.qa_status || '') === filters.qa) &&
-    (!filters.dev_assignee || assigneeIds(f).includes(filters.dev_assignee)) &&
-    (!filters.qa_owner || f.qa_owner === filters.qa_owner) &&
-    (!filters.platform || f.platform === filters.platform) &&
-    (!filters.type || f.type === filters.type)
+    any(filters.dev, f.dev_status) &&
+    any(filters.qa, f.qa_status || '') &&
+    (!filters.dev_assignee.length || assigneeIds(f).some(id => filters.dev_assignee.includes(id))) &&
+    any(filters.qa_owner, f.qa_owner) &&
+    any(filters.platform, f.platform) &&
+    any(filters.type, f.type) &&
+    (!filters.tags.length || parseLabels(f).some(t => filters.tags.includes(t)))
   ), [features, filters])
 
   // Select-all covers what the filters actually show, not the whole backlog.
@@ -648,12 +689,13 @@ export default function SprintBoard({
         {features.length > 0 && (
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-[11px] font-medium" style={{ color: 'var(--c-text-muted)' }}>Filter:</span>
-            <FilterSelect value={filters.dev} onChange={(v) => setFilter('dev', v)} placeholder="Dev Status" options={DEV_STATUS.map(s => ({ v: s.v, label: s.label }))} />
-            <FilterSelect value={filters.qa} onChange={(v) => setFilter('qa', v)} placeholder="QA Status" options={QA_STATUS.filter(s => s.v).map(s => ({ v: s.v, label: s.label }))} />
-            <FilterSelect value={filters.dev_assignee} onChange={(v) => setFilter('dev_assignee', v)} placeholder="Dev" options={(members || []).filter(m => m.role !== 'tester').map(m => ({ v: m.id, label: memberName(m) }))} />
-            <FilterSelect value={filters.qa_owner} onChange={(v) => setFilter('qa_owner', v)} placeholder="QA Owner" options={(members || []).filter(m => m.role === 'tester').map(m => ({ v: m.id, label: memberName(m) }))} />
-            <FilterSelect value={filters.type} onChange={(v) => setFilter('type', v)} placeholder="Type" options={TYPES.map(t => ({ v: t.v, label: t.label }))} />
-            {platforms.length > 0 && <FilterSelect value={filters.platform} onChange={(v) => setFilter('platform', v)} placeholder="Platform" options={platforms.map(p => ({ v: p, label: p }))} />}
+            <FilterMulti value={filters.dev} onChange={(v) => setFilter('dev', v)} placeholder="Dev Status" options={DEV_STATUS.map(s => ({ v: s.v, label: s.label }))} />
+            <FilterMulti value={filters.qa} onChange={(v) => setFilter('qa', v)} placeholder="QA Status" options={QA_STATUS.filter(s => s.v).map(s => ({ v: s.v, label: s.label }))} />
+            <FilterMulti value={filters.dev_assignee} onChange={(v) => setFilter('dev_assignee', v)} placeholder="Dev" options={(members || []).filter(m => m.role !== 'tester').map(m => ({ v: m.id, label: memberName(m) }))} />
+            <FilterMulti value={filters.qa_owner} onChange={(v) => setFilter('qa_owner', v)} placeholder="QA Owner" options={(members || []).filter(m => m.role === 'tester').map(m => ({ v: m.id, label: memberName(m) }))} />
+            <FilterMulti value={filters.type} onChange={(v) => setFilter('type', v)} placeholder="Type" options={TYPES.map(t => ({ v: t.v, label: t.label }))} />
+            {platforms.length > 0 && <FilterMulti value={filters.platform} onChange={(v) => setFilter('platform', v)} placeholder="Platform" options={platforms.map(p => ({ v: p, label: p }))} />}
+            {tagOptions.length > 0 && <FilterMulti value={filters.tags} onChange={(v) => setFilter('tags', v)} placeholder="Tags" options={tagOptions} />}
             {activeFilterCount > 0 && (
               <button onClick={clearFilters} className="text-[11px] flex items-center gap-1 cursor-pointer px-2 py-1 rounded" style={{ color: 'var(--c-text-secondary)', border: '1px solid var(--c-border)' }}>
                 <X size={11} /> Clear ({activeFilterCount}) · {filteredFeatures.length}/{features.length}
@@ -760,7 +802,7 @@ export default function SprintBoard({
         <table className="w-full border-collapse" style={{ minWidth: 1500, borderTop: '1px solid var(--c-border)', borderLeft: '1px solid var(--c-border)' }}>
           <thead className="sticky top-0 z-10">
             <tr className="text-left" style={{ color: 'var(--c-text-secondary)', backgroundColor: 'var(--c-surface)' }}>
-              {['S.NO', 'Platform', 'Feature / Story', 'Created', 'Type', 'Dev', 'QA Owner', 'Dev Status', 'Deadline', 'TC', 'Testing Deadline', 'QA Status', 'Bugs', 'Crit', 'Done %', 'QA Comments', ''].map((h, i) => (
+              {['S.NO', 'Platform', 'Feature / Story', 'Created', 'Type', 'Tags', 'Dev', 'QA Owner', 'Dev Status', 'Deadline', 'TC', 'Testing Deadline', 'QA Status', 'Bugs', 'Crit', 'Done %', 'QA Comments', ''].map((h, i) => (
                 <th key={i} className="px-2.5 py-2 font-semibold whitespace-nowrap text-[11px]" style={{ borderBottom: '1px solid var(--c-border)', borderRight: '1px solid var(--c-border)' }}>{h}</th>
               ))}
             </tr>
@@ -776,15 +818,16 @@ export default function SprintBoard({
                 onUpdate={onUpdateIssue} onDelete={onDeleteIssue} onCreateIssue={onCreateIssue}
                 onStartSession={handleStartSession} busyStart={busyStart === f.id}
                 onGoToSession={onGoToSession} model={model} refreshIssues={refreshIssues}
+                tagOptions={tagOptions} user={user}
               />
             ))}
             {features.length > 0 && filteredFeatures.length === 0 && (
-              <tr><td colSpan={17} className="px-4 py-10 text-center text-xs" style={{ color: 'var(--c-text-muted)' }}>
+              <tr><td colSpan={18} className="px-4 py-10 text-center text-xs" style={{ color: 'var(--c-text-muted)' }}>
                 No features match the filters. <button onClick={clearFilters} className="underline cursor-pointer" style={{ color: 'var(--c-accent)' }}>Clear filters</button>
               </td></tr>
             )}
             {features.length === 0 && (
-              <tr><td colSpan={17} className="px-4 py-10 text-center text-xs" style={{ color: 'var(--c-text-muted)' }}>
+              <tr><td colSpan={18} className="px-4 py-10 text-center text-xs" style={{ color: 'var(--c-text-muted)' }}>
                 {isBacklogView ? 'Backlog is empty — move features here with the archive icon.' : activeSprintId === '__all__' ? 'No features yet.' : 'No features in this sprint yet — add one below.'}
               </td></tr>
             )}
@@ -848,7 +891,7 @@ export default function SprintBoard({
 }
 
 // ── Feature row ──────────────────────────────────────────────────────────────
-function FeatureRow({ f, idx, members, isTester, expanded, isBacklogView, selected, onSelect, sprints, onMoveToSprint, onToggle, onUpdate, onDelete, onCreateIssue, onStartSession, busyStart, onGoToSession, model, refreshIssues }) {
+function FeatureRow({ f, idx, members, isTester, expanded, isBacklogView, selected, onSelect, sprints, onMoveToSprint, onToggle, onUpdate, onDelete, onCreateIssue, onStartSession, busyStart, onGoToSession, model, refreshIssues, tagOptions = [], user }) {
   const dev = devStatusMeta(f.dev_status)
   const upd = (patch) => onUpdate(f.id, patch)
   const [askJev, setAskJev] = useState(false)   // "Ask Jev to test" dialog for this feature
@@ -901,6 +944,10 @@ function FeatureRow({ f, idx, members, isTester, expanded, isBacklogView, select
         </td>
         <td className="px-2 py-2" style={cellBorder}>
           <PillSelect value={f.type || 'feature'} onChange={(v) => upd({ type: v })} options={TYPES} fg={TYPE_PILL[f.type || 'feature'] || TYPE_PILL.feature} />
+        </td>
+        <td className="px-2 py-2" style={cellBorder}>
+          {/* Tags are free text — type a new one in the popover and press Enter. */}
+          <MultiPillSelect value={parseLabels(f)} onChange={(tags) => upd({ labels: tags })} options={tagOptions} fg={TAG_PILL} placeholder="—" title="Tags" onCreate={(v) => v} disabled={isTester} />
         </td>
         <td className="px-2 py-2" style={cellBorder}>
           <MultiPillSelect value={assigneeIds(f)} onChange={(ids) => upd({ assignees: ids })} options={devMembers} fg={ASSIGNEE_PILL} placeholder="—" />
@@ -975,8 +1022,8 @@ function FeatureRow({ f, idx, members, isTester, expanded, isBacklogView, select
       </tr>
       {expanded && (
         <tr>
-          <td colSpan={18} style={{ borderBottom: '2px solid var(--c-border)', borderRight: '1px solid var(--c-border)', backgroundColor: 'var(--c-surface)' }}>
-            <FeatureDetail f={f} isTester={isTester} members={members} onUpdate={upd} onCreateIssue={onCreateIssue} onGoToSession={onGoToSession} model={model} refreshIssues={refreshIssues} />
+          <td colSpan={19} style={{ borderBottom: '2px solid var(--c-border)', borderRight: '1px solid var(--c-border)', backgroundColor: 'var(--c-surface)' }}>
+            <FeatureDetail f={f} isTester={isTester} members={members} onUpdate={upd} onCreateIssue={onCreateIssue} onGoToSession={onGoToSession} model={model} refreshIssues={refreshIssues} user={user} />
           </td>
         </tr>
       )}
@@ -1038,7 +1085,7 @@ function DescriptionBlock({ f, onUpdate }) {
 }
 
 // ── Detail drawer: subtasks + bugs + test cases ─────────────────────────────
-function FeatureDetail({ f, isTester, members, onUpdate, onCreateIssue, onGoToSession, model, refreshIssues }) {
+function FeatureDetail({ f, isTester, members, onUpdate, onCreateIssue, onGoToSession, model, refreshIssues, user }) {
   const devMembers = (members || []).filter(m => m.role !== 'tester')
   const testerMembers = (members || []).filter(m => m.role === 'tester')
   return (
@@ -1048,7 +1095,7 @@ function FeatureDetail({ f, isTester, members, onUpdate, onCreateIssue, onGoToSe
       <AttachmentsBlock f={f} isTester={isTester} onUpdate={onUpdate} />
       <SubtasksPanel f={f} isTester={isTester} members={members} devMembers={devMembers} testerMembers={testerMembers} onUpdate={onUpdate} onCreateIssue={onCreateIssue} onGoToSession={onGoToSession} model={model} refreshIssues={refreshIssues} />
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <BugsPanel f={f} isTester={isTester} devMembers={devMembers} testerMembers={testerMembers} onGoToSession={onGoToSession} model={model} refreshIssues={refreshIssues} />
+        <BugsPanel f={f} isTester={isTester} devMembers={devMembers} testerMembers={testerMembers} onGoToSession={onGoToSession} model={model} refreshIssues={refreshIssues} user={user} />
         <TestCasesPanel f={f} isTester={isTester} onGoToSession={onGoToSession} model={model} refreshIssues={refreshIssues} />
       </div>
     </div>
@@ -1100,6 +1147,7 @@ function SubtasksPanel({ f, isTester, members, devMembers = [], testerMembers = 
           {subs.map(s => (
             <div key={s.id} className="flex items-center gap-2 px-2 py-1.5 rounded flex-wrap" style={{ backgroundColor: 'var(--c-bg)', border: '1px solid var(--c-border)' }}>
               <span className="flex-1 min-w-[140px] text-xs" style={{ color: 'var(--c-text)' }}>{s.title}</span>
+              <span className="text-[10px] font-mono tabular-nums" style={{ color: 'var(--c-text-muted)' }} title={createdTitle(s)}>{fmtIST(s.created_at)}</span>
               <AttachmentChips items={parseAttachments(s)} />
               {!isTester && <AttachButton title="Attach files to this subtask" onPicked={(added) => added.length && setOwner(s, { attachments: [...parseAttachments(s), ...added] })} />}
               <PillSelect value={s.assigned_to || ''} onChange={(v) => setOwner(s, { assigned_to: v || null })} options={devMembers} fg={ASSIGNEE_PILL} placeholder="Dev" disabled={isTester} />
@@ -1121,6 +1169,9 @@ function SubtasksPanel({ f, isTester, members, devMembers = [], testerMembers = 
 }
 
 const parseAttachments = (b) => { try { const a = JSON.parse(b.attachments || '[]'); return Array.isArray(a) ? a : [] } catch { return [] } }
+// `labels` arrives as a JSON string from SQLite, or already parsed from the session list.
+const parseLabels = (f) => { try { const a = typeof f.labels === 'string' ? JSON.parse(f.labels || '[]') : f.labels; return Array.isArray(a) ? a.map(String) : [] } catch { return [] } }
+const TAG_PILL = '#a78bfa'
 
 // Clipboard screenshots all arrive named "image.png", and attachments are listed by
 // name — three pasted shots would be three identical chips. Stamp them instead.
@@ -1191,7 +1242,7 @@ function AttachmentsBlock({ f, isTester, onUpdate }) {
   )
 }
 
-function BugsPanel({ f, isTester, devMembers = [], testerMembers = [], onGoToSession, model, refreshIssues }) {
+function BugsPanel({ f, isTester, devMembers = [], testerMembers = [], onGoToSession, model, refreshIssues, user }) {
   const [bugs, setBugs] = useState([])
   const [loading, setLoading] = useState(true)
   const [title, setTitle] = useState('')
@@ -1318,7 +1369,8 @@ function BugsPanel({ f, isTester, devMembers = [], testerMembers = [], onGoToSes
                   <button onClick={() => remove(b)} title="Delete" className="p-1 rounded cursor-pointer" style={{ color: 'var(--c-text-muted)' }}><X size={12} /></button>
                 </div>
                 <div className="flex items-center gap-2 pl-1">
-                  <span className="text-[10px]" style={{ color: 'var(--c-text-muted)' }}>Dev</span>
+                  <span className="text-[10px] font-mono tabular-nums" style={{ color: 'var(--c-text-muted)' }} title={createdTitle(b)}>{fmtIST(b.created_at)}{b.creator_name ? ` · ${b.creator_name}` : ''}</span>
+                  <span className="text-[10px] ml-1" style={{ color: 'var(--c-text-muted)' }}>Dev</span>
                   <PillSelect value={b.assigned_to || ''} onChange={(v) => setOwner(b, { assigned_to: v || null })} options={devMembers} fg={ASSIGNEE_PILL} placeholder="—" />
                   <span className="text-[10px] ml-1" style={{ color: 'var(--c-text-muted)' }}>QA</span>
                   <PillSelect value={b.qa_owner || ''} onChange={(v) => setOwner(b, { qa_owner: v || '' })} options={testerMembers} fg={QA_OWNER_PILL} placeholder="—" />
@@ -1332,9 +1384,69 @@ function BugsPanel({ f, isTester, devMembers = [], testerMembers = [], onGoToSes
                     ))}
                   </div>
                 )}
+                <BugComments bug={b} user={user} onChanged={load} />
               </div>
             )
           })}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Discussion under a bug — "can't reproduce on UAT", "fixed in abc123, please re-test".
+// Collapsed to a count; the thread loads only when opened.
+function BugComments({ bug, user, onChanged }) {
+  const [open, setOpen] = useState(false)
+  const [items, setItems] = useState(null)
+  const [text, setText] = useState('')
+  const [busy, setBusy] = useState(false)
+  const count = items ? items.length : (bug.comment_count || 0)
+
+  const load = useCallback(async () => { setItems(await getBugComments(bug.id) || []) }, [bug.id])
+  useEffect(() => { if (open) load() }, [open, load])
+
+  const post = async () => {
+    const body = text.trim()
+    if (!body || busy) return
+    setBusy(true)
+    try { await addBugComment(bug.id, body); setText(''); await load(); onChanged?.() }
+    finally { setBusy(false) }
+  }
+  const remove = async (c) => { await deleteBugComment(c.id); await load(); onChanged?.() }
+
+  return (
+    <div className="pl-1">
+      <button onClick={() => setOpen(o => !o)} aria-expanded={open} className="inline-flex items-center gap-1 text-[10px] cursor-pointer rounded px-1 py-0.5 hover:bg-[var(--c-surface-2)]" style={{ color: count ? 'var(--c-accent)' : 'var(--c-text-muted)' }}>
+        <MessageCircle size={11} />{count ? `${count} comment${count === 1 ? '' : 's'}` : 'Comment'}
+      </button>
+      {open && (
+        <div className="mt-1 flex flex-col gap-1">
+          {items === null && <div className="text-[10px]" style={{ color: 'var(--c-text-muted)' }}>Loading…</div>}
+          {items?.map(c => (
+            <div key={c.id} className="group/c text-[11px] px-2 py-1 rounded" style={{ backgroundColor: 'var(--c-surface)', border: '1px solid var(--c-border)' }}>
+              <div className="flex items-center gap-2 text-[10px] font-mono tabular-nums" style={{ color: 'var(--c-text-muted)' }}>
+                <span style={{ color: 'var(--c-text-secondary)' }}>{c.author_name || 'Unknown'}</span>
+                <span title={`${fmtIST(c.created_at, { year: true, seconds: true })} IST`}>{fmtIST(c.created_at)}</span>
+                {(user?.isAdmin || c.created_by === user?.id) && (
+                  <button onClick={() => remove(c)} title="Delete comment" className="ml-auto opacity-0 group-hover/c:opacity-100 focus:opacity-100 cursor-pointer" style={{ color: 'var(--c-text-muted)' }}><X size={10} /></button>
+                )}
+              </div>
+              <div className="whitespace-pre-wrap break-words" style={{ color: 'var(--c-text)' }}>{c.body}</div>
+            </div>
+          ))}
+          <div className="flex items-center gap-1">
+            <input
+              value={text}
+              onChange={e => setText(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && !e.shiftKey && post()}
+              placeholder="Add a comment… ↵"
+              aria-label="Add a comment to this bug"
+              className="flex-1 text-[11px] px-2 py-1 rounded outline-none"
+              style={{ backgroundColor: 'var(--c-bg)', color: 'var(--c-text)', border: '1px solid var(--c-border)' }}
+            />
+            <button onClick={post} disabled={busy || !text.trim()} className="text-[11px] px-2 py-1 rounded cursor-pointer disabled:opacity-40" style={{ backgroundColor: 'var(--c-accent)', color: '#fff' }}>{busy ? <Loader2 size={11} className="animate-spin" /> : 'Post'}</button>
+          </div>
         </div>
       )}
     </div>
