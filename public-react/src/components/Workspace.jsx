@@ -890,15 +890,32 @@ export default function Workspace({
   const deployAgo = (at) => { const m = Math.round((Date.now() - at) / 60000); return m < 1 ? 'just now' : m < 60 ? `${m}m ago` : m < 1440 ? `${Math.round(m / 60)}h ago` : `${Math.round(m / 1440)}d ago`; };
   const effBrowser = jevDevice === 'ios' ? 'webkit' : jevBrowser;
   const [askJev, setAskJev] = useState(false);   // the Ask-Jev dialog (env/device/browser + notes); the server builds the task
-  const deployBanner = lastDeploy && !isNewSession && session?.mode !== 'tester' ? (
+  // The strip is toggled by the flask button in the header, and drops down by itself when a deploy is announced.
+  const [stripOpen, setStripOpen] = useState(false);
+  const [stripEnv, setStripEnv] = useState('dev');
+  const deployAt = lastDeploy?.at ?? null;
+  useEffect(() => { if (deployAt) setStripOpen(true); }, [deployAt]);
+  const runEnv = lastDeploy?.env ?? stripEnv;   // a deploy pins the env to what was deployed; otherwise it is picked here
+  const canShowStrip = !isNewSession && session?.mode !== 'tester';
+  const deployBanner = stripOpen && canShowStrip ? (
     <div
       className="flex items-center gap-2 px-4 py-2 text-xs flex-wrap flex-shrink-0"
       style={{ backgroundColor: colors.surface, borderBottom: `1px solid ${colors.border}`, color: colors.textSecondary }}
     >
       <FlaskConical size={13} style={{ color: colors.accent }} />
-      <span>
-        Deployed to <span className="font-mono font-semibold" style={{ color: colors.text }}>{String(lastDeploy.env).toUpperCase()}</span> {deployAgo(lastDeploy.at)}
-      </span>
+      {lastDeploy ? (
+        <span>
+          Deployed to <span className="font-mono font-semibold" style={{ color: colors.text }}>{String(lastDeploy.env).toUpperCase()}</span> {deployAgo(lastDeploy.at)}
+        </span>
+      ) : (
+        <>
+          <span>Test on</span>
+          <select value={stripEnv} onChange={(e) => setStripEnv(e.target.value)} className="text-[11px] px-1.5 py-1 rounded" style={{ backgroundColor: colors.surface2, color: colors.text, border: `1px solid ${colors.border}` }} title="Environment">
+            <option value="dev">DEV</option>
+            <option value="uat">UAT</option>
+          </select>
+        </>
+      )}
       <div className="flex-1" />
       <select value={jevDevice} onChange={(e) => setJevDevice(e.target.value)} className="text-[11px] px-1.5 py-1 rounded" style={{ backgroundColor: colors.surface2, color: colors.text, border: `1px solid ${colors.border}` }} title="Device">
         <option value="pc">PC</option>
@@ -910,7 +927,7 @@ export default function Workspace({
         <option value="firefox">Firefox</option>
         <option value="webkit">Safari (WebKit)</option>
       </select>
-      {onTestFork && (
+      {onTestFork && lastDeploy && (
         <button
           onClick={() => setAskJev(true)}
           disabled={testForking}
@@ -923,7 +940,7 @@ export default function Workspace({
       )}
       {onRunRegression && (
         <button
-          onClick={async () => { setRegressionBusy(true); try { await onRunRegression(lastDeploy.env, jevDevice, effBrowser); } finally { setRegressionBusy(false); } }}
+          onClick={async () => { setRegressionBusy(true); try { await onRunRegression(runEnv, jevDevice, effBrowser); } finally { setRegressionBusy(false); } }}
           disabled={regressionBusy}
           className="px-3 py-1.5 rounded text-xs font-medium cursor-pointer disabled:opacity-50"
           style={{ backgroundColor: colors.surface2, color: colors.text, border: `1px solid ${colors.border}` }}
@@ -934,13 +951,24 @@ export default function Workspace({
       )}
       {onRunRegression && jevDevice !== 'ios' && (
         <button
-          onClick={async () => { setRegressionBusy(true); try { await onRunRegression(lastDeploy.env, jevDevice, 'chromium', 'sanity'); } finally { setRegressionBusy(false); } }}
+          onClick={async () => { setRegressionBusy(true); try { await onRunRegression(runEnv, jevDevice, 'chromium', 'sanity'); } finally { setRegressionBusy(false); } }}
           disabled={regressionBusy}
           className="px-3 py-1.5 rounded text-xs font-medium cursor-pointer disabled:opacity-50"
           style={{ backgroundColor: colors.surface2, color: colors.text, border: `1px solid ${colors.border}` }}
           title="Sanity: float + take + verify every assessment type in parallel, plus a corporate Mix & Match float (no LLM involved)"
         >
           Sanity (all types)
+        </button>
+      )}
+      {onTest && (
+        <button
+          onClick={async () => { if (testing) return; setTesting(true); try { await onTest(); } finally { setTesting(false); } }}
+          disabled={testing}
+          className="px-3 py-1.5 rounded text-xs font-medium cursor-pointer disabled:opacity-50"
+          style={{ backgroundColor: colors.surface2, color: colors.text, border: `1px solid ${colors.border}` }}
+          title="Verify this session's frontend work with Reticle (Ollama / minimax-m3, DEV dev-server, pre-deploy)"
+        >
+          {testing ? 'Starting…' : 'Verify (Reticle)'}
         </button>
       )}
     </div>
@@ -1008,18 +1036,15 @@ export default function Workspace({
             <GitBranch size={14} style={{ color: colors.textSecondary }} />
           </button>
         )}
-        {onTest && (
+        {canShowStrip && (
           <button
-            onClick={async () => {
-              if (testing) return;
-              setTesting(true);
-              try { await onTest(); } finally { setTesting(false); }
-            }}
-            disabled={testing}
-            className="p-1 rounded cursor-pointer hover:opacity-80 transition-opacity disabled:opacity-50"
-            title="Test — runtime-verify this session's frontend work with Reticle (Ollama / minimax-m3, DEV dev-server, pre-deploy)"
+            onClick={() => setStripOpen((v) => !v)}
+            aria-expanded={stripOpen}
+            aria-label={stripOpen ? 'Hide the testing strip' : 'Show the testing strip'}
+            className="p-1 rounded cursor-pointer hover:opacity-80 transition-opacity"
+            title={stripOpen ? 'Hide the testing strip' : 'Testing — Ask Jev, regression, sanity'}
           >
-            <FlaskConical size={14} style={{ color: testing ? 'var(--c-accent)' : colors.textSecondary }} />
+            <FlaskConical size={14} style={{ color: stripOpen ? 'var(--c-accent)' : colors.textSecondary }} />
           </button>
         )}
         <button
