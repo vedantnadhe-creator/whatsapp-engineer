@@ -2,16 +2,19 @@ import { useMemo } from 'react';
 import { DollarSign, RefreshCw, TrendingUp, Layers, ArrowUpRight, Info } from 'lucide-react';
 
 const MODEL_NAMES = {
+  'claude-opus-5-5': 'Opus 5.5',
   'claude-opus-5': 'Opus 5',
   'claude-opus-4-8': 'Opus 4.8',
   'claude-opus-4-7': 'Opus 4.7',
+  'claude-opus-4-6': 'Opus 4.6',
   'claude-sonnet-5': 'Sonnet 5',
   'claude-fable-5-1': 'Fable 5.1',
   'claude-fable-5': 'Fable 5',
-  // Historical rows only. The bare alias tracks the latest Fable, so old spend under
-  // it can be either generation — don't claim a version the data doesn't carry.
+  // Historical rows only. A bare alias tracks the latest of its family, so old spend
+  // under it can be any generation — don't claim a version the data doesn't carry.
+  // (`opus` billed as 4.6 for most of its history and as 5.5 from 2026-09-23.)
   'fable': 'Fable',
-  'opus': 'Opus 4.6',
+  'opus': 'Opus (alias)',
   'sonnet': 'Sonnet 4.6',
   'haiku': 'Haiku 4.5',
   'unknown': 'Unknown',

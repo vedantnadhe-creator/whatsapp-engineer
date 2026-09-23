@@ -84,8 +84,9 @@ const ROLE_MODEL_POLICY = {
     // client-facing writing), so the list is deliberately just two strong models:
     // Opus 5 as the default, and GPT-5.6 Terra as the alternate. Sonnet 5 and Haiku were
     // removed on request — a half-finished sourcing run costs more than the token saving.
-    // NOTE: `opus` is Opus 4.6 and `claude-opus-5` is Opus 5 — the ids do not sort the
-    // way the names do, and picking the wrong one silently downgrades the role.
+    // NOTE: the ids do not sort the way the names do, and picking the wrong one
+    // silently downgrades the role. Use exact ids (`claude-opus-5-5`), never the bare
+    // `opus` alias — it tracks the newest Opus and moved to 5.5 on 2026-09-23.
     // Codex is a different binary with no hook system, so the PreToolUse guard does not
     // apply there; claude_manager confines those sessions with a Codex sandbox instead.
     // isCodexModel() is NOT used here: it would re-admit every GPT variant, so the one
@@ -547,18 +548,20 @@ a{color:#60a5fa;text-decoration:none}</style></head>
     // Selecting an `ollama:` model routes that session through the local Ollama server.
     app.get('/api/models', requireAuth, async (req, res) => {
         const claudeModels = [
-            { id: 'claude-opus-5', name: 'Opus 5', description: 'Latest Opus — new frontier default, strongest on coding & knowledge work' },
-            { id: 'claude-opus-4-8', name: 'Opus 4.8', description: 'Previous Opus generation — most capable for complex work' },
-            // Pin the exact ids, never the bare `fable` alias: the CLI resolves that
-            // alias to whatever the latest Fable is (today 5.1), so a row labelled
-            // "Fable 5" would silently start running a different model on a Claude
-            // Code update. Sessions already stored as `fable` keep resuming — it is
-            // still a valid alias, it just isn't offered any more.
+            { id: 'claude-opus-5-5', name: 'Opus 5.5', description: 'Newest Opus — strongest on coding & knowledge work', default: true },
+            { id: 'claude-opus-5', name: 'Opus 5', description: 'Previous Opus generation' },
+            { id: 'claude-opus-4-8', name: 'Opus 4.8', description: 'Older Opus generation — most capable of the 4.x line' },
+            // Pin the exact ids, never a bare alias: the CLI resolves an alias to
+            // whatever the latest of that family is, so a row keeps its label while
+            // silently changing model on a Claude Code update. Both families have now
+            // done it — `fable` moved to 5.1, and `opus` moved to 5.5 while the row
+            // still read "Opus 4.6". Sessions already stored under an alias keep
+            // resuming; the aliases just aren't offered any more.
             { id: 'claude-fable-5-1', name: 'Fable 5.1', description: 'Newest Fable — best judgement on the hardest, long-running work · ~2× faster than Opus, ~2× the tokens' },
             { id: 'claude-fable-5', name: 'Fable 5', description: 'Previous Fable generation' },
-            { id: 'claude-sonnet-5', name: 'Sonnet 5', description: 'Latest Sonnet — strong for everyday tasks', default: true },
+            { id: 'claude-sonnet-5', name: 'Sonnet 5', description: 'Latest Sonnet — strong for everyday tasks' },
             { id: 'claude-opus-4-7', name: 'Opus 4.7', description: 'Previous Opus generation' },
-            { id: 'opus', name: 'Opus 4.6', description: 'Older Opus generation' },
+            { id: 'claude-opus-4-6', name: 'Opus 4.6', description: 'Older Opus generation' },
             { id: 'sonnet', name: 'Sonnet 4.6', description: 'Best for everyday tasks' },
             { id: 'haiku', name: 'Haiku 4.5', description: 'Fastest for quick answers' },
         ];
