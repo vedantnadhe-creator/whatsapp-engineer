@@ -16,20 +16,22 @@ const ago = (ms) => {
 };
 const dur = (a, b) => (a && b ? `${((b - a) / 1000).toFixed(1)} s` : '');
 
+// PASS = goal met · BUG (FAIL) = evidence the product is wrong · BLOCKED = could not finish testing (not a bug)
+const RESULT_HINT = { PASS: 'Goal met — every check passed', FAIL: 'Bug — the product did the wrong thing', BLOCKED: 'Blocked — could not finish testing (timeout, element not found, environment); not a product bug', ABORTED: 'Stopped by a user', 'NOT RUN': 'Not run — an earlier step did not pass' };
 function ResultBadge({ status, result }) {
   const live = status === 'running';
-  const color = live ? 'var(--c-accent)' : result === 'PASS' ? 'var(--c-success, #22c55e)' : result === 'FAIL' ? 'var(--c-danger, #ef4444)' : result === 'ABORTED' ? 'var(--c-warning, #f59e0b)' : 'var(--c-text-muted)';
+  const color = live ? 'var(--c-accent)' : result === 'PASS' ? 'var(--c-success, #22c55e)' : result === 'FAIL' ? 'var(--c-danger, #ef4444)' : (result === 'ABORTED' || result === 'BLOCKED') ? 'var(--c-warning, #f59e0b)' : 'var(--c-text-muted)';
   return (
-    <span className="inline-flex items-center gap-1 text-[11px] font-mono font-semibold px-1.5 py-0.5 rounded" style={{ color, border: `1px solid ${color}` }}>
+    <span title={RESULT_HINT[result] || ''} className="inline-flex items-center gap-1 text-[11px] font-mono font-semibold px-1.5 py-0.5 rounded" style={{ color, border: `1px solid ${color}` }}>
       {live ? <Loader2 size={11} className="animate-spin" /> : result === 'PASS' ? <CheckCircle2 size={11} /> : result === 'FAIL' ? <XCircle size={11} /> : <MinusCircle size={11} />}
-      {live ? 'RUNNING' : result || status}
+      {live ? 'RUNNING' : result === 'FAIL' ? 'BUG' : result || status}
     </span>
   );
 }
 
-function StepIcon({ status }) {
+function StepIcon({ status, category }) {
   if (status === 'pass') return <CheckCircle2 size={14} style={{ color: 'var(--c-success, #22c55e)' }} />;
-  if (status === 'FAIL') return <XCircle size={14} style={{ color: 'var(--c-danger, #ef4444)' }} />;
+  if (status === 'FAIL') return <XCircle size={14} style={{ color: category === 'blocker' ? 'var(--c-warning, #f59e0b)' : 'var(--c-danger, #ef4444)' }} />;
   return <MinusCircle size={14} style={{ color: 'var(--c-text-muted)' }} />;
 }
 
@@ -136,6 +138,16 @@ function RunView({ runId, onBack, onGoToSession, onOpenRun }) {
       </div>
 
       {error && <div className="px-4 py-2 text-xs" style={{ color: 'var(--c-danger, #ef4444)' }}>{error}</div>}
+      {(run?.goal || (!live && run?.reason)) && (
+        <div className="px-4 py-2 text-xs flex flex-col gap-1" style={{ borderBottom: '1px solid var(--c-border)', backgroundColor: 'var(--c-surface)' }}>
+          {run?.goal && <div style={{ color: 'var(--c-text)' }}><span className="font-semibold">Goal:</span> {run.goal}</div>}
+          {!live && run?.result && (
+            <div style={{ color: run.result === 'PASS' ? 'var(--c-success, #22c55e)' : run.result === 'FAIL' ? 'var(--c-danger, #ef4444)' : 'var(--c-warning, #f59e0b)' }}>
+              {run.result === 'PASS' ? 'Goal met.' : run.result === 'FAIL' ? 'Bug found' : run.result === 'BLOCKED' ? 'Blocked — not a product bug' : run.result}{run.reason ? ` — ${run.reason}` : ''}
+            </div>
+          )}
+        </div>
+      )}
 
       {run?.kind === 'sanity' ? (
         <div className="flex-1 min-h-0 overflow-y-auto">
@@ -165,13 +177,13 @@ function RunView({ runId, onBack, onGoToSession, onOpenRun }) {
                   className="w-full text-left px-3 py-1.5 flex items-start gap-2 cursor-pointer"
                   style={{ backgroundColor: isSel ? 'var(--c-surface-2)' : 'transparent' }}
                 >
-                  <span className="mt-0.5"><StepIcon status={e.status} /></span>
+                  <span className="mt-0.5"><StepIcon status={e.status} category={e.category} /></span>
                   <span className="min-w-0 flex-1">
                     <span className="block text-xs truncate" style={{ color: 'var(--c-text)' }}>
                       <span className="font-mono" style={{ color: 'var(--c-text-muted)' }}>{e.i}. </span>{stepLabel(e)}
                     </span>
                     <span className="block text-[11px] truncate font-mono" style={{ color: e.status === 'FAIL' ? 'var(--c-danger, #ef4444)' : 'var(--c-text-secondary)' }}>
-                      {e.err || [e.el, e.conf != null ? `conf ${e.conf}` : null, e.state ? `→ ${e.state}` : null, e.asserts ? e.asserts.map((a) => `p=${a.p}`).join(' ') : null, e.ms?.total != null ? `${e.ms.total} ms` : null].filter(Boolean).join(' · ')}
+                      {e.err ? `${e.category === 'blocker' ? 'blocked: ' : e.category === 'bug' ? 'bug: ' : ''}${e.err}` : [e.el, e.conf != null ? `conf ${e.conf}` : null, e.state ? `→ ${e.state}` : null, e.asserts ? e.asserts.map((a) => `p=${a.p}`).join(' ') : null, e.ms?.total != null ? `${e.ms.total} ms` : null].filter(Boolean).join(' · ')}
                     </span>
                   </span>
                 </button>
@@ -183,7 +195,13 @@ function RunView({ runId, onBack, onGoToSession, onOpenRun }) {
           )}
           {run?.summary?.length > 0 && (
             <div className="m-3 text-[11px] font-mono" style={{ color: 'var(--c-text-secondary)' }}>
-              {run.summary.map((s) => <div key={s.spec}>{s.result === 'PASS' ? '✓' : '✗'} {s.spec} {s.passed}/{s.planned} · {(s.wallMs / 1000).toFixed(1)} s · ${s.jevCostUsd}</div>)}
+              {run.summary.map((s) => (
+                <div key={s.spec} className="mb-1">
+                  <span style={{ color: s.result === 'PASS' ? 'var(--c-success, #22c55e)' : s.result === 'FAIL' ? 'var(--c-danger, #ef4444)' : 'var(--c-warning, #f59e0b)' }}>{s.result === 'PASS' ? '✓' : s.result === 'FAIL' ? '✗ BUG' : `■ ${s.result}`}</span>{' '}
+                  {s.spec}{s.planned != null ? ` ${s.passed ?? 0}/${s.planned}` : ''}{s.wallMs ? ` · ${(s.wallMs / 1000).toFixed(1)} s` : ''}{s.jevCostUsd != null ? ` · $${s.jevCostUsd}` : ''}{s.retried ? ' · retried once' : ''}
+                  {s.reason && s.result !== 'PASS' && <div className="pl-4 whitespace-normal" style={{ color: 'var(--c-text-muted)' }}>{s.reason}</div>}
+                </div>
+              ))}
             </div>
           )}
         </div>
@@ -216,6 +234,8 @@ export default function TestsView({ runId, onOpenRun, onBack, onGoToSession, ses
   const [device, setDevice] = useState('pc');
   const [browser, setBrowser] = useState('chromium');
   const effBrowser = device === 'ios' ? 'webkit' : browser;   // iOS is Safari, always
+  const [goal, setGoal] = useState('');
+  const [goalApp, setGoalApp] = useState('admin');
   const [launching, setLaunching] = useState(false);
   const [err, setErr] = useState(null);
 
@@ -228,7 +248,8 @@ export default function TestsView({ runId, onOpenRun, onBack, onGoToSession, ses
   const launch = async () => {
     setLaunching(true); setErr(null);
     try {
-      const body = { ...(target.startsWith('chain:') ? { target: 'chain', type: target.slice(6) } : { target }), env, device, browser: effBrowser, sessionId };
+      const body = { ...(target.startsWith('chain:') ? { target: 'chain', type: target.slice(6) } : { target }), env, device, browser: effBrowser, sessionId,
+        ...(target === 'goal' ? { goal, app: goalApp, login: goalApp === 'institute' ? undefined : goalApp } : {}) };
       const r = await apiFetch('/api/tests/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       await refresh(); if (r.id) onOpenRun?.(r.id);
     } catch (e) { setErr(e.message); } finally { setLaunching(false); }
@@ -242,6 +263,7 @@ export default function TestsView({ runId, onOpenRun, onBack, onGoToSession, ses
         <div className="text-[11px]" style={{ color: 'var(--c-text-muted)' }}>Jev browser tests · DEV / UAT (PROD: sanity only) · every step recorded with a screenshot</div>
         <div className="flex-1" />
         <select value={target} onChange={(e) => { setTarget(e.target.value); if (e.target.value !== 'sanity' && env === 'prod') setEnv('dev'); }} className="text-xs px-2 py-1 rounded" style={{ backgroundColor: 'var(--c-surface)', color: 'var(--c-text)', border: '1px solid var(--c-border)' }}>
+          <option value="goal">Goal — describe what must be true, Jev tests it</option>
           <option value="suite">Regression suite</option>
           <option value="sanity">Sanity — every assessment type in parallel (+ Mix &amp; Match)</option>
           <option value="admin-login-smoke">Admin login smoke</option>
@@ -250,6 +272,15 @@ export default function TestsView({ runId, onOpenRun, onBack, onGoToSession, ses
           <option value="chain:Aptitude">Aptitude end-to-end (float → take → verify)</option>
           <option value="chain:Communication">Communication end-to-end (float → take → verify)</option>
         </select>
+        {target === 'goal' && (
+          <>
+            <input value={goal} onChange={(e) => setGoal(e.target.value)} placeholder="e.g. On the corporate roster, the Last Activity column is shown and sorts newest first" aria-label="Goal to verify"
+              className="text-xs px-2 py-1 rounded flex-1 min-w-[260px]" style={{ backgroundColor: 'var(--c-surface)', color: 'var(--c-text)', border: '1px solid var(--c-border)' }} />
+            <select value={goalApp} onChange={(e) => setGoalApp(e.target.value)} aria-label="App" title="App (signs in with the QA login for that app)" className="text-xs px-2 py-1 rounded" style={{ backgroundColor: 'var(--c-surface)', color: 'var(--c-text)', border: '1px solid var(--c-border)' }}>
+              <option value="admin">Admin</option><option value="corporate">Corporate</option><option value="student">Student</option><option value="institute">Institute</option>
+            </select>
+          </>
+        )}
         <select value={env} onChange={(e) => setEnv(e.target.value)} className="text-xs px-2 py-1 rounded" style={{ backgroundColor: 'var(--c-surface)', color: 'var(--c-text)', border: '1px solid var(--c-border)' }}>
           <option value="dev">DEV</option>
           <option value="uat">UAT</option>
@@ -265,7 +296,7 @@ export default function TestsView({ runId, onOpenRun, onBack, onGoToSession, ses
           <option value="firefox">Firefox</option>
           <option value="webkit">Safari (WebKit)</option>
         </select>
-        <button onClick={launch} disabled={launching} className="flex items-center gap-1 text-xs font-medium px-3 py-1.5 rounded cursor-pointer disabled:opacity-50" style={{ backgroundColor: 'var(--c-accent)', color: '#fff' }}>
+        <button onClick={launch} disabled={launching || (target === 'goal' && goal.trim().length < 10)} className="flex items-center gap-1 text-xs font-medium px-3 py-1.5 rounded cursor-pointer disabled:opacity-50" style={{ backgroundColor: 'var(--c-accent)', color: '#fff' }}>
           {launching ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />} Run
         </button>
         <button onClick={refresh} className="p-1.5 rounded cursor-pointer" style={{ color: 'var(--c-text-secondary)' }} title="Refresh"><RefreshCw size={14} /></button>
@@ -293,8 +324,10 @@ export default function TestsView({ runId, onOpenRun, onBack, onGoToSession, ses
               <div className="min-w-0 flex-1">
                 <div className="text-xs font-medium truncate" style={{ color: 'var(--c-text)' }}>{r.title}</div>
                 <div className="text-[11px] font-mono truncate" style={{ color: 'var(--c-text-muted)' }}>
-                  {r.env?.toUpperCase()}{r.device ? ` · ${r.device}${r.browser ? '/' + r.browser : ''}` : ''} · {r.specs?.join(', ')}{r.summary?.length && r.kind !== 'sanity' ? ` · ${r.summary.map((s) => `${s.passed}/${s.planned}`).join(' ')}` : ''}
+                  {r.env?.toUpperCase()}{r.device ? ` · ${r.device}${r.browser ? '/' + r.browser : ''}` : ''} · {r.specs?.join(', ')}{r.summary?.length && r.kind !== 'sanity' ? ` · ${r.summary.map((s) => s.planned != null ? `${s.passed ?? 0}/${s.planned}` : s.result).join(' ')}` : ''}
                 </div>
+                {r.goal && <div className="text-[11px] truncate" style={{ color: 'var(--c-text-secondary)' }}>Goal: {r.goal}</div>}
+                {r.reason && r.result !== 'PASS' && r.status !== 'running' && <div className="text-[11px] truncate" style={{ color: r.result === 'FAIL' ? 'var(--c-danger, #ef4444)' : 'var(--c-warning, #f59e0b)' }}>{r.reason}</div>}
                 {r.kind === 'sanity' && <div className="mt-1"><ChildrenGrid children={r.children} onOpenRun={onOpenRun} compact /></div>}
               </div>
               {r.session && (
