@@ -32,6 +32,15 @@ export const TYPES = [
   { v: 'improvement', label: 'Improvement' },
 ]
 export const PLATFORM_SUGGESTIONS = ['ATS', 'Assessment', 'Both', 'Infra']
+// Most rows are Medium, so Medium is deliberately quiet — Urgent/High are the signal.
+// The server accepts exactly these values (PRIORITY_VALUES in dashboard.js).
+export const PRIORITIES = [
+  { v: 'urgent', label: 'Urgent', color: '#ef4444' },
+  { v: 'high', label: 'High', color: '#f97316' },
+  { v: 'medium', label: 'Medium', color: '#94a3b8' },
+  { v: 'low', label: 'Low', color: '#64748b' },
+]
+export const priorityMeta = (v) => PRIORITIES.find(p => p.v === v) || PRIORITIES[2]
 
 export const devStatusMeta = (v) => DEV_STATUS.find(s => s.v === v) || DEV_STATUS[0]
 

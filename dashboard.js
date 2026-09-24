@@ -69,6 +69,8 @@ export { pendingImages };
 // Only MODELS are restricted here — the tester QA persona, read-only edit gating
 // and sprint-only view are separate and unchanged.
 const BA_MODEL = 'haiku';
+// Sprint-board priority — mirrors PRIORITIES in public-react/src/components/sprintMeta.js.
+const PRIORITY_VALUES = ['urgent', 'high', 'medium', 'low'];
 const TESTING_MODEL = 'codex:gpt-5.6-sol';
 const CLIENT_SUPPORT_MODEL = 'claude-opus-5';
 const CLIENT_SUPPORT_CODEX_MODEL = 'codex:gpt-5.6-terra';
@@ -2337,7 +2339,9 @@ The user may ask follow-up questions about the changelog — answer based on the
                 : (req.user.role === 'designer' ? 'design' : 'developer');
             // A subtask inherits its parent's sprint so it lives under the same feature.
             const parent = parentIssueId ? store.getIssue(parentIssueId) : null;
-            const issue = store.createIssue({ title, description, priority, labels, createdBy: req.user.id, forkSessionId: forkSessionId || null, sprintId: parent ? parent.sprint_id : (sprintId || null), assignedTo: assignedTo || null, type: type || 'task', mode: issueMode, platform: parent ? parent.platform : (platform || ''), qaOwner: qaOwner || '', parentIssueId: parentIssueId || null, sessionId: sessionId || null, deadline: deadline || null, attachments: sanitizeAttachments(attachments) });
+            // Coerce, don't reject: bots file issues here too, and "High" shouldn't fail a create.
+            const cleanPriority = PRIORITY_VALUES.includes(String(priority || '').toLowerCase()) ? String(priority).toLowerCase() : undefined;
+            const issue = store.createIssue({ title, description, priority: cleanPriority, labels, createdBy: req.user.id, forkSessionId: forkSessionId || null, sprintId: parent ? parent.sprint_id : (sprintId || null), assignedTo: assignedTo || null, type: type || 'task', mode: issueMode, platform: parent ? parent.platform : (platform || ''), qaOwner: qaOwner || '', parentIssueId: parentIssueId || null, sessionId: sessionId || null, deadline: deadline || null, attachments: sanitizeAttachments(attachments) });
             wsBroadcast('issue_created', { issue });
 
             // Notify assignee
@@ -2368,6 +2372,9 @@ The user may ask follow-up questions about the changelog — answer based on the
                 if (req.body[key] !== undefined) updates[key] = req.body[key];
             }
             if (updates.attachments !== undefined) updates.attachments = sanitizeAttachments(updates.attachments);
+            if (updates.priority !== undefined && !PRIORITY_VALUES.includes(updates.priority)) {
+                return res.status(400).json({ error: `priority must be one of: ${PRIORITY_VALUES.join(', ')}` });
+            }
             if (updates.labels !== undefined) {
                 if (!Array.isArray(updates.labels)) return res.status(400).json({ error: 'labels must be an array of strings' });
                 updates.labels = [...new Set(updates.labels.map(v => String(v).trim().slice(0, 40)).filter(Boolean))];

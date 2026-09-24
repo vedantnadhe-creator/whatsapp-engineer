@@ -19,7 +19,7 @@ import {
 // Option sets and completion maths live in sprintMeta so the table and the Kanban
 // board share one definition of every status, type colour and percentage.
 import {
-  memberName, DEV_STATUS, QA_STATUS, TYPES, PLATFORM_SUGGESTIONS,
+  memberName, DEV_STATUS, QA_STATUS, TYPES, PLATFORM_SUGGESTIONS, PRIORITIES, priorityMeta,
   devStatusMeta, featureCompletion, completionColor, isOpenBugRow,
   TYPE_PILL, ASSIGNEE_PILL, QA_OWNER_PILL, assigneeIds,
   sprintStatusMeta, isSprintRunning, isIdeaBin,
@@ -366,7 +366,7 @@ export default function SprintBoard({
   // Filters — view-only narrowing of the rows (sprint progress stays full-sprint).
   // Each filter is a list: picking two devs shows rows owned by either, two statuses
   // shows both. An empty list means "any".
-  const NO_FILTERS = { dev: [], qa: [], dev_assignee: [], qa_owner: [], platform: [], type: [], tags: [] }
+  const NO_FILTERS = { dev: [], qa: [], dev_assignee: [], qa_owner: [], platform: [], type: [], priority: [], tags: [] }
   const [filters, setFilters] = useState(NO_FILTERS)
   const setFilter = (k, v) => setFilters(prev => ({ ...prev, [k]: v }))
   const clearFilters = () => setFilters(NO_FILTERS)
@@ -389,6 +389,7 @@ export default function SprintBoard({
     any(filters.qa_owner, f.qa_owner) &&
     any(filters.platform, f.platform) &&
     any(filters.type, f.type) &&
+    any(filters.priority, f.priority || 'medium') &&
     (!filters.tags.length || parseLabels(f).some(t => filters.tags.includes(t)))
   ), [features, filters])
 
@@ -694,6 +695,7 @@ export default function SprintBoard({
             <FilterMulti value={filters.dev_assignee} onChange={(v) => setFilter('dev_assignee', v)} placeholder="Dev" options={(members || []).filter(m => m.role !== 'tester').map(m => ({ v: m.id, label: memberName(m) }))} />
             <FilterMulti value={filters.qa_owner} onChange={(v) => setFilter('qa_owner', v)} placeholder="QA Owner" options={(members || []).filter(m => m.role === 'tester').map(m => ({ v: m.id, label: memberName(m) }))} />
             <FilterMulti value={filters.type} onChange={(v) => setFilter('type', v)} placeholder="Type" options={TYPES.map(t => ({ v: t.v, label: t.label }))} />
+            <FilterMulti value={filters.priority} onChange={(v) => setFilter('priority', v)} placeholder="Priority" options={PRIORITIES.map(p => ({ v: p.v, label: p.label }))} />
             {platforms.length > 0 && <FilterMulti value={filters.platform} onChange={(v) => setFilter('platform', v)} placeholder="Platform" options={platforms.map(p => ({ v: p, label: p }))} />}
             {tagOptions.length > 0 && <FilterMulti value={filters.tags} onChange={(v) => setFilter('tags', v)} placeholder="Tags" options={tagOptions} />}
             {activeFilterCount > 0 && (
@@ -802,7 +804,7 @@ export default function SprintBoard({
         <table className="w-full border-collapse" style={{ minWidth: 1500, borderTop: '1px solid var(--c-border)', borderLeft: '1px solid var(--c-border)' }}>
           <thead className="sticky top-0 z-10">
             <tr className="text-left" style={{ color: 'var(--c-text-secondary)', backgroundColor: 'var(--c-surface)' }}>
-              {['S.NO', 'Platform', 'Feature / Story', 'Created', 'Type', 'Tags', 'Dev', 'QA Owner', 'Dev Status', 'Deadline', 'TC', 'Testing Deadline', 'QA Status', 'Bugs', 'Crit', 'Done %', 'QA Comments', ''].map((h, i) => (
+              {['S.NO', 'Platform', 'Feature / Story', 'Created', 'Type', 'Priority', 'Tags', 'Dev', 'QA Owner', 'Dev Status', 'Deadline', 'TC', 'Testing Deadline', 'QA Status', 'Bugs', 'Crit', 'Done %', 'QA Comments', ''].map((h, i) => (
                 <th key={i} className="px-2.5 py-2 font-semibold whitespace-nowrap text-[11px]" style={{ borderBottom: '1px solid var(--c-border)', borderRight: '1px solid var(--c-border)' }}>{h}</th>
               ))}
             </tr>
@@ -822,12 +824,12 @@ export default function SprintBoard({
               />
             ))}
             {features.length > 0 && filteredFeatures.length === 0 && (
-              <tr><td colSpan={18} className="px-4 py-10 text-center text-xs" style={{ color: 'var(--c-text-muted)' }}>
+              <tr><td colSpan={19} className="px-4 py-10 text-center text-xs" style={{ color: 'var(--c-text-muted)' }}>
                 No features match the filters. <button onClick={clearFilters} className="underline cursor-pointer" style={{ color: 'var(--c-accent)' }}>Clear filters</button>
               </td></tr>
             )}
             {features.length === 0 && (
-              <tr><td colSpan={18} className="px-4 py-10 text-center text-xs" style={{ color: 'var(--c-text-muted)' }}>
+              <tr><td colSpan={19} className="px-4 py-10 text-center text-xs" style={{ color: 'var(--c-text-muted)' }}>
                 {isBacklogView ? 'Backlog is empty — move features here with the archive icon.' : activeSprintId === '__all__' ? 'No features yet.' : 'No features in this sprint yet — add one below.'}
               </td></tr>
             )}
@@ -946,6 +948,9 @@ function FeatureRow({ f, idx, members, isTester, expanded, isBacklogView, select
           <PillSelect value={f.type || 'feature'} onChange={(v) => upd({ type: v })} options={TYPES} fg={TYPE_PILL[f.type || 'feature'] || TYPE_PILL.feature} />
         </td>
         <td className="px-2 py-2" style={cellBorder}>
+          <PillSelect value={priorityMeta(f.priority).v} onChange={(v) => upd({ priority: v })} options={PRIORITIES} fg={priorityMeta(f.priority).color} disabled={isTester} />
+        </td>
+        <td className="px-2 py-2" style={cellBorder}>
           {/* Tags are free text — type a new one in the popover and press Enter. */}
           <MultiPillSelect value={parseLabels(f)} onChange={(tags) => upd({ labels: tags })} options={tagOptions} fg={TAG_PILL} placeholder="—" title="Tags" onCreate={(v) => v} disabled={isTester} />
         </td>
@@ -1022,7 +1027,7 @@ function FeatureRow({ f, idx, members, isTester, expanded, isBacklogView, select
       </tr>
       {expanded && (
         <tr>
-          <td colSpan={19} style={{ borderBottom: '2px solid var(--c-border)', borderRight: '1px solid var(--c-border)', backgroundColor: 'var(--c-surface)' }}>
+          <td colSpan={20} style={{ borderBottom: '2px solid var(--c-border)', borderRight: '1px solid var(--c-border)', backgroundColor: 'var(--c-surface)' }}>
             <FeatureDetail f={f} isTester={isTester} members={members} onUpdate={upd} onCreateIssue={onCreateIssue} onGoToSession={onGoToSession} model={model} refreshIssues={refreshIssues} user={user} />
           </td>
         </tr>
