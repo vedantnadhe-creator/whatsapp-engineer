@@ -927,7 +927,7 @@ export default function Workspace({
         <option value="firefox">Firefox</option>
         <option value="webkit">Safari (WebKit)</option>
       </select>
-      {onTestFork && lastDeploy && (
+      {onTestFork && (
         <button
           onClick={() => setAskJev(true)}
           disabled={testForking}
@@ -1667,10 +1667,10 @@ export default function Workspace({
     >
       {header}
       {deployBanner}
-      {askJev && lastDeploy && (
+      {askJev && (
         <AskJevDialog
-          subject={`What this session deployed to ${String(lastDeploy.env).toUpperCase()}`}
-          defaultEnv={lastDeploy.env}
+          subject={lastDeploy ? `What this session deployed to ${String(lastDeploy.env).toUpperCase()}` : 'The work in this session'}
+          defaultEnv={runEnv}
           onClose={() => setAskJev(false)}
           onStart={async (jev) => { await onTestFork({ jev }); setAskJev(false); }}
         />

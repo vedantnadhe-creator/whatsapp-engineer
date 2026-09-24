@@ -1268,7 +1268,7 @@ Do NOT ask for confirmation — proceed through each step automatically. If any 
             const editAccess = store.getUserById(req.user.id)?.can_edit !== 0;
             // { jev: { env, device, browser, notes } } = "Ask Jev to test it" from the deploy banner; { text } = free-form "Test it".
             const task = req.body?.jev && typeof req.body.jev === 'object'
-                ? jevTask({ ...req.body.jev, subject: `the work in this session (deployed to ${String(req.body.jev.env || 'dev').toUpperCase()})` })
+                ? jevTask({ ...req.body.jev, deployed: (() => { try { return JSON.parse(parent.last_deploy || 'null')?.env === String(req.body.jev.env || 'dev').toLowerCase(); } catch { return false; } })() })
                 : (typeof req.body?.text === 'string' && req.body.text.trim())
                 ? req.body.text.trim()
                 : `Run a QA pass on the work in session ${parentId}. Review what changed by reading the code/diff and session history yourself, infer the expected behavior, then propose and run test cases and report findings. Do not pause to ask for a PRD or acceptance criteria — proceed autonomously.`;

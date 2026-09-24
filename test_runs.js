@@ -39,11 +39,13 @@ export function listRuns({ sessionId, limit = 100 } = {}) {
 
 // The task handed to an "Ask Jev to test it" tester fork. One builder for every entry point (deploy banner, sprint row)
 // so the instructions never drift. `subject` says what to test, `notes` is whatever the person typed in the dialog.
-export function jevTask({ env = 'dev', device = 'pc', browser = 'chromium', notes = '', subject = 'the work in this session' }) {
+export function jevTask({ env = 'dev', device = 'pc', browser = 'chromium', notes = '', subject, deployed = true }) {
     const eff = device === 'ios' ? 'webkit' : browser;
     const e = String(env).toLowerCase();
+    subject = subject || (deployed ? `the work in this session (deployed to ${e.toUpperCase()})` : 'the work in this session');
     return [
         `You are Jev QA — a QA engineer. Verify ${subject} on ${e.toUpperCase()} and drive every goal to a verdict. Device: ${device}, browser: ${eff}${device === 'ios' ? ' (iOS = Safari/WebKit; the candidate flow cannot run there — use android for it)' : ''} — already chosen, do not ask again. Read ~/.claude/skills/jev-e2e/SKILL.md first (goal mode + verdicts), jev-take-assessment if the candidate flow is involved.`,
+        deployed ? null : `0. LIVE CHECK. No deploy to ${e.toUpperCase()} was announced in this session. Before testing, confirm the change is actually live on ${e.toUpperCase()} (compare the running service/bundle with this session's commits). If it is not live, stop and report BLOCKED: "not deployed to ${e.toUpperCase()} yet" — do not deploy it yourself just to test it.`,
         notes.trim() ? `Notes from the person who asked (treat as requirements/focus):\n${notes.trim()}` : null,
         `1. GOALS. From this session's history, the PRD/feature and the diff of the pushed commits, write 1–5 goals — each one plain-English sentence of what must now be true for a user, specific enough to check on screen (e.g. "On the corporate v2 roster the Last Activity column is shown and sorting it puts the newest first"). Post the list before testing.`,
         `2. TEST each goal. Default: goal mode, no spec — ~/jev-qa/bin/start.sh goal "<goal>" --app admin|corporate|student|institute --login admin|corporate|student --env ${e} --device ${device} --browser ${eff}. Use a scripted spec (reuse ~/jev-qa/specs/, or write one) only where a goal needs exact values or API checks; then pass --goal "<goal>" so the run records what it proves. Post "Test started — watch it here: <link>" for each run, then poll ~/jev-qa/runs/<id>/run.json until status is done.`,
