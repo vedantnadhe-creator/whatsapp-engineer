@@ -947,3 +947,44 @@ export function useAutonomous() {
   return { status: data, loading, error, refresh, start, stop, toggleSelfDecisions };
 }
 
+
+// ── My work: assigned tasks, the personal task queue, the personal agent ──
+export async function getMyWork() {
+  return apiFetch('/api/my/work');
+}
+
+export async function getMyQueue() {
+  return apiFetch('/api/my/queue');
+}
+
+export async function enqueueTasks(issueIds, { jev = false, model = null } = {}) {
+  return apiFetch('/api/my/queue', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ issueIds, jev, model }),
+  });
+}
+
+export async function updateQueueSettings(patch) {
+  return apiFetch('/api/my/queue/settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function updateQueueItem(id, patch) {
+  return apiFetch(`/api/my/queue/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function removeQueueItem(id) {
+  return apiFetch(`/api/my/queue/${id}`, { method: 'DELETE' });
+}
+
+export async function openMyAgent() {
+  return apiFetch('/api/my/agent', { method: 'POST' });
+}

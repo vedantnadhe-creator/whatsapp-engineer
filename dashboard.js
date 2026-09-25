@@ -11,6 +11,8 @@ import { S3Client, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3
 import config from './config.js';
 import { attachTerminalServer } from './term_server.js';
 import { registerTestRoutes, jevTask } from './test_runs.js';
+import TaskQueue from './task_queue.js';
+import MyAgent from './my_agent.js';
 // orchestrator import removed — Claude prompt is now file-based (CLAUDE.md)
 import {
     signJwt, requireAuth, optionalAuth, requireAdmin,
@@ -3310,6 +3312,19 @@ Steps:
                     autonomousState.sessionId = null;
                 });
         });
+    }
+
+    // Personal agent + task queue. Registered before the SPA catch-all
+    // (which would swallow their GETs); wsBroadcast is a hoisted declaration. The queue needs the engine
+    // (its runner reacts to session_end), so without one only the agent is offered.
+    const myAgent = new MyAgent({ store, engine: executionEngine, broadcast: wsBroadcast, port });
+    myAgent.register(app, requireAuth);
+    if (executionEngine) {
+        new TaskQueue({
+            store, engine: executionEngine, messageHandler, broadcast: wsBroadcast,
+            resolveModel: resolveModelForRole, testingModel: TESTING_MODEL,
+            notify: (userId, text) => myAgent.notify(userId, text),
+        }).register(app, requireAuth);
     }
 
     // ── SPA catch-all — serve index.html for any non-API route ──

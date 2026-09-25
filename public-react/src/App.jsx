@@ -12,6 +12,7 @@ import AgentsView from './components/AgentsView'
 import AgentRunPage from './components/AgentRunPage'
 import CostView from './components/CostView'
 import TestsView from './components/TestsView'
+import MyWork from './components/MyWork'
 import Login from './pages/Login'
 import ShareSessionModal from './components/ShareSessionModal'
 import MergeDialog from './components/MergeDialog'
@@ -496,7 +497,20 @@ function Dashboard() {
       />
       )}
       <div className="flex-1 min-w-0 min-h-0 h-full overflow-hidden">
-        {view === 'tests' ? (
+        {view === 'mywork' ? (
+          <MyWork
+            model={selectedModel}
+            wsOn={wsOn}
+            onGoToSession={(sessionId) => {
+              if (!sessionId) return
+              const found = sessions.find(s => s.id === sessionId)
+              if (found) handleSelectSession(found)
+              else { setActiveSession({ id: sessionId }); setIsNewSession(false) }
+              setView('chat')
+              navigate(`/s/${sessionId}`)
+            }}
+          />
+        ) : view === 'tests' ? (
           <TestsView
             runId={isTestsRoute ? urlRunId : null}
             sessionId={activeSession?.id || null}

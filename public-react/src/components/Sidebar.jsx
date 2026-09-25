@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import {
+  ListTodo,
   Plus,
   Menu,
   LogOut,
@@ -809,9 +810,9 @@ function SidebarContent({
         </div>
       )}
 
-      {/* Nav tabs */}
+      {/* Nav tabs — two rows of three; six labels do not fit one 288px row */}
       <div
-        className="flex px-2 py-1.5 gap-1"
+        className="grid grid-cols-3 px-2 py-1.5 gap-1"
         style={{ borderBottom: '1px solid var(--c-border)' }}
       >
         <button
@@ -854,6 +855,17 @@ function SidebarContent({
         >
           <Bot size={12} />
           Agents
+        </button>
+        <button
+          onClick={() => onViewChange?.('mywork')}
+          className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded text-xs font-medium cursor-pointer transition-colors"
+          style={{
+            backgroundColor: view === 'mywork' ? 'var(--c-surface-2)' : 'transparent',
+            color: view === 'mywork' ? 'var(--c-text)' : 'var(--c-text-secondary)',
+          }}
+        >
+          <ListTodo size={12} />
+          My work
         </button>
         <button
           onClick={() => onViewChange?.('tests')}

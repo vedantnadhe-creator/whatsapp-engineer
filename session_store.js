@@ -262,6 +262,28 @@ class SessionStore {
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             );
             CREATE INDEX IF NOT EXISTS idx_bug_comments_bug ON bug_comments(bug_id);
+            -- A developer's task queue: their assigned issues, run as agent sessions N at a
+            -- time. status: queued | running | testing | needs_input | done | dev_completed.
+            -- phase says which session a needs_input item is waiting in ('dev' or 'jev').
+            CREATE TABLE IF NOT EXISTS task_queue (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                issue_id TEXT NOT NULL,
+                position INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'queued',
+                phase TEXT NOT NULL DEFAULT 'dev',
+                jev INTEGER NOT NULL DEFAULT 0,
+                model TEXT,
+                dev_session_id TEXT,
+                jev_session_id TEXT,
+                verdict TEXT,
+                question TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                started_at DATETIME,
+                finished_at DATETIME,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_task_queue_user ON task_queue(user_id, status);
             CREATE TABLE IF NOT EXISTS test_cases (
                 id TEXT PRIMARY KEY,
                 issue_id TEXT NOT NULL,
@@ -1209,6 +1231,67 @@ class SessionStore {
     }
 
     deleteBugComment(id) { this.db.prepare('DELETE FROM bug_comments WHERE id = ?').run(id); }
+
+    // ── Task queue ──────────────────────────────────────────────────────────
+    getQueueItems(userId) {
+        return this.db.prepare(
+            `SELECT q.*, i.title AS issue_title, i.dev_status, i.priority, i.type AS issue_type,
+                    s.name AS sprint_name
+             FROM task_queue q
+             LEFT JOIN issues i ON i.id = q.issue_id
+             LEFT JOIN sprints s ON s.id = i.sprint_id
+             WHERE q.user_id = ?
+             ORDER BY CASE q.status WHEN 'needs_input' THEN 0 WHEN 'running' THEN 1 WHEN 'testing' THEN 1
+                                    WHEN 'queued' THEN 2 ELSE 3 END,
+                      CASE WHEN q.status = 'queued' THEN q.position END,
+                      COALESCE(q.finished_at, q.created_at) DESC`
+        ).all(String(userId));
+    }
+
+    getQueueItem(id) { return this.db.prepare('SELECT * FROM task_queue WHERE id = ?').get(id); }
+
+    // The live item (not finished) that owns a session — dev or Jev side.
+    getQueueItemBySession(sessionId) {
+        return this.db.prepare(
+            `SELECT * FROM task_queue WHERE (dev_session_id = ? OR jev_session_id = ?)
+             AND status IN ('running', 'testing', 'needs_input') ORDER BY created_at DESC LIMIT 1`
+        ).get(sessionId, sessionId);
+    }
+
+    // An issue is in at most one unfinished item at a time.
+    getActiveQueueItemForIssue(issueId) {
+        return this.db.prepare(
+            `SELECT * FROM task_queue WHERE issue_id = ? AND status IN ('queued', 'running', 'testing', 'needs_input') LIMIT 1`
+        ).get(issueId);
+    }
+
+    createQueueItem({ userId, issueId, jev = false, model = null }) {
+        const id = `TQ-${Date.now().toString(36)}${Math.floor(Math.random() * 1000)}`;
+        const { p } = this.db.prepare(`SELECT COALESCE(MAX(position), 0) AS p FROM task_queue WHERE user_id = ? AND status = 'queued'`).get(String(userId));
+        this.db.prepare('INSERT INTO task_queue (id, user_id, issue_id, position, jev, model) VALUES (?, ?, ?, ?, ?, ?)')
+            .run(id, String(userId), issueId, p + 1, jev ? 1 : 0, model);
+        return this.getQueueItem(id);
+    }
+
+    updateQueueItem(id, patch) {
+        const allowed = ['position', 'status', 'phase', 'jev', 'model', 'dev_session_id', 'jev_session_id', 'verdict', 'question', 'started_at', 'finished_at'];
+        const keys = Object.keys(patch).filter(k => allowed.includes(k));
+        if (!keys.length) return this.getQueueItem(id);
+        this.db.prepare(`UPDATE task_queue SET ${keys.map(k => `${k} = ?`).join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
+            .run(...keys.map(k => patch[k]), id);
+        return this.getQueueItem(id);
+    }
+
+    deleteQueueItem(id) { this.db.prepare('DELETE FROM task_queue WHERE id = ?').run(id); }
+
+    // Users with work the runner may need to act on — used on boot and by the tick.
+    getQueueUserIds() {
+        return this.db.prepare(`SELECT DISTINCT user_id FROM task_queue WHERE status IN ('queued', 'running', 'testing')`).all().map(r => r.user_id);
+    }
+
+    getLiveQueueItems() {
+        return this.db.prepare(`SELECT * FROM task_queue WHERE status IN ('running', 'testing')`).all();
+    }
 
     // Every distinct tag in use across all issues — the board's tag catalogue.
     // ponytail: derived from usage, so a tag with no rows left disappears and there is
