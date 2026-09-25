@@ -347,6 +347,16 @@ class ClaudeManager extends EventEmitter {
             && !session.claude_session_id
             && session.status !== 'running';
 
+        // Claude Code deletes its own transcripts after `cleanupPeriodDays` (30 by default).
+        // A session whose transcript is gone can never `--resume` — the CLI exits 1 with
+        // "No conversation found" on every retry, so "send a message to continue" loops
+        // forever. The dashboard still has the messages, so recover the same way as a lost
+        // Codex thread: a fresh Claude conversation seeded from that stored history.
+        const recoverExpiredClaude = sourceProvider === 'claude'
+            && targetProvider === 'claude'
+            && !!session.claude_session_id
+            && !this._claudeTranscriptExists(session.working_dir, session.claude_session_id);
+
         // Claude needs an existing native id for --resume.  A stopped/failed Codex
         // session without one is recoverable from the dashboard transcript instead;
         // do not reject it before the recovery branch below gets a chance to run.
@@ -357,9 +367,11 @@ class ClaudeManager extends EventEmitter {
         this.store.addMessage(sessionId, 'user', followUp);
         // A person is back in the loop — the automatic-continuation budget starts over.
         this.autoContinues.delete(sessionId);
-        if (sourceProvider !== targetProvider || recoverFailedCodex || recoverMissingCodexThread) {
+        if (sourceProvider !== targetProvider || recoverFailedCodex || recoverMissingCodexThread || recoverExpiredClaude) {
             const context = this._buildForkContext(session, this.store.getMessages(sessionId, 30));
-            const transition = (recoverFailedCodex || recoverMissingCodexThread)
+            const transition = recoverExpiredClaude
+                ? 'You are resuming this task after its earlier conversation expired from Claude Code\'s local history, so only the dashboard\'s copy of it survives.'
+                : (recoverFailedCodex || recoverMissingCodexThread)
                 ? 'You are recovering this task after its previous Codex turn was interrupted before the dashboard could preserve its native thread.'
                 : `You are taking over this existing task from ${sourceProvider || 'another'} coding agent.`;
             const prompt = `${context}\n\n---\n\n${transition} The transcript above is the handoff context; inspect the working directory to verify its current state. Continue the work and answer the user's latest message:\n\n${followUp}`;
@@ -370,11 +382,14 @@ class ClaudeManager extends EventEmitter {
                 model,
                 provider: targetProvider,
             });
-            console.log((recoverFailedCodex || recoverMissingCodexThread)
+            console.log(recoverExpiredClaude
+                ? `[Session] ${sessionId}: Claude transcript ${session.claude_session_id} no longer exists — continuing in a fresh conversation with transcript context.`
+                : (recoverFailedCodex || recoverMissingCodexThread)
                 ? `[Session] Recovering interrupted Codex session ${sessionId} with transcript context.`
                 : `[Session] Handing off ${sessionId} from ${sourceProvider || 'legacy'} to ${targetProvider} with transcript context.`);
             this._spawnNew(sessionId, prompt, session.working_dir, imagePath, model);
-            return { sessionId, handedOff: !(recoverFailedCodex || recoverMissingCodexThread), recovered: recoverFailedCodex || recoverMissingCodexThread };
+            const recovered = recoverFailedCodex || recoverMissingCodexThread || recoverExpiredClaude;
+            return { sessionId, handedOff: !recovered, recovered };
         }
 
         // Same-provider continuation: its native resume ID is valid.
@@ -916,6 +931,15 @@ class ClaudeManager extends EventEmitter {
             this._spawnNew(sessionId, prompt, workingDir || current.working_dir, null, current.model);
         }, 2500);
         this.pendingCodexRecoveries.set(sessionId, { token, timer });
+    }
+
+    // Claude Code names a project dir after its cwd. Older CLIs replaced only "/", newer
+    // ones every non-alphanumeric, so accept either — a false "missing" would only cost
+    // the richer native context, never lose the conversation.
+    _claudeTranscriptExists(workingDir, claudeSessionId) {
+        const dir = workingDir || config.DEFAULT_WORKING_DIR;
+        return [dir.replace(/\//g, '-'), dir.replace(/[^a-zA-Z0-9]/g, '-')]
+            .some(slug => fs.existsSync(path.join(os.homedir(), '.claude', 'projects', slug, `${claudeSessionId}.jsonl`)));
     }
 
     // Reads Claude Code's own transcript (~/.claude/projects/<cwd-slug>/<claude_session_id>.jsonl)
