@@ -51,7 +51,7 @@ export default function MyWork({ user, model, wsOn, onGoToSession }) {
   const [busy, setBusy] = useState(null)
   const [msg, setMsg] = useState(null)
   const [sort, setSort] = useState({ key: null, dir: 1 })
-  // Admins can watch other people's queues too (read-only); remembered per browser.
+  // Admins can add other people's assigned tasks to the table (read-only); remembered per browser.
   const isAdmin = !!user?.isAdmin
   const [team, setTeam] = useState(() => { try { return JSON.parse(localStorage.getItem(TEAM_KEY) || '[]') } catch { return [] } })
   const [people, setPeople] = useState([])
@@ -62,7 +62,7 @@ export default function MyWork({ user, model, wsOn, onGoToSession }) {
   const load = useCallback(async () => {
     try {
       const ids = teamKey ? teamKey.split(',') : []
-      const [w, q] = await Promise.all([getMyWork(ids), getMyQueue(ids)])
+      const [w, q] = await Promise.all([getMyWork(ids), getMyQueue()])
       setWork(w); setQueue(q)
     } catch (e) { setMsg({ kind: 'error', text: e.message }) }
   }, [teamKey])
@@ -78,7 +78,7 @@ export default function MyWork({ user, model, wsOn, onGoToSession }) {
     setBusy(key); setMsg(null)
     try {
       const r = await fn()
-      if (r?.items) setQueue(q => ({ ...r, team: q?.team }))
+      if (r?.items) setQueue(r)
       if (ok) setMsg({ kind: 'info', text: typeof ok === 'function' ? ok(r) : ok })
       getMyWork(teamKey ? teamKey.split(',') : []).then(setWork).catch(() => {})
       return true
@@ -203,8 +203,8 @@ export default function MyWork({ user, model, wsOn, onGoToSession }) {
                     onChange={setTeam}
                     options={people.filter(p => p.id !== user?.id).map(p => ({ v: p.id, label: p.displayName || memberName(p) || p.email }))}
                     fg="#a78bfa"
-                    placeholder="Other people's queues"
-                    title="Show other people's queues"
+                    placeholder="Other people's tasks"
+                    title="Show other people's tasks"
                     emptyText="No other users."
                   />
                 </span>
@@ -307,54 +307,6 @@ export default function MyWork({ user, model, wsOn, onGoToSession }) {
             </table>
           )}
         </section>
-
-        {/* Other people's queues — admins, read-only */}
-        {isAdmin && team.length > 0 && (
-          <section className="px-5 pt-6">
-            <h2 className="text-sm font-semibold mb-2" style={{ color: 'var(--c-text)' }}>Team queues</h2>
-            {!(queue.team || []).some(i => i.user_id !== user?.id) ? (
-              <p className="text-xs py-4" style={{ color: 'var(--c-text-muted)' }}>Nothing in their queues.</p>
-            ) : (
-              <table className="w-full text-xs border-collapse" style={{ border: '1px solid var(--c-border)' }}>
-                <thead>
-                  <tr className="text-left" style={{ color: 'var(--c-text-secondary)', backgroundColor: 'var(--c-surface)' }}>
-                    <th className="px-3 py-2 font-medium w-36" style={cell}>Person</th>
-                    <th className="px-3 py-2 font-medium" style={cell}>Task</th>
-                    <th className="px-3 py-2 font-medium w-32" style={cell}>Status</th>
-                    <th className="px-3 py-2 font-medium w-16" style={cell}>Jev</th>
-                    <th className="px-3 py-2 font-medium w-44" style={cell}>Sessions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(queue.team || []).filter(i => i.user_id !== user?.id).map(item => {
-                    const st = statusOf(item)
-                    return (
-                      <tr key={item.id}>
-                        <td className="px-3 py-2 align-top whitespace-nowrap" style={{ ...cell, color: 'var(--c-text-secondary)' }}>{item.user_name}</td>
-                        <td className="px-3 py-2 align-top" style={cell}>
-                          <div style={{ color: 'var(--c-text)' }}>{item.issue_title || item.issue_id}</div>
-                          {item.sprint_name && <div className="text-[11px]" style={{ color: 'var(--c-text-muted)' }}>{item.sprint_name}</div>}
-                          {item.status === 'needs_input' && item.question && <div className="mt-1 text-[11px] whitespace-pre-wrap" style={{ color: '#fca5a5' }}>{item.question}</div>}
-                        </td>
-                        <td className="px-3 py-2 align-top whitespace-nowrap" style={{ ...cell, color: st.color }}>
-                          {st.label}{item.verdict && <span style={{ color: 'var(--c-text-muted)' }}> · {item.verdict}</span>}
-                        </td>
-                        <td className="px-3 py-2 align-top" style={{ ...cell, color: 'var(--c-text-secondary)' }}>{item.jev ? 'On' : '—'}</td>
-                        <td className="px-3 py-2 align-top whitespace-nowrap" style={cell}>
-                          <div className="flex items-center gap-3">
-                            {item.dev_session_id && <button onClick={() => onGoToSession(item.dev_session_id)} className="inline-flex items-center gap-1 cursor-pointer hover:underline" style={{ color: 'var(--c-accent)' }}><MessageSquare size={12} />Dev</button>}
-                            {item.jev_session_id && <button onClick={() => onGoToSession(item.jev_session_id)} className="inline-flex items-center gap-1 cursor-pointer hover:underline" style={{ color: '#a78bfa' }}><FlaskConical size={12} />Jev</button>}
-                            {!item.dev_session_id && <span style={{ color: 'var(--c-text-muted)' }}>—</span>}
-                          </div>
-                        </td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            )}
-          </section>
-        )}
 
         {/* Assigned to me */}
         <section className="px-5 pt-6 pb-24">
