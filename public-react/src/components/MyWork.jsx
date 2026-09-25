@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
-import { Bot, ArrowUp, ArrowDown, X, Play, Pause, Loader2, MessageSquare, FlaskConical, RefreshCw } from 'lucide-react'
+import { Bot, ArrowUp, ArrowDown, X, Play, Square, Loader2, MessageSquare, FlaskConical, RefreshCw, Pencil } from 'lucide-react'
 import {
   getMyWork, getMyQueue, enqueueTasks, updateQueueSettings, updateQueueItem, removeQueueItem, openMyAgent,
 } from '../hooks/useApi'
@@ -28,6 +28,10 @@ export default function MyWork({ model, wsOn, onGoToSession }) {
   const [queue, setQueue] = useState(null)
   const [selected, setSelected] = useState([])
   const [jevForNew, setJevForNew] = useState(true)
+  // Add-to-queue dialog: open with the selection, one optional description per task.
+  const [composer, setComposer] = useState(false)
+  const [notes, setNotes] = useState({})
+  const [editing, setEditing] = useState(null) // { id, text } — a queued item's description being edited
   const [busy, setBusy] = useState(null)
   const [msg, setMsg] = useState(null)
 
@@ -52,7 +56,8 @@ export default function MyWork({ model, wsOn, onGoToSession }) {
       if (r?.items) setQueue(r)
       if (ok) setMsg({ kind: 'info', text: typeof ok === 'function' ? ok(r) : ok })
       getMyWork().then(setWork).catch(() => {})
-    } catch (e) { setMsg({ kind: 'error', text: e.message }) }
+      return true
+    } catch (e) { setMsg({ kind: 'error', text: e.message }); return false }
     finally { setBusy(null) }
   }
 
@@ -60,14 +65,17 @@ export default function MyWork({ model, wsOn, onGoToSession }) {
   const settings = queue?.settings
   const active = items.filter(i => ['queued', 'running', 'testing', 'needs_input'].includes(i.status))
   const finished = items.filter(i => i.status === 'done' || i.status === 'dev_completed')
+  const queuedCount = active.filter(i => i.status === 'queued').length
+  // Close only on success — a failed save must not throw away what was typed.
+  const saveNote = () => run(editing.id, () => updateQueueItem(editing.id, { note: editing.text })).then(ok => ok && setEditing(null))
   const queueable = useMemo(() => (work?.issues || []).filter(i => !i.queue_status), [work])
   const allSelected = queueable.length > 0 && queueable.every(i => selected.includes(i.id))
   const toggle = (id) => setSelected(s => s.includes(id) ? s.filter(x => x !== id) : [...s, id])
 
-  const addToQueue = () => run('enqueue', () => enqueueTasks(selected, { jev: jevForNew, model }), (r) => {
-    setSelected([])
+  const addToQueue = () => run('enqueue', () => enqueueTasks(selected, { jev: jevForNew, model, notes }), (r) => {
+    setSelected([]); setNotes({}); setComposer(false)
     const skipped = r?.skipped?.length ? ` · ${r.skipped.length} skipped (${[...new Set(r.skipped.map(s => s.reason))].join(', ')})` : ''
-    return `Queued ${r?.added ?? 0} task${r?.added === 1 ? '' : 's'}${skipped}.`
+    return `Queued ${r?.added ?? 0} task${r?.added === 1 ? '' : 's'}${skipped}. Press Run when you're ready.`
   })
   const openAgent = () => run('agent', async () => { const r = await openMyAgent(); onGoToSession(r.sessionId) })
 
@@ -119,10 +127,25 @@ export default function MyWork({ model, wsOn, onGoToSession }) {
                 <option value="chromium">Chromium</option><option value="firefox">Firefox</option><option value="webkit">WebKit</option>
               </select>
             </label>
-            <button onClick={() => run('pause', () => updateQueueSettings({ paused: !settings.paused }))} className={btn} style={btnStyle}>
-              {settings.paused ? <><Play size={13} />Resume</> : <><Pause size={13} />Pause</>}
-            </button>
-            {settings.paused && <span className="text-xs" style={{ color: '#f59e0b' }}>Paused — running tasks finish, nothing new starts.</span>}
+            {settings.paused ? (
+              <button
+                onClick={() => run('run', () => updateQueueSettings({ paused: false }))}
+                disabled={!queuedCount || busy === 'run'}
+                className={btn}
+                style={queuedCount ? { backgroundColor: 'var(--c-accent)', color: '#fff', border: '1px solid var(--c-accent)' } : btnStyle}
+              >
+                {busy === 'run' ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} />}Run{queuedCount ? ` ${queuedCount} queued` : ''}
+              </button>
+            ) : (
+              <button onClick={() => run('run', () => updateQueueSettings({ paused: true }))} className={btn} style={btnStyle}>
+                <Square size={12} />Stop
+              </button>
+            )}
+            <span className="text-xs" style={{ color: 'var(--c-text-muted)' }}>
+              {settings.paused
+                ? (queuedCount ? 'Stopped — nothing starts until you press Run.' : 'Stopped.')
+                : 'Running — starts what is queued, then stops. Stop lets running tasks finish.'}
+            </span>
           </div>
 
           {active.length === 0 && finished.length === 0 ? (
@@ -149,6 +172,27 @@ export default function MyWork({ model, wsOn, onGoToSession }) {
                       <td className="px-3 py-2 align-top" style={cell}>
                         <div style={{ color: 'var(--c-text)' }}>{item.issue_title || item.issue_id}</div>
                         {item.sprint_name && <div className="text-[11px]" style={{ color: 'var(--c-text-muted)' }}>{item.sprint_name}</div>}
+                        {editing?.id === item.id ? (
+                          <div className="mt-1.5 flex flex-col gap-1.5">
+                            <textarea
+                              autoFocus
+                              value={editing.text}
+                              onChange={e => setEditing({ ...editing, text: e.target.value })}
+                              onKeyDown={e => { if (e.key === 'Escape') setEditing(null); if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) saveNote() }}
+                              rows={3}
+                              maxLength={4000}
+                              aria-label={`Description for "${item.issue_title}"`}
+                              className="w-full text-xs px-2 py-1.5 rounded-md outline-none resize-y"
+                              style={{ ...selectStyle, backgroundColor: 'var(--c-bg)' }}
+                            />
+                            <div className="flex items-center gap-2">
+                              <button onClick={saveNote} disabled={busy === item.id} className={btn} style={{ backgroundColor: 'var(--c-accent)', color: '#fff', border: '1px solid var(--c-accent)' }}>Save</button>
+                              <button onClick={() => setEditing(null)} className={btn} style={btnStyle}>Cancel</button>
+                            </div>
+                          </div>
+                        ) : item.note ? (
+                          <div className="mt-1 text-[11px] leading-snug whitespace-pre-wrap" style={{ color: 'var(--c-text-secondary)' }}>{item.note}</div>
+                        ) : null}
                         {item.status === 'needs_input' && item.question && (
                           <div className="mt-1.5 flex items-start gap-2">
                             <span className="text-[11px] leading-snug whitespace-pre-wrap" style={{ color: '#fca5a5' }}>{item.question}</span>
@@ -183,6 +227,7 @@ export default function MyWork({ model, wsOn, onGoToSession }) {
                       <td className="px-3 py-2 align-top" style={cell}>
                         <div className="flex items-center justify-end gap-1">
                           {item.status === 'queued' && <>
+                            <button onClick={() => setEditing({ id: item.id, text: item.note || '' })} className="p-1 rounded cursor-pointer hover:bg-[var(--c-surface-2)]" style={{ color: 'var(--c-text-secondary)' }} aria-label="Edit description" title="Edit description"><Pencil size={12} /></button>
                             <button onClick={() => run(item.id, () => updateQueueItem(item.id, { move: 'up' }))} disabled={queuedIdx === 0} className="p-1 rounded cursor-pointer disabled:opacity-30 disabled:cursor-default hover:bg-[var(--c-surface-2)]" style={{ color: 'var(--c-text-secondary)' }} aria-label="Move up"><ArrowUp size={13} /></button>
                             <button onClick={() => run(item.id, () => updateQueueItem(item.id, { move: 'down' }))} disabled={queuedIdx === queuedCount - 1} className="p-1 rounded cursor-pointer disabled:opacity-30 disabled:cursor-default hover:bg-[var(--c-surface-2)]" style={{ color: 'var(--c-text-secondary)' }} aria-label="Move down"><ArrowDown size={13} /></button>
                           </>}
@@ -246,18 +291,62 @@ export default function MyWork({ model, wsOn, onGoToSession }) {
       {selected.length > 0 && (
         <div className="flex items-center gap-4 px-5 py-3" style={{ borderTop: '1px solid var(--c-border)', backgroundColor: 'var(--c-surface)' }}>
           <span className="text-xs" style={{ color: 'var(--c-text)' }}>{selected.length} selected</span>
-          <label className="flex items-center gap-1.5 text-xs cursor-pointer" style={{ color: 'var(--c-text-secondary)' }}>
-            <input type="checkbox" checked={jevForNew} onChange={e => setJevForNew(e.target.checked)} />
-            Test with Jev
-          </label>
-          <span className="text-[11px]" style={{ color: 'var(--c-text-muted)' }}>
-            {jevForNew ? 'Deployed to DEV and tested; a pass moves it to Done.' : 'Moves to Dev Completed when the session finishes.'}
-          </span>
           <div className="ml-auto flex items-center gap-2">
             <button onClick={() => setSelected([])} className={btn} style={btnStyle}>Clear</button>
-            <button onClick={addToQueue} disabled={busy === 'enqueue'} className={btn} style={{ backgroundColor: 'var(--c-accent)', color: '#fff', border: '1px solid var(--c-accent)' }}>
-              {busy === 'enqueue' && <Loader2 size={13} className="animate-spin" />}Add to queue
+            <button onClick={() => setComposer(true)} className={btn} style={{ backgroundColor: 'var(--c-accent)', color: '#fff', border: '1px solid var(--c-accent)' }}>
+              Add to queue…
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Add-to-queue dialog: a description per task, then queue. Nothing starts until Run. */}
+      {composer && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ backgroundColor: 'rgba(0,0,0,0.55)' }} onClick={() => setComposer(false)} onKeyDown={e => e.key === 'Escape' && setComposer(false)}>
+          <div role="dialog" aria-modal="true" aria-labelledby="queue-composer-title" className="w-full max-w-2xl max-h-[85vh] flex flex-col rounded-lg" style={{ backgroundColor: 'var(--c-surface)', border: '1px solid var(--c-border)', boxShadow: '0 2px 8px rgba(0,0,0,0.3)' }} onClick={e => e.stopPropagation()}>
+            <div className="px-5 py-3.5" style={{ borderBottom: '1px solid var(--c-border)' }}>
+              <h2 id="queue-composer-title" className="text-sm font-semibold" style={{ color: 'var(--c-text)' }}>Add {selected.length} task{selected.length === 1 ? '' : 's'} to the queue</h2>
+              <p className="text-xs mt-0.5" style={{ color: 'var(--c-text-muted)' }}>Anything you add here goes to the agent with the task. They wait in the queue until you press Run.</p>
+            </div>
+            <div className="flex-1 overflow-auto px-5 py-4 flex flex-col gap-4">
+              {selected.map(id => {
+                const issue = (work?.issues || []).find(i => i.id === id)
+                if (!issue) return null
+                return (
+                  <div key={id}>
+                    <label htmlFor={`note-${id}`} className="block text-xs font-medium" style={{ color: 'var(--c-text)' }}>{issue.title}</label>
+                    {issue.description && (
+                      <p className="text-[11px] mt-0.5 line-clamp-2" style={{ color: 'var(--c-text-muted)' }} title={issue.description}>{issue.description}</p>
+                    )}
+                    <textarea
+                      id={`note-${id}`}
+                      value={notes[id] || ''}
+                      onChange={e => setNotes(n => ({ ...n, [id]: e.target.value }))}
+                      rows={3}
+                      maxLength={4000}
+                      placeholder="Extra description for the agent (optional) — what to change, where, acceptance criteria…"
+                      className="mt-1.5 w-full text-xs px-2.5 py-2 rounded-md outline-none resize-y"
+                      style={{ border: '1px solid var(--c-border)', color: 'var(--c-text)', backgroundColor: 'var(--c-bg)' }}
+                    />
+                  </div>
+                )
+              })}
+            </div>
+            <div className="flex items-center gap-3 px-5 py-3" style={{ borderTop: '1px solid var(--c-border)' }}>
+              <label className="flex items-center gap-1.5 text-xs cursor-pointer" style={{ color: 'var(--c-text-secondary)' }}>
+                <input type="checkbox" checked={jevForNew} onChange={e => setJevForNew(e.target.checked)} />
+                Test with Jev
+              </label>
+              <span className="text-[11px]" style={{ color: 'var(--c-text-muted)' }}>
+                {jevForNew ? 'Deployed to DEV and tested; a pass moves it to Done.' : 'Moves to Dev Completed when the session finishes.'}
+              </span>
+              <div className="ml-auto flex items-center gap-2">
+                <button onClick={() => setComposer(false)} className={btn} style={btnStyle}>Cancel</button>
+                <button onClick={addToQueue} disabled={busy === 'enqueue'} className={btn} style={{ backgroundColor: 'var(--c-accent)', color: '#fff', border: '1px solid var(--c-accent)' }}>
+                  {busy === 'enqueue' && <Loader2 size={13} className="animate-spin" />}Add to queue
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

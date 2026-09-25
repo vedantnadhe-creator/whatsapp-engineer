@@ -278,6 +278,7 @@ class SessionStore {
                 jev_session_id TEXT,
                 verdict TEXT,
                 question TEXT,
+                note TEXT,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 started_at DATETIME,
                 finished_at DATETIME,
@@ -379,6 +380,8 @@ class SessionStore {
             // list (JSON array of user ids); `assigned_to` stays the primary — see
             // normalizeAssignment() for the invariant that keeps the two in step.
             "ALTER TABLE issues ADD COLUMN assignees TEXT DEFAULT '[]'",
+            // Extra description the developer adds when queueing a task — goes into that run's brief.
+            "ALTER TABLE task_queue ADD COLUMN note TEXT",
         ];
         for (const sql of safeMigrations) {
             try { this.db.exec(sql); } catch (_) { /* column already exists */ }
@@ -1265,16 +1268,16 @@ class SessionStore {
         ).get(issueId);
     }
 
-    createQueueItem({ userId, issueId, jev = false, model = null }) {
+    createQueueItem({ userId, issueId, jev = false, model = null, note = null }) {
         const id = `TQ-${Date.now().toString(36)}${Math.floor(Math.random() * 1000)}`;
         const { p } = this.db.prepare(`SELECT COALESCE(MAX(position), 0) AS p FROM task_queue WHERE user_id = ? AND status = 'queued'`).get(String(userId));
-        this.db.prepare('INSERT INTO task_queue (id, user_id, issue_id, position, jev, model) VALUES (?, ?, ?, ?, ?, ?)')
-            .run(id, String(userId), issueId, p + 1, jev ? 1 : 0, model);
+        this.db.prepare('INSERT INTO task_queue (id, user_id, issue_id, position, jev, model, note) VALUES (?, ?, ?, ?, ?, ?, ?)')
+            .run(id, String(userId), issueId, p + 1, jev ? 1 : 0, model, note || null);
         return this.getQueueItem(id);
     }
 
     updateQueueItem(id, patch) {
-        const allowed = ['position', 'status', 'phase', 'jev', 'model', 'dev_session_id', 'jev_session_id', 'verdict', 'question', 'started_at', 'finished_at'];
+        const allowed = ['position', 'status', 'phase', 'jev', 'model', 'note', 'dev_session_id', 'jev_session_id', 'verdict', 'question', 'started_at', 'finished_at'];
         const keys = Object.keys(patch).filter(k => allowed.includes(k));
         if (!keys.length) return this.getQueueItem(id);
         this.db.prepare(`UPDATE task_queue SET ${keys.map(k => `${k} = ?`).join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
@@ -1316,7 +1319,7 @@ class SessionStore {
     getIssuesAssignedTo(userId, { status = 'active' } = {}) {
         const where = status === 'all' ? '' : "AND i.dev_status IN ('todo', 'in_progress')";
         return this.db.prepare(
-            `SELECT i.id, i.title, i.type, i.status, i.dev_status, i.priority, i.deadline,
+            `SELECT i.id, i.title, i.description, i.type, i.status, i.dev_status, i.priority, i.deadline,
                     i.open_bugs, i.critical_bugs, i.is_backlog, i.sprint_id,
                     s.name AS sprint_name,
                     CASE WHEN i.status = 'completed' AND i.dev_status <> 'done' THEN 1 ELSE 0 END AS status_conflict

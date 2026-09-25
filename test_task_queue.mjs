@@ -64,10 +64,17 @@ const item = (issueId) => store.getQueueItems(u.id).find(i => i.issue_id === iss
 const issue = (id) => store.getIssue(id);
 const labels = (id) => JSON.parse(issue(id).labels || '[]');
 
-// parallel 1 → one at a time, in order
-for (const [i, jev] of [[A, false], [B, true], [C, false], [D, true]]) store.createQueueItem({ userId: u.id, issueId: i.id, jev });
+// Adding never starts anything: the queue is stopped until Run.
+for (const [i, jev] of [[A, false], [B, true], [C, false], [D, true]]) store.createQueueItem({ userId: u.id, issueId: i.id, jev, note: i === A ? 'Use the v2 table, not v1.' : null });
 await q.pump(u.id);
+assert.equal(q.settings(u.id).paused, true, 'stopped by default');
+assert.equal(item(A.id).status, 'queued', 'nothing starts until Run');
+
+// Run, parallel 1 → one at a time, in order
+q.saveSettings(u.id, { paused: false });
+await sleep(50);
 assert.equal(item(A.id).status, 'running');
+assert.match(store.getSession(item(A.id).dev_session_id).task, /Instructions from Dev for this run[\s\S]*Use the v2 table, not v1\./, 'the queue note is in the brief');
 assert.equal(item(B.id).status, 'queued', 'parallel=1 leaves the rest queued');
 assert.equal(issue(A.id).dev_status, 'in_progress');
 assert.match(store.getSession(item(A.id).dev_session_id).task, /\[\[TASK_DONE\]\]/, 'brief carries the marker contract');
@@ -123,9 +130,15 @@ assert.equal(issue(D.id).dev_status, 'dev_completed');
 assert.equal(issue(D.id).qa_status, 'fail');
 assert.deepEqual(labels(D.id), ['question']);
 
-// Auto-continued turn is not judged: session still running after session_end
+// Everything queued has started → the queue stopped itself; a new task waits for Run.
+assert.equal(q.settings(u.id).paused, true, 'auto-stops once nothing is left queued');
 const E = mk('E'); store.createQueueItem({ userId: u.id, issueId: E.id });
 await q.pump(u.id);
+assert.equal(item(E.id).status, 'queued', 'added after the run → waits for the next Run');
+
+// Auto-continued turn is not judged: session still running after session_end
+q.saveSettings(u.id, { paused: false });
+await sleep(50);
 const eDev = item(E.id).dev_session_id;
 store.addMessage(eDev, 'assistant', 'I will post the result when it finishes');
 engine.emit('session_end', { sessionId: eDev, status: 'completed' }); // continuation keeps it running
@@ -152,6 +165,16 @@ assert.equal((await call('DELETE', `/api/my/queue/${item(E.id).id}`)).s, 409, 'c
 r = await call('GET', '/api/my/work');
 assert.equal(r.j.questions, 2);
 assert.ok(r.j.counts.total >= 5);
+// Notes: set on add, editable only while queued, validated; adding does not start the task.
+const G = mk('G');
+r = await call('POST', '/api/my/queue', { issueIds: [G.id], notes: { [G.id]: '  Only the mobile layout.  ' } });
+assert.equal(item(G.id).note, 'Only the mobile layout.');
+assert.equal(item(G.id).status, 'queued', 'POST never starts the task');
+assert.equal((await call('POST', '/api/my/queue', { issueIds: [mk('H').id], notes: { x: 'a'.repeat(4001) } })).s, 400, 'note length capped');
+assert.equal((await call('PUT', `/api/my/queue/${item(G.id).id}`, { note: 'Mobile and tablet.' })).s, 200);
+assert.equal(item(G.id).note, 'Mobile and tablet.');
+assert.equal((await call('PUT', `/api/my/queue/${item(E.id).id}`, { note: 'late' })).s, 409, 'no editing once it has started');
+
 as = other;
 assert.equal((await call('PUT', `/api/my/queue/${item(F.id).id}`, { jev: true })).s, 404, 'someone else\'s item is invisible');
 as = u;

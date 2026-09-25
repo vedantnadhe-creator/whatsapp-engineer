@@ -24,6 +24,7 @@ const QUESTION_TAG = 'question';
 // session_end fires. Wait this long before deciding the session is really idle.
 const SETTLE_MS = 2500;
 const TICK_MS = 60_000;
+const NOTE_MAX = 4000;
 
 const DONE_RE = /^\s*\[\[TASK_DONE\]\]\s*$/m;
 const INPUT_RE = /\[\[NEEDS_INPUT:\s*([\s\S]*?)\]\]/g;
@@ -74,7 +75,8 @@ export default class TaskQueue {
         try { s = JSON.parse(this.store.getSetting(`task_queue:${userId}`) || '{}'); } catch { /* defaults */ }
         return {
             parallel: Math.min(MAX_PARALLEL, Math.max(1, +s.parallel || 1)),
-            paused: !!s.paused,
+            // Stopped until the developer presses Run — adding tasks never starts them.
+            paused: s.paused === undefined ? true : !!s.paused,
             device: ['pc', 'android', 'ios'].includes(s.device) ? s.device : 'pc',
             browser: ['chromium', 'firefox', 'webkit'].includes(s.browser) ? s.browser : 'chromium',
         };
@@ -101,6 +103,13 @@ export default class TaskQueue {
                 if (live >= parallel) break;
                 if (await this._start(item)) live++;
             }
+            // Run covers what was queued when it was pressed. Once nothing is left waiting,
+            // stop again, so tasks added later wait for the next Run instead of starting.
+            // Running tasks are unaffected — pausing only stops new starts.
+            if (!this.store.getQueueItems(userId).some(i => i.status === 'queued')) {
+                this.store.setSetting(`task_queue:${userId}`, JSON.stringify({ ...this.settings(userId), paused: true }));
+                this._changed(userId);
+            }
         } catch (err) {
             console.error(`[TaskQueue] pump ${userId}: ${err.message}`);
         } finally {
@@ -115,6 +124,7 @@ export default class TaskQueue {
             issue.platform ? `Platform: ${issue.platform}` : null,
             issue.description ? `Description: ${issue.description}` : null,
             issue.qa_comments ? `QA comments: ${issue.qa_comments}` : null,
+            item.note ? `\nInstructions from ${user?.display_name || 'the developer'} for this run (these take priority):\n${item.note}` : null,
             bugs.length ? `Open bugs on this item:\n${bugs.map(b => `- ${b.title}${b.severity === 'critical' ? ' [CRITICAL]' : ''}`).join('\n')}` : null,
             '',
             `[TASK QUEUE] ${user?.display_name || 'The developer'} queued this task to run on its own — nobody is watching live, so work autonomously to completion. Follow CLAUDE.md.`,
@@ -301,15 +311,18 @@ export default class TaskQueue {
         // body: { issueIds: [...], jev: bool, model }
         app.post('/api/my/queue', requireAuth, (req, res) => {
             try {
-                const { issueIds, jev = false, model = null } = req.body || {};
+                const { issueIds, jev = false, model = null, notes = {} } = req.body || {};
                 if (!Array.isArray(issueIds) || !issueIds.length || issueIds.length > 50) return res.status(400).json({ error: 'issueIds must be a non-empty array (max 50)' });
+                if (typeof notes !== 'object' || Array.isArray(notes) || Object.values(notes).some(n => typeof n !== 'string' || n.length > NOTE_MAX)) {
+                    return res.status(400).json({ error: `notes must map issue ids to text (max ${NOTE_MAX} chars each)` });
+                }
                 // Only your own assignments — this queue runs as you.
                 const mine = new Set(this.store.getIssuesAssignedTo(req.user.id, { status: 'all' }).map(i => i.id));
                 const added = [], skipped = [];
                 for (const id of [...new Set(issueIds.map(String))]) {
                     if (!mine.has(id)) { skipped.push({ id, reason: 'not assigned to you' }); continue; }
                     if (this.store.getActiveQueueItemForIssue(id)) { skipped.push({ id, reason: 'already queued' }); continue; }
-                    added.push(this.store.createQueueItem({ userId: req.user.id, issueId: id, jev: !!jev, model: typeof model === 'string' ? model : null }).id);
+                    added.push(this.store.createQueueItem({ userId: req.user.id, issueId: id, jev: !!jev, model: typeof model === 'string' ? model : null, note: (notes[id] || '').trim() || null }).id);
                 }
                 this._changed(req.user.id);
                 this.pump(req.user.id);
@@ -334,11 +347,17 @@ export default class TaskQueue {
             } catch (err) { res.status(500).json({ error: err.message }); }
         });
 
-        // body: { jev?: bool, move?: 'up'|'down' }
+        // body: { jev?: bool, move?: 'up'|'down', note?: string }
         app.put('/api/my/queue/:id', requireAuth, (req, res) => {
             try {
                 const item = own(req, res); if (!item) return;
-                const { jev, move } = req.body || {};
+                const { jev, move, note } = req.body || {};
+                if (note !== undefined) {
+                    // The note is read when the task starts, so it is only editable before then.
+                    if (item.status !== 'queued') return res.status(409).json({ error: 'The description can only be edited while the task is queued' });
+                    if (typeof note !== 'string' || note.length > NOTE_MAX) return res.status(400).json({ error: `note must be text (max ${NOTE_MAX} chars)` });
+                    this.store.updateQueueItem(item.id, { note: note.trim() || null });
+                }
                 if (jev !== undefined) {
                     // Read at TASK_DONE time, so it can still change while the task runs.
                     if (!['queued', 'running'].includes(item.status)) return res.status(409).json({ error: 'Jev can only be toggled before the task finishes' });
