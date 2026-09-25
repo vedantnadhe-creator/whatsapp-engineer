@@ -67,12 +67,15 @@ const labels = (id) => JSON.parse(issue(id).labels || '[]');
 // Adding never starts anything: the queue is stopped until Run.
 for (const [i, jev] of [[A, false], [B, true], [C, false], [D, true]]) store.createQueueItem({ userId: u.id, issueId: i.id, jev, note: i === A ? 'Use the v2 table, not v1.' : null });
 await q.pump(u.id);
-assert.equal(q.settings(u.id).paused, true, 'stopped by default');
+// A stale legacy flag from before Run existed must not start anything.
+store.setSetting(`task_queue:${u.id}`, JSON.stringify({ parallel: 1, paused: false }));
+await q.pump(u.id);
+assert.equal(item(A.id).status, 'queued', 'a stale paused:false does not start tasks');
 assert.equal(item(A.id).status, 'queued', 'nothing starts until Run');
 
 // Run, parallel 1 → one at a time, in order
-q.saveSettings(u.id, { paused: false });
-await sleep(50);
+const run = async () => { store.armQueue(u.id, true); await q.pump(u.id); };
+await run();
 assert.equal(item(A.id).status, 'running');
 assert.match(store.getSession(item(A.id).dev_session_id).task, /Instructions from Dev for this run[\s\S]*Use the v2 table, not v1\./, 'the queue note is in the brief');
 assert.equal(item(B.id).status, 'queued', 'parallel=1 leaves the rest queued');
@@ -131,14 +134,12 @@ assert.equal(issue(D.id).qa_status, 'fail');
 assert.deepEqual(labels(D.id), ['question']);
 
 // Everything queued has started → the queue stopped itself; a new task waits for Run.
-assert.equal(q.settings(u.id).paused, true, 'auto-stops once nothing is left queued');
 const E = mk('E'); store.createQueueItem({ userId: u.id, issueId: E.id });
 await q.pump(u.id);
 assert.equal(item(E.id).status, 'queued', 'added after the run → waits for the next Run');
 
 // Auto-continued turn is not judged: session still running after session_end
-q.saveSettings(u.id, { paused: false });
-await sleep(50);
+await run();
 const eDev = item(E.id).dev_session_id;
 store.addMessage(eDev, 'assistant', 'I will post the result when it finishes');
 engine.emit('session_end', { sessionId: eDev, status: 'completed' }); // continuation keeps it running
@@ -146,7 +147,7 @@ await sleep(2800);
 assert.equal(item(E.id).status, 'running', 'still running → not evaluated');
 
 // Paused → nothing new starts
-q.saveSettings(u.id, { paused: true, parallel: 3 });
+q.saveSettings(u.id, { parallel: 3 });
 const F = mk('F'); store.createQueueItem({ userId: u.id, issueId: F.id });
 await q.pump(u.id);
 assert.equal(item(F.id).status, 'queued');
@@ -154,7 +155,7 @@ assert.equal(item(F.id).status, 'queued');
 // ── routes ───────────────────────────────────────────────────────────────────
 const app = express(); app.use(express.json());
 let as = u;
-q.register(app, (req, res, next) => { req.user = { id: as.id, role: as.role }; next(); });
+q.register(app, (req, res, next) => { req.user = { id: as.id, role: as.role, isAdmin: !!as.isAdmin }; next(); });
 const srv = app.listen(0); const base = `http://127.0.0.1:${srv.address().port}`;
 const call = async (m, p, body) => { const r = await fetch(base + p, { method: m, headers: { 'Content-Type': 'application/json' }, body: body && JSON.stringify(body) }); return { s: r.status, j: await r.json() }; };
 
@@ -174,6 +175,23 @@ assert.equal((await call('POST', '/api/my/queue', { issueIds: [mk('H').id], note
 assert.equal((await call('PUT', `/api/my/queue/${item(G.id).id}`, { note: 'Mobile and tablet.' })).s, 200);
 assert.equal(item(G.id).note, 'Mobile and tablet.');
 assert.equal((await call('PUT', `/api/my/queue/${item(E.id).id}`, { note: 'late' })).s, 409, 'no editing once it has started');
+
+// Stop disarms; Run arms what is queued now and starts it.
+r = await call('POST', '/api/my/queue/stop');
+assert.equal(r.j.run.armed, 0);
+assert.equal(r.j.run.waiting, 2, 'F and G wait for Run');
+r = await call('POST', '/api/my/queue/run');
+assert.equal(r.j.armed, 2);
+assert.equal(item(G.id).status, 'running', 'Run starts what was queued');
+
+// Team view: admins only, read-only, labelled by person.
+store.createQueueItem({ userId: other.id, issueId: X.id });
+assert.equal((await call('GET', `/api/my/queue?users=${other.id}`)).s, 403, 'non-admins cannot see other queues');
+as = { ...u, isAdmin: true };
+r = await call('GET', `/api/my/queue?users=${u.id},${other.id},nobody`);
+assert.ok(r.j.team.some(i => i.user_id === other.id && i.user_name === 'Other'), 'admin sees the other person\'s queue');
+assert.ok(r.j.team.some(i => i.user_id === u.id), 'and their own in the same list');
+as = u;
 
 as = other;
 assert.equal((await call('PUT', `/api/my/queue/${item(F.id).id}`, { jev: true })).s, 404, 'someone else\'s item is invisible');

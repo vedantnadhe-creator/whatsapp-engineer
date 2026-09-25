@@ -75,8 +75,6 @@ export default class TaskQueue {
         try { s = JSON.parse(this.store.getSetting(`task_queue:${userId}`) || '{}'); } catch { /* defaults */ }
         return {
             parallel: Math.min(MAX_PARALLEL, Math.max(1, +s.parallel || 1)),
-            // Stopped until the developer presses Run — adding tasks never starts them.
-            paused: s.paused === undefined ? true : !!s.paused,
             device: ['pc', 'android', 'ios'].includes(s.device) ? s.device : 'pc',
             browser: ['chromium', 'firefox', 'webkit'].includes(s.browser) ? s.browser : 'chromium',
         };
@@ -84,6 +82,7 @@ export default class TaskQueue {
 
     saveSettings(userId, patch) {
         const next = { ...this.settings(userId), ...patch };
+        delete next.paused; // legacy global flag — Run/Stop now live on the tasks themselves
         this.store.setSetting(`task_queue:${userId}`, JSON.stringify(next));
         this._changed(userId);
         this.pump(userId);
@@ -95,20 +94,15 @@ export default class TaskQueue {
         if (this.pumping.has(userId)) return;
         this.pumping.add(userId);
         try {
-            const { parallel, paused } = this.settings(userId);
-            if (paused) return;
+            // Only tasks armed by Run are started. A task queued after Run stays unarmed until
+            // the next Run, so adding never starts anything — and there is no global on/off
+            // flag that can go stale and quietly start the next thing you add.
+            const { parallel } = this.settings(userId);
             const items = this.store.getQueueItems(userId);
             let live = items.filter(i => i.status === 'running' || i.status === 'testing').length;
-            for (const item of items.filter(i => i.status === 'queued')) {
+            for (const item of items.filter(i => i.status === 'queued' && i.armed)) {
                 if (live >= parallel) break;
                 if (await this._start(item)) live++;
-            }
-            // Run covers what was queued when it was pressed. Once nothing is left waiting,
-            // stop again, so tasks added later wait for the next Run instead of starting.
-            // Running tasks are unaffected — pausing only stops new starts.
-            if (!this.store.getQueueItems(userId).some(i => i.status === 'queued')) {
-                this.store.setSetting(`task_queue:${userId}`, JSON.stringify({ ...this.settings(userId), paused: true }));
-                this._changed(userId);
             }
         } catch (err) {
             console.error(`[TaskQueue] pump ${userId}: ${err.message}`);
@@ -279,14 +273,21 @@ export default class TaskQueue {
             if (!item || item.user_id !== req.user.id) { res.status(404).json({ error: 'Queue item not found' }); return null; }
             return item;
         };
-        const view = (userId) => ({
-            settings: this.settings(userId),
-            items: this.store.getQueueItems(userId).map(i => ({
-                ...i,
-                dev_session_url: i.dev_session_id ? this._link(i.dev_session_id) : null,
-                jev_session_url: i.jev_session_id ? this._link(i.jev_session_id) : null,
-            })),
+        const withLinks = (i) => ({
+            ...i,
+            dev_session_url: i.dev_session_id ? this._link(i.dev_session_id) : null,
+            jev_session_url: i.jev_session_id ? this._link(i.jev_session_id) : null,
         });
+        const view = (userId) => {
+            const items = this.store.getQueueItems(userId);
+            const queued = items.filter(i => i.status === 'queued');
+            return {
+                settings: this.settings(userId),
+                // armed = will start (Run was pressed); waiting = queued since, needs another Run.
+                run: { armed: queued.filter(i => i.armed).length, waiting: queued.filter(i => !i.armed).length },
+                items: items.map(withLinks),
+            };
+        };
 
         // My plate: every unfinished issue assigned to me, with its queue state.
         app.get('/api/my/work', requireAuth, (req, res) => {
@@ -304,8 +305,36 @@ export default class TaskQueue {
             } catch (err) { res.status(500).json({ error: err.message }); }
         });
 
+        // ?users=id1,id2 — admins can watch several people's queues at once (read-only).
         app.get('/api/my/queue', requireAuth, (req, res) => {
-            try { res.json(view(req.user.id)); } catch (err) { res.status(500).json({ error: err.message }); }
+            try {
+                const out = view(req.user.id);
+                if (req.query.users) {
+                    const ids = [...new Set(String(req.query.users).split(',').map(s => s.trim()).filter(Boolean))].slice(0, 50);
+                    if (ids.some(id => id !== req.user.id) && !req.user.isAdmin) return res.status(403).json({ error: 'Only admins can view other people\'s queues' });
+                    const known = ids.filter(id => this.store.getUserById(id));
+                    out.team = this.store.getQueueItemsForUsers(known).map(withLinks);
+                }
+                res.json(out);
+            } catch (err) { res.status(500).json({ error: err.message }); }
+        });
+
+        // Run: arm everything queued right now and start it. Stop: disarm what has not
+        // started yet — tasks already running finish.
+        app.post('/api/my/queue/run', requireAuth, async (req, res) => {
+            try {
+                const armed = this.store.armQueue(req.user.id, true);
+                this._changed(req.user.id);
+                await this.pump(req.user.id);
+                res.json({ armed, ...view(req.user.id) });
+            } catch (err) { res.status(500).json({ error: err.message }); }
+        });
+        app.post('/api/my/queue/stop', requireAuth, (req, res) => {
+            try {
+                this.store.armQueue(req.user.id, false);
+                this._changed(req.user.id);
+                res.json(view(req.user.id));
+            } catch (err) { res.status(500).json({ error: err.message }); }
         });
 
         // body: { issueIds: [...], jev: bool, model }
@@ -330,7 +359,7 @@ export default class TaskQueue {
             } catch (err) { res.status(500).json({ error: err.message }); }
         });
 
-        // body: { parallel: 1..3, paused: bool, device, browser }
+        // body: { parallel: 1..3, device, browser }  (legacy `paused` maps to Stop/Run)
         app.put('/api/my/queue/settings', requireAuth, (req, res) => {
             try {
                 const b = req.body || {}, patch = {};
@@ -339,7 +368,7 @@ export default class TaskQueue {
                     if (!Number.isInteger(n) || n < 1 || n > MAX_PARALLEL) return res.status(400).json({ error: `parallel must be 1–${MAX_PARALLEL}` });
                     patch.parallel = n;
                 }
-                if (b.paused !== undefined) patch.paused = !!b.paused;
+                if (b.paused !== undefined) { this.store.armQueue(req.user.id, !b.paused); }
                 if (b.device !== undefined) { if (!['pc', 'android', 'ios'].includes(b.device)) return res.status(400).json({ error: 'bad device' }); patch.device = b.device; }
                 if (b.browser !== undefined) { if (!['chromium', 'firefox', 'webkit'].includes(b.browser)) return res.status(400).json({ error: 'bad browser' }); patch.browser = b.browser; }
                 this.saveSettings(req.user.id, patch);

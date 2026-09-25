@@ -1,13 +1,28 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
-import { Bot, ArrowUp, ArrowDown, X, Play, Square, Loader2, MessageSquare, FlaskConical, RefreshCw, Pencil } from 'lucide-react'
+import { Bot, ArrowUp, ArrowDown, X, Play, Square, Loader2, MessageSquare, FlaskConical, RefreshCw, Pencil, ChevronUp, ChevronDown } from 'lucide-react'
 import {
   getMyWork, getMyQueue, enqueueTasks, updateQueueSettings, updateQueueItem, removeQueueItem, openMyAgent,
+  runQueue, stopQueue, getUsers,
 } from '../hooks/useApi'
-import { devStatusMeta, priorityMeta } from './sprintMeta'
+import { devStatusMeta, priorityMeta, memberName } from './sprintMeta'
+import { MultiPillSelect } from './SprintBoard'
+
+// Sort keys for "Assigned to me". Sprints compare naturally ("Sprint 9" < "Sprint 41");
+// rows with no sprint always sort last, whichever way the column is sorted.
+const PRIORITY_RANK = { urgent: 0, high: 1, medium: 2, low: 3 }
+const DEV_RANK = { todo: 0, in_progress: 1, dev_completed: 2 }
+const SORTS = {
+  title: (a, b) => a.title.localeCompare(b.title),
+  sprint: (a, b) => (a.sprint_name || '').localeCompare(b.sprint_name || '', undefined, { numeric: true }),
+  priority: (a, b) => (PRIORITY_RANK[a.priority] ?? 2) - (PRIORITY_RANK[b.priority] ?? 2),
+  dev_status: (a, b) => (DEV_RANK[a.dev_status] ?? 9) - (DEV_RANK[b.dev_status] ?? 9),
+}
+const TEAM_KEY = 'mywork.team'
 
 // What each queue state means to the developer, in their words.
 const QUEUE_STATUS = {
   queued: { label: 'Queued', color: 'var(--c-text-muted)' },
+  up_next: { label: 'Up next', color: '#eab308' },
   running: { label: 'Running', color: '#f59e0b' },
   testing: { label: 'Jev testing', color: '#a78bfa' },
   needs_input: { label: 'Needs you', color: '#f87171' },
@@ -23,7 +38,7 @@ const selectStyle = { border: '1px solid var(--c-border)', color: 'var(--c-text)
 
 // "My work": what is assigned to me, a queue that runs it as agent sessions N at a time
 // (optionally handing each to Jev), and the questions those sessions are waiting on.
-export default function MyWork({ model, wsOn, onGoToSession }) {
+export default function MyWork({ user, model, wsOn, onGoToSession }) {
   const [work, setWork] = useState(null)
   const [queue, setQueue] = useState(null)
   const [selected, setSelected] = useState([])
@@ -34,13 +49,21 @@ export default function MyWork({ model, wsOn, onGoToSession }) {
   const [editing, setEditing] = useState(null) // { id, text } — a queued item's description being edited
   const [busy, setBusy] = useState(null)
   const [msg, setMsg] = useState(null)
+  const [sort, setSort] = useState({ key: null, dir: 1 })
+  // Admins can watch other people's queues too (read-only); remembered per browser.
+  const isAdmin = !!user?.isAdmin
+  const [team, setTeam] = useState(() => { try { return JSON.parse(localStorage.getItem(TEAM_KEY) || '[]') } catch { return [] } })
+  const [people, setPeople] = useState([])
+  useEffect(() => { if (isAdmin) getUsers().then(u => setPeople(Array.isArray(u) ? u : [])).catch(() => {}) }, [isAdmin])
+  useEffect(() => { localStorage.setItem(TEAM_KEY, JSON.stringify(team)) }, [team])
+  const teamKey = isAdmin ? team.join(',') : ''
 
   const load = useCallback(async () => {
     try {
-      const [w, q] = await Promise.all([getMyWork(), getMyQueue()])
+      const [w, q] = await Promise.all([getMyWork(), getMyQueue(teamKey ? teamKey.split(',') : [])])
       setWork(w); setQueue(q)
     } catch (e) { setMsg({ kind: 'error', text: e.message }) }
-  }, [])
+  }, [teamKey])
   useEffect(() => { load() }, [load])
   useEffect(() => {
     if (!wsOn) return
@@ -53,7 +76,7 @@ export default function MyWork({ model, wsOn, onGoToSession }) {
     setBusy(key); setMsg(null)
     try {
       const r = await fn()
-      if (r?.items) setQueue(r)
+      if (r?.items) setQueue(q => ({ ...r, team: q?.team }))
       if (ok) setMsg({ kind: 'info', text: typeof ok === 'function' ? ok(r) : ok })
       getMyWork().then(setWork).catch(() => {})
       return true
@@ -65,10 +88,31 @@ export default function MyWork({ model, wsOn, onGoToSession }) {
   const settings = queue?.settings
   const active = items.filter(i => ['queued', 'running', 'testing', 'needs_input'].includes(i.status))
   const finished = items.filter(i => i.status === 'done' || i.status === 'dev_completed')
-  const queuedCount = active.filter(i => i.status === 'queued').length
+  const armed = queue?.run?.armed || 0
+  const waiting = queue?.run?.waiting || 0
+  const statusOf = (i) => QUEUE_STATUS[i.status === 'queued' && i.armed ? 'up_next' : i.status] || QUEUE_STATUS.queued
   // Close only on success — a failed save must not throw away what was typed.
   const saveNote = () => run(editing.id, () => updateQueueItem(editing.id, { note: editing.text })).then(ok => ok && setEditing(null))
   const queueable = useMemo(() => (work?.issues || []).filter(i => !i.queue_status), [work])
+  const issues = useMemo(() => {
+    const list = [...(work?.issues || [])]
+    if (!sort.key) return list
+    const cmp = SORTS[sort.key]
+    return list.sort((a, b) => {
+      if (sort.key === 'sprint' && !a.sprint_name !== !b.sprint_name) return a.sprint_name ? -1 : 1
+      return cmp(a, b) * sort.dir
+    })
+  }, [work, sort])
+  // Click: ascending → descending → back to the default order.
+  const sortBy = (key) => setSort(s => s.key !== key ? { key, dir: 1 } : s.dir === 1 ? { key, dir: -1 } : { key: null, dir: 1 })
+  const sortTh = (k, label, className = '') => (
+    <th className={`px-3 py-2 font-medium ${className}`} style={cell} aria-sort={sort.key === k ? (sort.dir === 1 ? 'ascending' : 'descending') : 'none'}>
+      <button onClick={() => sortBy(k)} className="inline-flex items-center gap-1 cursor-pointer hover:text-[var(--c-text)]" title={`Sort by ${label}`}>
+        {label}
+        {sort.key === k ? (sort.dir === 1 ? <ChevronUp size={12} /> : <ChevronDown size={12} />) : null}
+      </button>
+    </th>
+  )
   const allSelected = queueable.length > 0 && queueable.every(i => selected.includes(i.id))
   const toggle = (id) => setSelected(s => s.includes(id) ? s.filter(x => x !== id) : [...s, id])
 
@@ -127,25 +171,40 @@ export default function MyWork({ model, wsOn, onGoToSession }) {
                 <option value="chromium">Chromium</option><option value="firefox">Firefox</option><option value="webkit">WebKit</option>
               </select>
             </label>
-            {settings.paused ? (
-              <button
-                onClick={() => run('run', () => updateQueueSettings({ paused: false }))}
-                disabled={!queuedCount || busy === 'run'}
-                className={btn}
-                style={queuedCount ? { backgroundColor: 'var(--c-accent)', color: '#fff', border: '1px solid var(--c-accent)' } : btnStyle}
-              >
-                {busy === 'run' ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} />}Run{queuedCount ? ` ${queuedCount} queued` : ''}
-              </button>
-            ) : (
-              <button onClick={() => run('run', () => updateQueueSettings({ paused: true }))} className={btn} style={btnStyle}>
+            <button
+              onClick={() => run('run', runQueue)}
+              disabled={!waiting || busy === 'run'}
+              className={btn}
+              style={waiting ? { backgroundColor: 'var(--c-accent)', color: '#fff', border: '1px solid var(--c-accent)' } : btnStyle}
+            >
+              {busy === 'run' ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} />}Run{waiting ? ` ${waiting}` : ''}
+            </button>
+            {armed > 0 && (
+              <button onClick={() => run('stop', stopQueue)} disabled={busy === 'stop'} className={btn} style={btnStyle}>
                 <Square size={12} />Stop
               </button>
             )}
             <span className="text-xs" style={{ color: 'var(--c-text-muted)' }}>
-              {settings.paused
-                ? (queuedCount ? 'Stopped — nothing starts until you press Run.' : 'Stopped.')
-                : 'Running — starts what is queued, then stops. Stop lets running tasks finish.'}
+              {armed > 0
+                ? `${armed} up next${waiting ? ` · ${waiting} added since — press Run to include them` : ''}. Stop lets running tasks finish.`
+                : waiting > 0 ? 'Nothing starts until you press Run.' : ''}
             </span>
+            {isAdmin && (
+              <span className="ml-auto flex items-center gap-1.5 text-xs" style={{ color: 'var(--c-text-secondary)' }}>
+                Also show
+                <span className="inline-flex rounded" style={{ border: '1px solid var(--c-border)' }}>
+                  <MultiPillSelect
+                    value={team}
+                    onChange={setTeam}
+                    options={people.filter(p => p.id !== user?.id).map(p => ({ v: p.id, label: p.displayName || memberName(p) || p.email }))}
+                    fg="#a78bfa"
+                    placeholder="Other people's queues"
+                    title="Show other people's queues"
+                    emptyText="No other users."
+                  />
+                </span>
+              </span>
+            )}
           </div>
 
           {active.length === 0 && finished.length === 0 ? (
@@ -163,7 +222,7 @@ export default function MyWork({ model, wsOn, onGoToSession }) {
               </thead>
               <tbody>
                 {[...active, ...finished].map(item => {
-                  const st = QUEUE_STATUS[item.status] || QUEUE_STATUS.queued
+                  const st = statusOf(item)
                   const queuedIdx = active.filter(i => i.status === 'queued').findIndex(i => i.id === item.id)
                   const queuedCount = active.filter(i => i.status === 'queued').length
                   const waitingIn = item.phase === 'jev' ? item.jev_session_id : item.dev_session_id
@@ -244,6 +303,54 @@ export default function MyWork({ model, wsOn, onGoToSession }) {
           )}
         </section>
 
+        {/* Other people's queues — admins, read-only */}
+        {isAdmin && team.length > 0 && (
+          <section className="px-5 pt-6">
+            <h2 className="text-sm font-semibold mb-2" style={{ color: 'var(--c-text)' }}>Team queues</h2>
+            {!(queue.team || []).some(i => i.user_id !== user?.id) ? (
+              <p className="text-xs py-4" style={{ color: 'var(--c-text-muted)' }}>Nothing in their queues.</p>
+            ) : (
+              <table className="w-full text-xs border-collapse" style={{ border: '1px solid var(--c-border)' }}>
+                <thead>
+                  <tr className="text-left" style={{ color: 'var(--c-text-secondary)', backgroundColor: 'var(--c-surface)' }}>
+                    <th className="px-3 py-2 font-medium w-36" style={cell}>Person</th>
+                    <th className="px-3 py-2 font-medium" style={cell}>Task</th>
+                    <th className="px-3 py-2 font-medium w-32" style={cell}>Status</th>
+                    <th className="px-3 py-2 font-medium w-16" style={cell}>Jev</th>
+                    <th className="px-3 py-2 font-medium w-44" style={cell}>Sessions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(queue.team || []).filter(i => i.user_id !== user?.id).map(item => {
+                    const st = statusOf(item)
+                    return (
+                      <tr key={item.id}>
+                        <td className="px-3 py-2 align-top whitespace-nowrap" style={{ ...cell, color: 'var(--c-text-secondary)' }}>{item.user_name}</td>
+                        <td className="px-3 py-2 align-top" style={cell}>
+                          <div style={{ color: 'var(--c-text)' }}>{item.issue_title || item.issue_id}</div>
+                          {item.sprint_name && <div className="text-[11px]" style={{ color: 'var(--c-text-muted)' }}>{item.sprint_name}</div>}
+                          {item.status === 'needs_input' && item.question && <div className="mt-1 text-[11px] whitespace-pre-wrap" style={{ color: '#fca5a5' }}>{item.question}</div>}
+                        </td>
+                        <td className="px-3 py-2 align-top whitespace-nowrap" style={{ ...cell, color: st.color }}>
+                          {st.label}{item.verdict && <span style={{ color: 'var(--c-text-muted)' }}> · {item.verdict}</span>}
+                        </td>
+                        <td className="px-3 py-2 align-top" style={{ ...cell, color: 'var(--c-text-secondary)' }}>{item.jev ? 'On' : '—'}</td>
+                        <td className="px-3 py-2 align-top whitespace-nowrap" style={cell}>
+                          <div className="flex items-center gap-3">
+                            {item.dev_session_id && <button onClick={() => onGoToSession(item.dev_session_id)} className="inline-flex items-center gap-1 cursor-pointer hover:underline" style={{ color: 'var(--c-accent)' }}><MessageSquare size={12} />Dev</button>}
+                            {item.jev_session_id && <button onClick={() => onGoToSession(item.jev_session_id)} className="inline-flex items-center gap-1 cursor-pointer hover:underline" style={{ color: '#a78bfa' }}><FlaskConical size={12} />Jev</button>}
+                            {!item.dev_session_id && <span style={{ color: 'var(--c-text-muted)' }}>—</span>}
+                          </div>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            )}
+          </section>
+        )}
+
         {/* Assigned to me */}
         <section className="px-5 pt-6 pb-24">
           <h2 className="text-sm font-semibold mb-2" style={{ color: 'var(--c-text)' }}>Assigned to me</h2>
@@ -256,15 +363,15 @@ export default function MyWork({ model, wsOn, onGoToSession }) {
                   <th className="px-3 py-2 w-8" style={cell}>
                     <input type="checkbox" checked={allSelected} disabled={!queueable.length} onChange={() => setSelected(allSelected ? [] : queueable.map(i => i.id))} aria-label="Select every task not already queued" className="cursor-pointer" />
                   </th>
-                  <th className="px-3 py-2 font-medium" style={cell}>Task</th>
-                  <th className="px-3 py-2 font-medium w-36" style={cell}>Sprint</th>
-                  <th className="px-3 py-2 font-medium w-24" style={cell}>Priority</th>
-                  <th className="px-3 py-2 font-medium w-32" style={cell}>Dev status</th>
+                  {sortTh('title', 'Task')}
+                  {sortTh('sprint', 'Sprint', 'w-36')}
+                  {sortTh('priority', 'Priority', 'w-24')}
+                  {sortTh('dev_status', 'Dev status', 'w-32')}
                   <th className="px-3 py-2 font-medium w-28" style={cell}>Queue</th>
                 </tr>
               </thead>
               <tbody>
-                {work.issues.map(i => {
+                {issues.map(i => {
                   const pr = priorityMeta(i.priority)
                   const ds = devStatusMeta(i.dev_status)
                   const qs = i.queue_status ? QUEUE_STATUS[i.queue_status] : null

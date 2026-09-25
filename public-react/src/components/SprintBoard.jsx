@@ -47,7 +47,7 @@ function PillSelect({ value, onChange, options, fg, placeholder = '—', disable
 // devs). Collapsed it reads "Ravi +2"; open it is a checkbox list, so adding a second
 // dev never means un-picking the first. Unknown ids (a member dropped from the roster)
 // are shown rather than silently discarded.
-function MultiPillSelect({ value = [], onChange, options, fg, placeholder = '—', disabled, onCreate, emptyText = 'No devs on the roster.', title, collapsed }) {
+export function MultiPillSelect({ value = [], onChange, options, fg, placeholder = '—', disabled, onCreate, emptyText = 'No devs on the roster.', title, collapsed }) {
   const [open, setOpen] = useState(false)
   const [newName, setNewName] = useState('')
   // Picks the server has not confirmed yet. onUpdate refetches the whole list rather

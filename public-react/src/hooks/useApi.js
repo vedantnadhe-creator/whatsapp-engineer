@@ -953,8 +953,21 @@ export async function getMyWork() {
   return apiFetch('/api/my/work');
 }
 
-export async function getMyQueue() {
-  return apiFetch('/api/my/queue');
+// users: other people's ids to include as `team` (admins only).
+export async function getMyQueue(users = []) {
+  return apiFetch(`/api/my/queue${users.length ? `?users=${users.map(encodeURIComponent).join(',')}` : ''}`);
+}
+
+export async function runQueue() {
+  return apiFetch('/api/my/queue/run', { method: 'POST' });
+}
+
+export async function stopQueue() {
+  return apiFetch('/api/my/queue/stop', { method: 'POST' });
+}
+
+export async function getUsers() {
+  return apiFetch('/api/users');
 }
 
 export async function enqueueTasks(issueIds, { jev = false, model = null } = {}) {

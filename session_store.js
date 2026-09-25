@@ -9,6 +9,11 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
+// Row ids are `<PREFIX>-<ms base36><suffix>`. The suffix used to be 0–999, so rows made in
+// the same millisecond (a sheet import, a bulk queue add) collided ~1 in 1000 per pair and
+// the INSERT failed. 6 hex chars keeps ids short and makes that effectively impossible.
+const rowSuffix = () => crypto.randomBytes(3).toString('hex');
+
 // ── Sprint lifecycle ─────────────────────────────────────────────────────────
 // 'planning'  — created, not started. No status email goes out.
 // 'active'    — started/running. The only state the status mailer sends for.
@@ -279,6 +284,7 @@ class SessionStore {
                 verdict TEXT,
                 question TEXT,
                 note TEXT,
+                armed INTEGER NOT NULL DEFAULT 0,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 started_at DATETIME,
                 finished_at DATETIME,
@@ -382,6 +388,9 @@ class SessionStore {
             "ALTER TABLE issues ADD COLUMN assignees TEXT DEFAULT '[]'",
             // Extra description the developer adds when queueing a task — goes into that run's brief.
             "ALTER TABLE task_queue ADD COLUMN note TEXT",
+            // Set by Run on the tasks queued at that moment; the runner starts only armed
+            // tasks, so anything queued afterwards waits for the next Run.
+            "ALTER TABLE task_queue ADD COLUMN armed INTEGER NOT NULL DEFAULT 0",
         ];
         for (const sql of safeMigrations) {
             try { this.db.exec(sql); } catch (_) { /* column already exists */ }
@@ -1017,7 +1026,7 @@ class SessionStore {
     // ── Issues ─────────────────────────────────────────────────
 
     createIssue({ title, description = '', priority = 'medium', labels = [], createdBy = null, forkSessionId = null, sprintId = null, assignedTo = null, assignees = null, type = 'task', category = 'issue', mode = 'developer', platform = '', qaOwner = '', parentIssueId = null, sessionId = null, deadline = null, attachments = [] }) {
-        const id = `ISS-${Date.now().toString(36)}${Math.floor(Math.random() * 1000)}`;
+        const id = `ISS-${Date.now().toString(36)}${rowSuffix()}`;
         const assignment = normalizeAssignment(assignees ? { assignees } : { assigned_to: assignedTo });
         const maxOrder = this.db.prepare("SELECT COALESCE(MAX(sort_order), 0) as m FROM issues WHERE status = 'todo'").get().m;
         this.db.prepare(
@@ -1175,7 +1184,7 @@ class SessionStore {
 
     // ── Bugs (per feature) ───────────────────────────────────────
     createBug({ issueId, title, description = '', severity = 'normal', createdBy = null, attachments = [], assignedTo = null, qaOwner = null }) {
-        const id = `BUG-${Date.now().toString(36)}${Math.floor(Math.random() * 1000)}`;
+        const id = `BUG-${Date.now().toString(36)}${rowSuffix()}`;
         this.db.prepare(
             `INSERT INTO bugs (id, issue_id, title, description, severity, created_by, attachments, assigned_to, qa_owner) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
         ).run(id, issueId, title, description, severity, createdBy, JSON.stringify(Array.isArray(attachments) ? attachments : []), assignedTo || null, qaOwner || null);
@@ -1223,7 +1232,7 @@ class SessionStore {
     }
 
     addBugComment({ bugId, body, createdBy = null }) {
-        const id = `BC-${Date.now().toString(36)}${Math.floor(Math.random() * 1000)}`;
+        const id = `BC-${Date.now().toString(36)}${rowSuffix()}`;
         this.db.prepare('INSERT INTO bug_comments (id, bug_id, body, created_by) VALUES (?, ?, ?, ?)').run(id, bugId, body, createdBy);
         this.db.prepare('UPDATE bugs SET updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(bugId);
         return this.getBugComment(id);
@@ -1269,7 +1278,7 @@ class SessionStore {
     }
 
     createQueueItem({ userId, issueId, jev = false, model = null, note = null }) {
-        const id = `TQ-${Date.now().toString(36)}${Math.floor(Math.random() * 1000)}`;
+        const id = `TQ-${Date.now().toString(36)}${rowSuffix()}`;
         const { p } = this.db.prepare(`SELECT COALESCE(MAX(position), 0) AS p FROM task_queue WHERE user_id = ? AND status = 'queued'`).get(String(userId));
         this.db.prepare('INSERT INTO task_queue (id, user_id, issue_id, position, jev, model, note) VALUES (?, ?, ?, ?, ?, ?, ?)')
             .run(id, String(userId), issueId, p + 1, jev ? 1 : 0, model, note || null);
@@ -1277,7 +1286,7 @@ class SessionStore {
     }
 
     updateQueueItem(id, patch) {
-        const allowed = ['position', 'status', 'phase', 'jev', 'model', 'note', 'dev_session_id', 'jev_session_id', 'verdict', 'question', 'started_at', 'finished_at'];
+        const allowed = ['position', 'status', 'phase', 'jev', 'model', 'note', 'armed', 'dev_session_id', 'jev_session_id', 'verdict', 'question', 'started_at', 'finished_at'];
         const keys = Object.keys(patch).filter(k => allowed.includes(k));
         if (!keys.length) return this.getQueueItem(id);
         this.db.prepare(`UPDATE task_queue SET ${keys.map(k => `${k} = ?`).join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
@@ -1287,9 +1296,23 @@ class SessionStore {
 
     deleteQueueItem(id) { this.db.prepare('DELETE FROM task_queue WHERE id = ?').run(id); }
 
+    // Run (on) / Stop (off): marks every task queued right now. Returns how many changed.
+    armQueue(userId, on) {
+        return this.db.prepare(`UPDATE task_queue SET armed = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND status = 'queued'`)
+            .run(on ? 1 : 0, String(userId)).changes;
+    }
+
+    // Several people's queues at once — the admin team view.
+    getQueueItemsForUsers(userIds) {
+        return userIds.flatMap(id => {
+            const name = this.getUserById(id)?.display_name || id;
+            return this.getQueueItems(id).map(q => ({ ...q, user_name: name }));
+        });
+    }
+
     // Users with work the runner may need to act on — used on boot and by the tick.
     getQueueUserIds() {
-        return this.db.prepare(`SELECT DISTINCT user_id FROM task_queue WHERE status IN ('queued', 'running', 'testing')`).all().map(r => r.user_id);
+        return this.db.prepare(`SELECT DISTINCT user_id FROM task_queue WHERE (status = 'queued' AND armed = 1) OR status IN ('running', 'testing')`).all().map(r => r.user_id);
     }
 
     getLiveQueueItems() {
@@ -1410,7 +1433,7 @@ class SessionStore {
 
     // ── Test cases (per feature) ─────────────────────────────────
     createTestCase({ issueId, title, steps = '', expected = '', status = 'pending', source = 'manual', createdBy = null }) {
-        const id = `TC-${Date.now().toString(36)}${Math.floor(Math.random() * 1000)}`;
+        const id = `TC-${Date.now().toString(36)}${rowSuffix()}`;
         this.db.prepare(
             `INSERT INTO test_cases (id, issue_id, title, steps, expected, status, source, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
         ).run(id, issueId, title, steps, expected, status, source, createdBy);
