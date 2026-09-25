@@ -949,8 +949,9 @@ export function useAutonomous() {
 
 
 // ── My work: assigned tasks, the personal task queue, the personal agent ──
-export async function getMyWork() {
-  return apiFetch('/api/my/work');
+// users: other people's ids whose assigned tasks come back as `team_issues` (admins only).
+export async function getMyWork(users = []) {
+  return apiFetch(`/api/my/work${users.length ? `?users=${users.map(encodeURIComponent).join(',')}` : ''}`);
 }
 
 // users: other people's ids to include as `team` (admins only).

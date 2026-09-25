@@ -13,6 +13,7 @@ const PRIORITY_RANK = { urgent: 0, high: 1, medium: 2, low: 3 }
 const DEV_RANK = { todo: 0, in_progress: 1, dev_completed: 2 }
 const SORTS = {
   title: (a, b) => a.title.localeCompare(b.title),
+  person: (a, b) => (a.user_name || '').localeCompare(b.user_name || ''),
   sprint: (a, b) => (a.sprint_name || '').localeCompare(b.sprint_name || '', undefined, { numeric: true }),
   priority: (a, b) => (PRIORITY_RANK[a.priority] ?? 2) - (PRIORITY_RANK[b.priority] ?? 2),
   dev_status: (a, b) => (DEV_RANK[a.dev_status] ?? 9) - (DEV_RANK[b.dev_status] ?? 9),
@@ -60,7 +61,8 @@ export default function MyWork({ user, model, wsOn, onGoToSession }) {
 
   const load = useCallback(async () => {
     try {
-      const [w, q] = await Promise.all([getMyWork(), getMyQueue(teamKey ? teamKey.split(',') : [])])
+      const ids = teamKey ? teamKey.split(',') : []
+      const [w, q] = await Promise.all([getMyWork(ids), getMyQueue(ids)])
       setWork(w); setQueue(q)
     } catch (e) { setMsg({ kind: 'error', text: e.message }) }
   }, [teamKey])
@@ -78,7 +80,7 @@ export default function MyWork({ user, model, wsOn, onGoToSession }) {
       const r = await fn()
       if (r?.items) setQueue(q => ({ ...r, team: q?.team }))
       if (ok) setMsg({ kind: 'info', text: typeof ok === 'function' ? ok(r) : ok })
-      getMyWork().then(setWork).catch(() => {})
+      getMyWork(teamKey ? teamKey.split(',') : []).then(setWork).catch(() => {})
       return true
     } catch (e) { setMsg({ kind: 'error', text: e.message }); return false }
     finally { setBusy(null) }
@@ -94,15 +96,18 @@ export default function MyWork({ user, model, wsOn, onGoToSession }) {
   // Close only on success — a failed save must not throw away what was typed.
   const saveNote = () => run(editing.id, () => updateQueueItem(editing.id, { note: editing.text })).then(ok => ok && setEditing(null))
   const queueable = useMemo(() => (work?.issues || []).filter(i => !i.queue_status), [work])
+  // With people picked, their tasks join the table (read-only) under a Person column.
+  const showPeople = isAdmin && team.length > 0
   const issues = useMemo(() => {
-    const list = [...(work?.issues || [])]
+    const me = user?.displayName || 'Me'
+    const list = [...(work?.issues || []).map(i => ({ ...i, user_name: me, mine: true })), ...(showPeople ? work?.team_issues || [] : [])]
     if (!sort.key) return list
     const cmp = SORTS[sort.key]
     return list.sort((a, b) => {
       if (sort.key === 'sprint' && !a.sprint_name !== !b.sprint_name) return a.sprint_name ? -1 : 1
       return cmp(a, b) * sort.dir
     })
-  }, [work, sort])
+  }, [work, sort, showPeople, user?.displayName])
   // Click: ascending → descending → back to the default order.
   const sortBy = (key) => setSort(s => s.key !== key ? { key, dir: 1 } : s.dir === 1 ? { key, dir: -1 } : { key: null, dir: 1 })
   const sortTh = (k, label, className = '') => (
@@ -353,8 +358,8 @@ export default function MyWork({ user, model, wsOn, onGoToSession }) {
 
         {/* Assigned to me */}
         <section className="px-5 pt-6 pb-24">
-          <h2 className="text-sm font-semibold mb-2" style={{ color: 'var(--c-text)' }}>Assigned to me</h2>
-          {work.issues.length === 0 ? (
+          <h2 className="text-sm font-semibold mb-2" style={{ color: 'var(--c-text)' }}>{showPeople ? 'Assigned' : 'Assigned to me'}</h2>
+          {issues.length === 0 ? (
             <p className="text-xs py-6" style={{ color: 'var(--c-text-muted)' }}>Nothing assigned to you.</p>
           ) : (
             <table className="w-full text-xs border-collapse" style={{ border: '1px solid var(--c-border)' }}>
@@ -363,6 +368,7 @@ export default function MyWork({ user, model, wsOn, onGoToSession }) {
                   <th className="px-3 py-2 w-8" style={cell}>
                     <input type="checkbox" checked={allSelected} disabled={!queueable.length} onChange={() => setSelected(allSelected ? [] : queueable.map(i => i.id))} aria-label="Select every task not already queued" className="cursor-pointer" />
                   </th>
+                  {showPeople && sortTh('person', 'Person', 'w-36')}
                   {sortTh('title', 'Task')}
                   {sortTh('sprint', 'Sprint', 'w-36')}
                   {sortTh('priority', 'Priority', 'w-24')}
@@ -376,10 +382,12 @@ export default function MyWork({ user, model, wsOn, onGoToSession }) {
                   const ds = devStatusMeta(i.dev_status)
                   const qs = i.queue_status ? QUEUE_STATUS[i.queue_status] : null
                   return (
-                    <tr key={i.id} className="hover:bg-[var(--c-surface)]">
+                    <tr key={`${i.user_id || 'me'}:${i.id}`} className="hover:bg-[var(--c-surface)]">
                       <td className="px-3 py-2" style={cell}>
-                        <input type="checkbox" checked={selected.includes(i.id)} disabled={!!i.queue_status} onChange={() => toggle(i.id)} aria-label={`Select "${i.title}"`} className="cursor-pointer disabled:cursor-default" />
+                        {/* Only your own tasks can be queued — a queue runs as its owner. */}
+                        <input type="checkbox" checked={i.mine && selected.includes(i.id)} disabled={!i.mine || !!i.queue_status} onChange={() => toggle(i.id)} aria-label={`Select "${i.title}"`} title={i.mine ? undefined : `Only ${i.user_name} can queue their own tasks`} className="cursor-pointer disabled:cursor-default" />
                       </td>
+                      {showPeople && <td className="px-3 py-2 whitespace-nowrap" style={{ ...cell, color: i.mine ? 'var(--c-text)' : 'var(--c-text-secondary)' }}>{i.user_name}</td>}
                       <td className="px-3 py-2" style={{ ...cell, color: 'var(--c-text)' }}>{i.title}</td>
                       <td className="px-3 py-2 whitespace-nowrap" style={{ ...cell, color: 'var(--c-text-secondary)' }}>{i.sprint_name || (i.is_backlog ? 'Backlog' : '—')}</td>
                       <td className="px-3 py-2" style={{ ...cell, color: pr.color }}>{pr.label}</td>

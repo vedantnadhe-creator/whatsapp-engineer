@@ -187,10 +187,14 @@ assert.equal(item(G.id).status, 'running', 'Run starts what was queued');
 // Team view: admins only, read-only, labelled by person.
 store.createQueueItem({ userId: other.id, issueId: X.id });
 assert.equal((await call('GET', `/api/my/queue?users=${other.id}`)).s, 403, 'non-admins cannot see other queues');
+assert.equal((await call('GET', `/api/my/work?users=${other.id}`)).s, 403, 'non-admins cannot see other people\'s tasks');
 as = { ...u, isAdmin: true };
 r = await call('GET', `/api/my/queue?users=${u.id},${other.id},nobody`);
 assert.ok(r.j.team.some(i => i.user_id === other.id && i.user_name === 'Other'), 'admin sees the other person\'s queue');
-assert.ok(r.j.team.some(i => i.user_id === u.id), 'and their own in the same list');
+assert.ok(!r.j.team.some(i => i.user_id === u.id), 'your own queue is not repeated in the team list');
+r = await call('GET', `/api/my/work?users=${other.id}`);
+assert.ok(r.j.team_issues.some(i => i.id === X.id && i.user_name === 'Other'), 'admin sees the other person\'s assigned tasks');
+assert.ok(r.j.issues.every(i => !i.user_id), 'my own list stays mine');
 as = u;
 
 as = other;

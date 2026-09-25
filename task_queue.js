@@ -290,31 +290,45 @@ export default class TaskQueue {
         };
 
         // My plate: every unfinished issue assigned to me, with its queue state.
+        // Unfinished issues assigned to one person, each with its queue state.
+        const plate = (userId) => {
+            const all = this.store.getIssuesAssignedTo(userId, { status: 'all' }).filter(i => i.dev_status !== 'done');
+            const queue = this.store.getQueueItems(userId);
+            const byIssue = new Map(queue.filter(q => ['queued', 'running', 'testing', 'needs_input'].includes(q.status)).map(q => [q.issue_id, q]));
+            return { all, queue, issues: all.map(i => ({ ...i, queue_status: byIssue.get(i.id)?.status || null, queue_item_id: byIssue.get(i.id)?.id || null })) };
+        };
+        const teamIds = (req, res) => {
+            if (!req.query.users) return [];
+            const ids = [...new Set(String(req.query.users).split(',').map(s => s.trim()).filter(Boolean))].slice(0, 50);
+            if (ids.some(id => id !== req.user.id) && !req.user.isAdmin) { res.status(403).json({ error: 'Only admins can view other people\'s work' }); return null; }
+            return ids.filter(id => id !== req.user.id && this.store.getUserById(id));
+        };
+
+        // My plate. ?users=id1,id2 (admins): also each of those people's assigned tasks, as
+        // `team_issues` labelled with the person — read-only, the queue only runs as its owner.
         app.get('/api/my/work', requireAuth, (req, res) => {
             try {
-                const all = this.store.getIssuesAssignedTo(req.user.id, { status: 'all' }).filter(i => i.dev_status !== 'done');
-                const queue = this.store.getQueueItems(req.user.id);
-                const byIssue = new Map(queue.filter(q => ['queued', 'running', 'testing', 'needs_input'].includes(q.status)).map(q => [q.issue_id, q]));
+                const ids = teamIds(req, res); if (ids === null) return;
+                const { all, queue, issues } = plate(req.user.id);
                 const counts = { total: all.length, todo: 0, in_progress: 0, dev_completed: 0 };
                 for (const i of all) if (counts[i.dev_status] !== undefined) counts[i.dev_status]++;
-                res.json({
-                    counts,
-                    questions: queue.filter(q => q.status === 'needs_input').length,
-                    issues: all.map(i => ({ ...i, queue_status: byIssue.get(i.id)?.status || null, queue_item_id: byIssue.get(i.id)?.id || null })),
-                });
+                const out = { counts, questions: queue.filter(q => q.status === 'needs_input').length, issues };
+                if (ids.length) {
+                    out.team_issues = ids.flatMap(id => {
+                        const name = this.store.getUserById(id)?.display_name || id;
+                        return plate(id).issues.map(i => ({ ...i, user_id: id, user_name: name }));
+                    });
+                }
+                res.json(out);
             } catch (err) { res.status(500).json({ error: err.message }); }
         });
 
         // ?users=id1,id2 — admins can watch several people's queues at once (read-only).
         app.get('/api/my/queue', requireAuth, (req, res) => {
             try {
+                const ids = teamIds(req, res); if (ids === null) return;
                 const out = view(req.user.id);
-                if (req.query.users) {
-                    const ids = [...new Set(String(req.query.users).split(',').map(s => s.trim()).filter(Boolean))].slice(0, 50);
-                    if (ids.some(id => id !== req.user.id) && !req.user.isAdmin) return res.status(403).json({ error: 'Only admins can view other people\'s queues' });
-                    const known = ids.filter(id => this.store.getUserById(id));
-                    out.team = this.store.getQueueItemsForUsers(known).map(withLinks);
-                }
+                if (req.query.users) out.team = this.store.getQueueItemsForUsers(ids).map(withLinks);
                 res.json(out);
             } catch (err) { res.status(500).json({ error: err.message }); }
         });
