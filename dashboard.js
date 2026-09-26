@@ -1188,6 +1188,12 @@ Do NOT ask for confirmation — proceed through each step automatically. If any 
             if (req.user.role === 'tester' && session.mode !== 'tester') {
                 return res.status(403).json({ error: 'Testers cannot chat on this session directly — use "Test it" to start a tester session.', code: 'TESTER_MUST_FORK' });
             }
+            // A running session cannot take a message: the resume is rejected inside the
+            // handler, which only logs it — so this used to answer 200 for a message that
+            // was silently dropped. Say so instead (the personal agent relies on this).
+            if (executionEngine?.isRunning(sessionId)) {
+                return res.status(409).json({ error: 'This session is running right now — send the message when it finishes.', code: 'SESSION_RUNNING' });
+            }
             const imagePath = takePendingImages(req.body);
             // Claude and Codex use incompatible native resume IDs. Let the execution
             // manager see the original provider first, so it can create a context

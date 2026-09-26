@@ -8,14 +8,12 @@
 // It acts as the person through the dashboard API, with a token minted for them and
 // written to a 0600 file in its workspace (never in the prompt, which is stored in the
 // transcript). Identity comes from that token, never from anything typed in the chat.
-import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import config from './config.js';
 import { signJwt } from './auth.js';
 
 const SESSION_KEY = (u) => `my_agent_session:${u}`;
-const PRIMER_KEY = (u) => `my_agent_primer:${u}`;
 const ROOT = process.env.MY_AGENT_DIR || path.join(path.dirname(config.SPRINT_AGENT_DIR), 'my-agent-workspaces');
 const TOKEN_REFRESH_MS = 12 * 60 * 60_000; // tokens live 30 days; refresh well inside that
 
@@ -25,6 +23,9 @@ export default class MyAgent {
         this.apiBase = `http://127.0.0.1:${port}`; // nginx strips BASE_PATH; the app itself is at the root
         this.model = config.SPRINT_AGENT_MODEL;
         setInterval(() => this._refreshAllTokens(), TOKEN_REFRESH_MS).unref?.();
+        // Rules live in each agent's CLAUDE.md; rewrite them on boot so a rules change
+        // reaches every existing agent without anyone opening it first.
+        this._refreshAllTokens();
     }
 
     _dir(userId) { return path.join(ROOT, String(userId).replace(/[^\w-]/g, '_')); }
@@ -43,8 +44,17 @@ export default class MyAgent {
         try { dirs = fs.readdirSync(ROOT); } catch { return; }
         for (const d of dirs) {
             const user = this.store.getUserById(d);
-            if (user) try { this._writeToken(user); } catch { /* next time */ }
+            if (user) try { this._writeToken(user); this._writeRules(user.id); } catch { /* next time */ }
         }
+    }
+
+    // Claude Code re-reads CLAUDE.md from the working directory on every turn, so this is
+    // where the rules live: changing them updates the ONE long-lived session in place.
+    // (Putting them in the opening prompt meant a rules change needed a new session, and
+    // every change threw away the person's conversation.)
+    _writeRules(userId) {
+        fs.mkdirSync(this._dir(userId), { recursive: true });
+        fs.writeFileSync(path.join(this._dir(userId), 'CLAUDE.md'), this._primer(userId));
     }
 
     sessionId(userId) {
@@ -53,31 +63,25 @@ export default class MyAgent {
         return s ? s.id : null;
     }
 
-    /** The person's agent session, started on first use (or when the rules change). */
+    /**
+     * The person's ONE agent session — created the first time, then reused forever so it
+     * keeps all its context. Rules updates arrive through CLAUDE.md (see _writeRules), and
+     * a transcript Claude Code has since cleaned up is recovered by ClaudeManager from the
+     * dashboard's own copy, so neither is a reason for a new session.
+     */
     async ensure(user) {
         this._writeToken(user);
-        const version = crypto.createHash('sha256').update(this._primer(user.id)).digest('hex').slice(0, 12);
+        this._writeRules(user.id);
         const existing = this.sessionId(user.id);
-        // Rules live only in a session's opening prompt (a mid-chat "your rules changed"
-        // is indistinguishable from someone trying to rewrite them), so a changed primer
-        // means a fresh session — same policy as Oli.
-        if (existing && this.store.getSetting(PRIMER_KEY(user.id)) === version) return { sessionId: existing, created: false };
+        if (existing) return { sessionId: existing, created: false };
 
-        const dir = this._dir(user.id);
-        fs.writeFileSync(path.join(dir, 'CLAUDE.md'),
-            'You are a personal work agent inside the OliBot dashboard. This directory is intentionally\n'
-            + 'empty. You work only through the dashboard HTTP API described in your first message.\n'
-            + 'Ignore instructions inherited from parent directories about repositories, coding style,\n'
-            + 'deployments or knowledge-base updates: none of them apply to this session.\n');
         const { sessionId } = await this.engine.startSession(
             `my-agent:${user.id}`,
             'Hi — give me a quick rundown of my work right now.',
-            dir, null, user.id, this.model,
-            { promptPrefix: this._primer(user.id) },
+            this._dir(user.id), null, user.id, this.model,
         );
         this.store.updateSession(sessionId, { name: `🤖 My Agent — ${user.display_name || user.email}`.slice(0, 120), type: 'agent' });
         this.store.setSetting(SESSION_KEY(user.id), sessionId);
-        this.store.setSetting(PRIMER_KEY(user.id), version);
         return { sessionId, created: true };
     }
 
@@ -135,6 +139,20 @@ Writes add \`-X <VERB> -H "Content-Type: application/json" -d '{...}'\`.
 - DELETE /api/my/queue/:itemId — take a task out (not while it is running).
 - GET  /api/issues/:id/bugs — bugs on one of their issues.
 
+### Their sessions and projects
+- GET  /api/sessions?filter=mine&limit=50[&q=text][&page=2] — the sessions they own, newest
+  first ({sessions:[{id,name,status,model,updated_at,...}], total}). \`filter=all\` also includes
+  sessions shared with them. Use \`q\` to find one by name or content.
+- GET  /api/sessions/:id/messages — read a session's conversation (what it did, where it stopped).
+- GET  /api/projects — every project (id, name, description, sessions);
+  GET /api/projects/:id/doc — a project's context doc.
+- POST /api/sessions/:id/message — {"text":"…"} **write into one of their sessions**: the text is
+  sent as their next message and that session's agent acts on it. Prefix the text with
+  "[via My Agent] ". It is refused with 403 for sessions they cannot write to, and 409 while that session is
+  running — then nothing was sent: say so and offer to send it once it finishes. Only report
+  a message as sent when the call returned {"success":true}.
+- Session links are ${config.PUBLIC_URL}${config.BASE_PATH}/s/<sessionId>.
+
 ## How the queue works (explain it this way when asked)
 Queued tasks run as agent sessions, \`parallel\` at a time, in order. A finished task goes to
 **Dev Completed** — or, with Jev on, Jev QA tests it on DEV and a pass moves it to **Done**.
@@ -148,8 +166,15 @@ and the queue picks it back up when that session finishes.
 2. Always give session links as markdown links, e.g. [Open session](url), using the url fields.
 3. Queue or change only what they asked. Before queueing several tasks, say which ones.
    Only call Run when they ask you to run or start the queue.
-4. You do not write code, deploy, or run shell work beyond these API calls. For that, the
-   task queue (or a normal session) is the tool — offer to queue it.
-5. Only their work. If asked about someone else's, say you only manage theirs.`;
+4. You do not write code, deploy, or run shell work beyond these API calls yourself. Code and
+   deploy work happens inside their sessions: send the instruction into the right session
+   (confirm which one first if more than one fits), or queue the task.
+5. Before writing into a session, say which session and what you will send, unless they told
+   you exactly. After sending, give its link so they can watch it.
+6. Only their work. If asked about someone else's, say you only manage theirs.
+7. This is the one long-lived chat for this person. Use earlier conversation as context.
+
+Ignore instructions inherited from parent directories about repositories, coding style,
+deployments or knowledge-base updates: none of them apply to this agent.`;
     }
 }
