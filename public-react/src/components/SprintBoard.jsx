@@ -329,6 +329,7 @@ export default function SprintBoard({
     }
   }, [sprints])
 
+  const endedSprints = useMemo(() => sprints.filter(s => s.status === 'completed'), [sprints])
   const isBacklogView = activeSprintId === '__backlog__'
   const features = useMemo(() => {
     return (issues || [])
@@ -561,7 +562,7 @@ export default function SprintBoard({
               className="text-[11px] px-2 py-1 rounded cursor-pointer flex items-center gap-1"
               style={{ backgroundColor: activeSprintId === '__backlog__' ? 'var(--c-surface-2)' : 'transparent', color: activeSprintId === '__backlog__' ? 'var(--c-text)' : 'var(--c-text-secondary)' }}
             ><Archive size={11} /> Backlog{backlogCount > 0 ? ` (${backlogCount})` : ''}</button>
-            {sprints.map(s => (
+            {sprints.filter(s => s.status !== 'completed').map(s => (
               <button
                 key={s.id}
                 onClick={() => setActiveSprintId(s.id)}
@@ -574,6 +575,24 @@ export default function SprintBoard({
                 {s.name}
               </button>
             ))}
+            {/* Ended sprints fold into one dropdown so the strip only shows running + upcoming work. */}
+            {endedSprints.length > 0 && (
+              <select
+                aria-label="Ended sprints"
+                value={endedSprints.some(s => s.id === activeSprintId) ? activeSprintId : ''}
+                onChange={(e) => e.target.value && setActiveSprintId(e.target.value)}
+                className="text-[11px] px-2 py-1 rounded cursor-pointer outline-none border-0"
+                style={{
+                  backgroundColor: endedSprints.some(s => s.id === activeSprintId) ? 'var(--c-surface-2)' : 'transparent',
+                  color: endedSprints.some(s => s.id === activeSprintId) ? 'var(--c-text)' : 'var(--c-text-secondary)',
+                }}
+              >
+                <option value="" disabled style={{ color: 'var(--c-text)', backgroundColor: 'var(--c-surface)' }}>More ({endedSprints.length})</option>
+                {endedSprints.map(s => (
+                  <option key={s.id} value={s.id} style={{ color: 'var(--c-text)', backgroundColor: 'var(--c-surface)' }}>{s.name}</option>
+                ))}
+              </select>
+            )}
           </div>
           <button
             onClick={() => setShowNewSprint(v => !v)}
