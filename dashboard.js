@@ -1200,7 +1200,8 @@ Do NOT ask for confirmation — proceed through each step automatically. If any 
             // handoff when the selected model crosses that provider boundary.
             const model = resolveModelForRole(req.user.role, (typeof req.body.model === 'string' && req.body.model.trim()) ? req.body.model.trim() : null);
             await messageHandler({ isWeb: true, phone: String(phone), text: `[resume ${sessionId}] ${text}`, pushName: req.user.displayName || 'Dashboard', imagePath, model: model || resolveModelForRole(req.user.role, session.model) });
-            res.json({ success: true });
+            // The link, so callers (the personal agent) never build one from the wrong id.
+            res.json({ success: true, sessionId, url: `${config.PUBLIC_URL}${config.BASE_PATH}/s/${sessionId}` });
         } catch (err) { res.status(500).json({ error: err.message }); }
     });
 

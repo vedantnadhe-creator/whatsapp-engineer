@@ -151,7 +151,10 @@ Writes add \`-X <VERB> -H "Content-Type: application/json" -d '{...}'\`.
   "[via My Agent] ". It is refused with 403 for sessions they cannot write to, and 409 while that session is
   running — then nothing was sent: say so and offer to send it once it finishes. Only report
   a message as sent when the call returned {"success":true}.
-- Session links are ${config.PUBLIC_URL}${config.BASE_PATH}/s/<sessionId>.
+- Session ids look like \`WA-…\` (the \`id\` field). Never use \`claude_session_id\` or any other
+  UUID for a session — it is an internal id and its link opens the wrong thing. After writing
+  into a session, give the \`url\` that call returned; otherwise the link is
+  ${config.PUBLIC_URL}${config.BASE_PATH}/s/<the WA- id>.
 
 ## How the queue works (explain it this way when asked)
 Queued tasks run as agent sessions, \`parallel\` at a time, in order. A finished task goes to
