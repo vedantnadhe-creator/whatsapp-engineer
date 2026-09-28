@@ -74,7 +74,7 @@ const BA_MODEL = 'haiku';
 // Sprint-board priority — mirrors PRIORITIES in public-react/src/components/sprintMeta.js.
 const PRIORITY_VALUES = ['urgent', 'high', 'medium', 'low'];
 const TESTING_MODEL = 'codex:gpt-5.6-sol';
-const CLIENT_SUPPORT_MODEL = 'claude-opus-5';
+const CLIENT_SUPPORT_MODEL = 'claude-opus-5-5';
 const CLIENT_SUPPORT_CODEX_MODEL = 'codex:gpt-5.6-terra';
 const ROLE_MODEL_POLICY = {
     // Was Ollama-only for cost containment; Ollama left the dropdown on 2026-08-06,
@@ -86,7 +86,7 @@ const ROLE_MODEL_POLICY = {
     tester: { allow: (m) => m === TESTING_MODEL, fallback: TESTING_MODEL },
     // Client support runs long multi-step work (staged TPO sourcing, Excel builds,
     // client-facing writing), so the list is deliberately just two strong models:
-    // Opus 5 as the default, and GPT-5.6 Terra as the alternate. Sonnet 5 and Haiku were
+    // Opus 5.5 as the default (was Opus 5 until 2026-09-28), and GPT-5.6 Terra as the alternate. Sonnet 5 and Haiku were
     // removed on request — a half-finished sourcing run costs more than the token saving.
     // NOTE: the ids do not sort the way the names do, and picking the wrong one
     // silently downgrades the role. Use exact ids (`claude-opus-5-5`), never the bare
