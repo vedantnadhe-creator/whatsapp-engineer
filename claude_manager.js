@@ -806,7 +806,11 @@ class ClaudeManager extends EventEmitter {
             // A killed turn (SIGHUP from a dashboard restart, an OOM) is salvaged too:
             // the transcript is written as the turn runs, so the answer is often already
             // on disk. Restricting this to clean exits threw that away.
-            if (!entry.resultEmitted && !entry.manualStop && provider !== 'codex') {
+            //
+            // Keyed on repliedText, not resultEmitted: Claude Code can also emit a
+            // `result` whose text is empty while the answer sits in the transcript
+            // (WA-mumkb8b1-57v5, 2026-09-29), and that turn must be salvaged too.
+            if (!entry.repliedText && !entry.manualStop && provider !== 'codex') {
                 this._salvageFromTranscript(sessionId, entry, workingDir);
             }
 
@@ -958,6 +962,9 @@ class ClaudeManager extends EventEmitter {
             for (let i = lines.length - 1; i >= 0; i--) {
                 let ev;
                 try { ev = JSON.parse(lines[i]); } catch { continue; }
+                // Stop at this turn's prompt — never re-post a previous turn's answer.
+                const uc = ev.type === 'user' && !ev.isMeta ? ev.message?.content : null;
+                if (typeof uc === 'string' || (Array.isArray(uc) && !uc.some((b) => b.type === 'tool_result'))) return;
                 if (ev.type !== 'assistant' || !ev.message) continue;
                 const content = this._extractText(ev.message);
                 if (!content) continue;
