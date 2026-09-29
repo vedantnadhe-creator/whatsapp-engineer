@@ -34,6 +34,7 @@ import { probeHeadroom } from './headroom.js';
 import { slugify, writeProjectDoc, readProjectDoc, projectContextBanner } from './project_doc.js';
 import { logSessionEvent, logProjectEvent, logIssueEvent, logMarkersFromOutput, syncProjectRoster } from './project_events.js';
 import { runMasterAgent, SPAWN_TOOL } from './master_agent.js';
+import { UatCodeReviewer } from './uat_code_reviewer.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -3396,6 +3397,7 @@ Steps:
 
     // Wire up Claude execution engine events → WebSocket
     if (executionEngine) {
+        const uatCodeReviewer = new UatCodeReviewer({ store, engine: executionEngine, broadcast: wsBroadcast });
         // Sprint board: a feature's dev session auto-advances to "Dev Completed" ONLY on a real
         // UAT deploy (the [[UAT_DEPLOYED]] marker). Any other "done" stays manual.
         const checkFeatureDone = (sessionId, content) => {
@@ -3419,11 +3421,13 @@ Steps:
 
         executionEngine.on('result', ({ sessionId, content, costUsd }) => {
             checkFeatureDone(sessionId, content);
+            void uatCodeReviewer.start(sessionId, content);
             logMarkersFromOutput(store, sessionId, content);
             wsBroadcast('result', { sessionId, content, costUsd });
         });
 
         executionEngine.on('session_end', ({ sessionId, code, status, costUsd }) => {
+            uatCodeReviewer.finished(sessionId, status);
             // Every turn ends a session process, so routine completions would flood the
             // project doc — the roster carries live status instead. Only failures, which
             // the next person in the project needs to know about, are logged.
