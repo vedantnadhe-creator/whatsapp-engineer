@@ -7,6 +7,7 @@ const MODEL_NAMES = {
   'claude-opus-4-8': 'Opus 4.8',
   'claude-opus-4-7': 'Opus 4.7',
   'claude-opus-4-6': 'Opus 4.6',
+  'claude-sonnet-5-5': 'Sonnet 5.5',
   'claude-sonnet-5': 'Sonnet 5',
   'claude-fable-5-1': 'Fable 5.1',
   'claude-fable-5': 'Fable 5',

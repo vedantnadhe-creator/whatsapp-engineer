@@ -563,7 +563,8 @@ a{color:#60a5fa;text-decoration:none}</style></head>
             // resuming; the aliases just aren't offered any more.
             { id: 'claude-fable-5-1', name: 'Fable 5.1', description: 'Newest Fable — best judgement on the hardest, long-running work · ~2× faster than Opus, ~2× the tokens' },
             { id: 'claude-fable-5', name: 'Fable 5', description: 'Previous Fable generation' },
-            { id: 'claude-sonnet-5', name: 'Sonnet 5', description: 'Latest Sonnet — strong for everyday tasks' },
+            { id: 'claude-sonnet-5-5', name: 'Sonnet 5.5', description: 'Newest Sonnet — fast and strong for everyday tasks' },
+            { id: 'claude-sonnet-5', name: 'Sonnet 5', description: 'Previous Sonnet generation' },
             { id: 'claude-opus-4-7', name: 'Opus 4.7', description: 'Previous Opus generation' },
             { id: 'claude-opus-4-6', name: 'Opus 4.6', description: 'Older Opus generation' },
             { id: 'sonnet', name: 'Sonnet 4.6', description: 'Best for everyday tasks' },
