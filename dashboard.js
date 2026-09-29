@@ -35,6 +35,7 @@ import { slugify, writeProjectDoc, readProjectDoc, projectContextBanner } from '
 import { logSessionEvent, logProjectEvent, logIssueEvent, logMarkersFromOutput, syncProjectRoster } from './project_events.js';
 import { runMasterAgent, SPAWN_TOOL } from './master_agent.js';
 import { UatCodeReviewer } from './uat_code_reviewer.js';
+import { getLimits as getUsageLimits, getUsage, refreshIndex as refreshUsageIndex } from './usage_monitor.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -609,15 +610,44 @@ a{color:#60a5fa;text-decoration:none}</style></head>
         }
     });
 
-    // Cost meter — per-session API-equivalent cost, aggregated. Read-only, no caps.
-    app.get('/api/cost-stats', requireAuth, (req, res) => {
+    // Usage — live Claude Code / Codex plan limits plus real token usage per
+    // user, parsed from the CLIs' transcripts (see usage_monitor.js). Limits and
+    // totals are account-wide, so everyone sees them; the per-user and
+    // per-session breakdown is admin-only, others get just their own rows.
+    const USAGE_RANGES = { '24h': 864e5, '7d': 7 * 864e5, '30d': 30 * 864e5 };
+    app.get('/api/usage', requireAuth, async (req, res) => {
         try {
-            if (typeof store.getCostStats !== 'function') {
-                return res.json({ unavailable: true });
+            const range = String(req.query.range || 'week');
+            const limits = await getUsageLimits({ force: req.query.refresh === '1' });
+            const claudeWindow = (minutes) => limits.claude?.windows?.find((w) => w.windowMinutes === minutes);
+            let sinceMs;
+            if (USAGE_RANGES[range]) sinceMs = Date.now() - USAGE_RANGES[range];
+            else if (range === 'week' || range === 'session') {
+                const w = claudeWindow(range === 'week' ? 10080 : 300);
+                const resetMs = Date.parse(w?.resetsAt || '');
+                sinceMs = Number.isFinite(resetMs) ? resetMs - w.windowMinutes * 60000 : Date.now() - (range === 'week' ? 7 * 864e5 : 5 * 36e5);
+            } else return res.status(400).json({ error: 'range must be one of session, week, 24h, 7d, 30d' });
+
+            const index = new Map();
+            for (const row of store.getUsageSessionIndex?.() || []) {
+                index.set(row.key, { id: row.id, task: row.name || row.task, ownerId: row.ownerId, ownerName: row.ownerName });
             }
-            res.json(store.getCostStats(50));
+            const usage = await getUsage(sinceMs, index);
+            const isAdmin = !!req.user.isAdmin;
+            const mine = (ownerId) => isAdmin || ownerId === req.user.id;
+            const sessions = usage.sessions
+                .filter((s) => mine(s.ownerId))
+                .sort((a, b) => (b.input + b.cacheWrite + b.output) - (a.input + a.cacheWrite + a.output))
+                .slice(0, 50);
+            res.json({
+                range, since: new Date(sinceMs).toISOString(), isAdmin, limits,
+                ...usage,
+                users: usage.users.filter((u) => mine(u.userId)),
+                sessions,
+            });
         } catch (err) {
-            res.status(500).json({ error: err.message });
+            console.error('[Usage]', err);
+            res.status(500).json({ error: 'Could not load usage' });
         }
     });
 
@@ -3452,4 +3482,5 @@ Steps:
     app._wsBroadcast = wsBroadcast;
 
     server.listen(port, () => console.log(`[Dashboard] 🌐 Web Dashboard running on port ${port} (WebSocket: /ws)`));
+    refreshUsageIndex(); // warm the transcript index (~30 s) so the Usage page opens instantly
 }

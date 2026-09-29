@@ -10,7 +10,7 @@ import { useAuth } from '../context/AuthContext'
 import {
   useModels, useSessions, renameSession, deleteSession, toggleBookmark, getTranscript,
   usePlaylists, createPlaylist, renamePlaylist, deletePlaylist, addToPlaylist, removeFromPlaylist,
-  useCostStats, useAgents, useSprints, useIssues, useTeamMembers,
+  useAgents, useSprints, useIssues, useTeamMembers,
   runAgent, getSprintChangelog, requestIssueSummary, getIssueLastResponse, generateSprintChangelog,
   uploadFile,
   useUsers, usePhones, useCron, useAccessRequests,
@@ -18,14 +18,14 @@ import {
 } from '../hooks/useApi'
 import Login from './Login'
 import ShareSessionModal from '../components/ShareSessionModal'
-import CostView from '../components/CostView'
+import UsageView from '../components/UsageView'
 import AgentsView from '../components/AgentsView'
 import SprintBoard from '../components/SprintBoard'
 import { AdminModal, UsersPanel, PhonesPanel, PromptsPanel, LearningsPanel, CronPanel, AccessRequestsPanel, SettingsPanel } from '../components/AdminPanels'
 import {
   ArrowLeft, Circle, RotateCw, TerminalSquare, PanelLeftClose, PanelLeft,
   Plus, Search, X, MoreVertical, GitFork, History, Share2, Pencil, Trash2, Star, Play,
-  MessageSquare, SendHorizontal, Wrench, ChevronDown, LayoutGrid, Sparkles, DollarSign,
+  MessageSquare, SendHorizontal, Wrench, ChevronDown, LayoutGrid, Sparkles, Gauge,
   ChevronRight, Loader2, Paperclip, CheckCircle2,
   Settings, Users, Phone, FileText, BookOpen, Clock, User as UserIcon, Bell, BellOff,
   Square, Copy, Check, ListMusic, FolderPlus,
@@ -123,8 +123,7 @@ export default function TerminalPage() {
 
   // Top-level workspace tab. 'chat' is the terminal/conversation; the others mount
   // the same feature views V1's dashboard uses (reused as-is, no fork).
-  const [tab, setTab] = useState('chat') // chat | sprint | agents | cost
-  const { cost, loading: costLoading, refresh: refreshCost } = useCostStats()
+  const [tab, setTab] = useState('chat') // chat | sprint | agents | usage
   const { agents, loading: agentsLoading, refresh: refreshAgents } = useAgents()
   const { issues, refresh: refreshIssues, createIssue, updateIssue, deleteIssue } = useIssues()
   const { sprints, createSprint, updateSprint, deleteSprint } = useSprints()
@@ -861,8 +860,8 @@ export default function TerminalPage() {
       </div>
       {tab !== 'chat' && (
         <div className="flex-1 min-h-0 h-full overflow-hidden">
-          {tab === 'cost' && (
-            <CostView cost={cost} loading={costLoading} onRefresh={refreshCost} onGoToSession={goToSession} />
+          {tab === 'usage' && (
+            <UsageView onGoToSession={goToSession} />
           )}
           {tab === 'agents' && (
             <AgentsView agents={agents} loading={agentsLoading} onRunAgent={async (agentId, note) => {
@@ -946,7 +945,7 @@ function NavRail({ tab, setTab, isAdmin, onShowAdmin, pendingRequests = 0 }) {
     { key: 'chat', icon: MessageSquare, label: 'Chat' },
     { key: 'sprint', icon: LayoutGrid, label: 'Sprints' },
     { key: 'agents', icon: Sparkles, label: 'Agents' },
-    { key: 'cost', icon: DollarSign, label: 'Cost' },
+    { key: 'usage', icon: Gauge, label: 'Usage' },
   ]
   const adminItems = [
     { key: 'users', label: 'Users', icon: Users },

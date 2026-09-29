@@ -101,9 +101,9 @@ export function useStats() {
   return { stats: data, loading, error, refresh };
 }
 
-export function useCostStats() {
-  const { data, loading, error, refresh } = useGet('/api/cost-stats');
-  return { cost: data, loading, error, refresh };
+export function useUsage(range) {
+  const { data, loading, error, refresh } = useGet(`/api/usage?range=${encodeURIComponent(range)}`);
+  return { usage: data, loading, error, refresh };
 }
 
 // Parse + fetch a session's Claude transcript (terminal sessions: history view).

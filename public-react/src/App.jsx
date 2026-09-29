@@ -3,14 +3,14 @@ import { BrowserRouter, Routes, Route, useParams, useNavigate, useLocation } fro
 import { AuthProvider, useAuth } from './context/AuthContext'
 import SharePage from './pages/SharePage'
 import TerminalPage from './pages/TerminalPage'
-import { useSessions, useStats, useCostStats, useSessionMessages, useModels, usePhones, useUsers, useCron, useAccessRequests, useIssues, useAutonomous, useSprints, useTeamMembers, useAction, useAgents, runAgent, runAgentOrchestrated, getAgentSprint, setAgentSprint, getSessionChildren, startSession, sendMessage, stopSession, forkSession, testForkSession, testSession, mergeSessions, toggleBookmark, updateSessionSprint, getSprintChangelog, requestIssueSummary, getIssueLastResponse, generateSprintChangelog, uploadFile, transcribeAudio, requestAccess, getClaudePrompt, saveClaudePrompt, getLearnings, saveLearnings, getAdminSettings, saveAdminSetting, renameSession, deleteSession, sessionToIssue, apiFetch } from './hooks/useApi'
+import { useSessions, useStats, useSessionMessages, useModels, usePhones, useUsers, useCron, useAccessRequests, useIssues, useAutonomous, useSprints, useTeamMembers, useAction, useAgents, runAgent, runAgentOrchestrated, getAgentSprint, setAgentSprint, getSessionChildren, startSession, sendMessage, stopSession, forkSession, testForkSession, testSession, mergeSessions, toggleBookmark, updateSessionSprint, getSprintChangelog, requestIssueSummary, getIssueLastResponse, generateSprintChangelog, uploadFile, transcribeAudio, requestAccess, getClaudePrompt, saveClaudePrompt, getLearnings, saveLearnings, getAdminSettings, saveAdminSetting, renameSession, deleteSession, sessionToIssue, apiFetch } from './hooks/useApi'
 import useWebSocket from './hooks/useWebSocket'
 import Sidebar from './components/Sidebar'
 import Workspace from './components/Workspace'
 import SprintBoard from './components/SprintBoard'
 import AgentsView from './components/AgentsView'
 import AgentRunPage from './components/AgentRunPage'
-import CostView from './components/CostView'
+import UsageView from './components/UsageView'
 import TestsView from './components/TestsView'
 import MyWork from './components/MyWork'
 import Login from './pages/Login'
@@ -59,7 +59,6 @@ function Dashboard() {
   const [websocketMessage, setWebsocketMessage] = useState(null);
 
   const { stats, refresh: refreshStats } = useStats()
-  const { cost, loading: costLoading, refresh: refreshCost } = useCostStats()
   // Sidebar tab — 'all' | 'mine' | 'saved' | 'pl:<id>' | 'prj:<id>'. All are resolved by
   // the API. 'projects' is the browse state of the Projects tab: the sidebar shows the
   // project list instead of sessions, and the API treats the filter as 'all'.
@@ -526,11 +525,8 @@ function Dashboard() {
               navigate(`/s/${sessionId}`)
             }}
           />
-        ) : view === 'cost' ? (
-          <CostView
-            cost={cost}
-            loading={costLoading}
-            onRefresh={refreshCost}
+        ) : view === 'usage' ? (
+          <UsageView
             onGoToSession={(sessionId) => {
               if (!sessionId) return
               const found = sessions.find(s => s.id === sessionId)
