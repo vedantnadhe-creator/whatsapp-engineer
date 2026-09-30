@@ -23,10 +23,16 @@ export const DEFAULT_CODEX_MODEL = `${CODEX_PREFIX}gpt-5.6-terra`;
 // Keep this list limited to models verified with the dashboard's ChatGPT-backed
 // Codex login. An unusable entry spawns a session that dies on its first turn.
 // `gpt-6-astra` was verified on 2026-09-10 with Codex CLI 0.154.0.
+// `gpt-6.1-sol`, `gpt-6-sol` and `gpt-6-luna` were verified on 2026-09-30; the
+// server only offers them to Codex CLI >= 0.159 (0.154 gets "not supported when
+// using Codex with a ChatGPT account"), so keep the CLI upgraded with this list.
 const CODEX_CATALOG = [
+    { slug: 'gpt-6.1-sol', name: 'OpenAI · GPT-6.1 Sol', description: 'Latest workhorse Codex model for coding and everyday work' },
     { slug: 'gpt-6-astra', name: 'OpenAI · GPT-6 Astra', description: 'Most capable Codex model for the hardest end-to-end work' },
+    { slug: 'gpt-6-sol', name: 'OpenAI · GPT-6 Sol', description: 'Previous-generation GPT-6 workhorse model' },
+    { slug: 'gpt-6-luna', name: 'OpenAI · GPT-6 Luna', description: 'Fast, affordable GPT-6 model for easier tasks' },
     { slug: 'gpt-5.6-terra', name: 'OpenAI · GPT-5.6 Terra', description: 'Balanced Codex model for everyday engineering work', default: true },
-    { slug: 'gpt-5.6-sol', name: 'OpenAI · GPT-5.6 Sol', description: 'Highest-capability Codex model for complex work' },
+    { slug: 'gpt-5.6-sol', name: 'OpenAI · GPT-5.6 Sol', description: 'Older-generation GPT-5.6 workhorse model' },
     { slug: 'gpt-5.6-luna', name: 'OpenAI · GPT-5.6 Luna', description: 'Fastest GPT-5.6 Codex model for quick tasks' },
 ];
 
