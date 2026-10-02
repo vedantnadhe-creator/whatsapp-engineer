@@ -31,6 +31,7 @@ import os from 'os';
 import path from 'path';
 import config from './config.js';
 import { verifyJwt } from './auth.js';
+import { isHiddenFrom } from './session_store.js';
 import { createExtractor } from './term_extract.js';
 import { isOllamaModel, ollamaModelName, ollamaEnv, stripLeakedOllamaEnv } from './ollama_models.js';
 import { isGrokModel, grokModelName, grokEnv, stripLeakedGrokEnv } from './grok_models.js';
@@ -458,6 +459,15 @@ export function attachTerminalServer(store) {
 
         ws.on('message', (raw) => {
             let msg; try { msg = JSON.parse(raw.toString()); } catch (_) { return; }
+            // Private sessions open for their owner only (by row id or Claude id).
+            const target = msg.sessionId || msg.terminalId;
+            if (target && ['attach', 'view', 'start'].includes(msg.type)) {
+                const s = store?.getSession?.(target) || store?.getSessionByClaudeId?.(target);
+                if (s && isHiddenFrom(s, user.id)) {
+                    try { ws.send(JSON.stringify({ type: 'error', message: 'Session not found' })); } catch (_) {}
+                    return;
+                }
+            }
             switch (msg.type) {
                 case 'attach': {
                     // Reconnect: re-attach to the live PTY if it's still running.

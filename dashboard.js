@@ -15,7 +15,7 @@ import TaskQueue from './task_queue.js';
 import MyAgent from './my_agent.js';
 // orchestrator import removed — Claude prompt is now file-based (CLAUDE.md)
 import {
-    signJwt, requireAuth, optionalAuth, requireAdmin,
+    signJwt, verifyJwt, requireAuth, optionalAuth, requireAdmin,
     sendWelcomeEmail, sendAccessRequestEmail, generatePassword
 } from './auth.js';
 import {
@@ -29,7 +29,7 @@ import { listCodexModels, isCodexModel, safeCodexModel } from './codex_models.js
 import { mountGrokProxy } from './grok_proxy.js';
 import cron from 'node-cron';
 import { sendSprintStatusEmail, buildSprintStatusEmail } from './sprint_mailer.js';
-import { SPRINT_STATUSES, SPRINT_ACTIVE, parseAssignees } from './session_store.js';
+import { SPRINT_STATUSES, SPRINT_ACTIVE, parseAssignees, isHiddenFrom } from './session_store.js';
 import { probeHeadroom } from './headroom.js';
 import { slugify, writeProjectDoc, readProjectDoc, projectContextBanner } from './project_doc.js';
 import { logSessionEvent, logProjectEvent, logIssueEvent, logMarkersFromOutput, syncProjectRoster } from './project_events.js';
@@ -285,6 +285,26 @@ a{color:#60a5fa;text-decoration:none}</style></head>
 
     // ── Sessions ──────────────────────────────────────────────
 
+    // Private sessions: every /api/sessions/:id[/…] route answers 404 to anyone but the
+    // owner — admins, collaborators and share-link holders included. 404, not 403, so the
+    // session's existence isn't confirmed either.
+    app.use('/api/sessions/:id', optionalAuth, (req, res, next) => {
+        const s = store.getSession(req.params.id);
+        if (s && isHiddenFrom(s, req.user?.id)) return res.status(404).json({ error: 'Session not found' });
+        next();
+    });
+
+    app.put('/api/sessions/:id/private', requireAuth, (req, res) => {
+        try {
+            const session = store.getSession(req.params.id);
+            if (!session) return res.status(404).json({ error: 'Session not found' });
+            if (session.owner_id !== req.user.id) return res.status(403).json({ error: 'Only the session owner can change this' });
+            if (typeof req.body?.private !== 'boolean') return res.status(400).json({ error: 'private must be true or false' });
+            store.updateSession(session.id, { private: req.body.private ? 1 : 0 });
+            res.json({ success: true, private: req.body.private });
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+
     app.get('/api/sessions', requireAuth, (req, res) => {
         try {
             const page = parseInt(req.query.page) || 1;
@@ -348,6 +368,9 @@ a{color:#60a5fa;text-decoration:none}</style></head>
                 sessions = store.getOwnSessions(req.user.id, limit, offset);
                 total = store.countOwnSessions(req.user.id);
             }
+            // ponytail: filtered after paging, so `total` still counts others' private
+            // sessions and a page can come back a row short; move into the SQL if that matters.
+            sessions = sessions.filter(s => !isHiddenFrom(s, req.user.id));
             // Attach bookmark status
             const bookmarks = store.getBookmarkedSessionIds(req.user.id);
             sessions = sessions.map(s => ({ ...s, bookmarked: bookmarks.has(s.id) }));
@@ -762,7 +785,7 @@ a{color:#60a5fa;text-decoration:none}</style></head>
             if (link.revoked_at) return res.status(410).json({ error: 'This share link has been revoked' });
             if (link.expires_at && new Date(link.expires_at).getTime() < Date.now()) return res.status(410).json({ error: 'This share link has expired' });
             const session = store.getSession(link.session_id);
-            if (!session) return res.status(404).json({ error: 'Session no longer exists' });
+            if (!session || isHiddenFrom(session, req.user.id)) return res.status(404).json({ error: 'Session no longer exists' });
             // Owner doesn't need to redeem — short-circuit
             if (session.owner_id !== req.user.id) {
                 store.addCollaborator(session.id, req.user.id);
@@ -1287,7 +1310,7 @@ Do NOT ask for confirmation — proceed through each step automatically. If any 
             const selfPhone = req.user.phone || req.user.email || req.user.id;
             const visible = sessionIds.filter(id => {
                 const s = store.getSession(id);
-                return s && (req.user.isAdmin || s.owner_id === req.user.id || s.user_phone === selfPhone);
+                return s && !isHiddenFrom(s, req.user.id) && (req.user.isAdmin || s.owner_id === req.user.id || s.user_phone === selfPhone);
             });
             if (visible.length < 2) return res.status(403).json({ error: 'You can only merge your own sessions (need at least 2).' });
             const task = (typeof text === 'string' && text.trim())
@@ -2209,7 +2232,7 @@ Do NOT ask for confirmation — proceed through each step automatically. If any 
                 let sessionInfo = null;
                 if (i.session_id) {
                     const session = store.getSession(i.session_id);
-                    if (session) {
+                    if (session && !isHiddenFrom(session, req.user.id)) {
                         const msgs = store.getSessionSummaryMessages(i.session_id, 30);
                         const lastAssistant = [...msgs].reverse().find(m => m.role === 'assistant');
                         sessionInfo = {
@@ -2247,7 +2270,7 @@ Do NOT ask for confirmation — proceed through each step automatically. If any 
             if (!issue.session_id) return res.status(400).json({ error: 'Issue has no linked session' });
 
             const session = store.getSession(issue.session_id);
-            if (!session) return res.status(404).json({ error: 'Linked session not found' });
+            if (!session || isHiddenFrom(session, req.user.id)) return res.status(404).json({ error: 'Linked session not found' });
 
             const summaryPrompt = `Provide a concise summary of everything that was done in this session for issue "${issue.title}". Include:
 - What was implemented or changed
@@ -2272,7 +2295,7 @@ Keep it to 3-5 bullet points, be specific about what changed. Do NOT start any n
             if (!issue.session_id) return res.json({ issueId: req.params.id, status: 'no_session', lastResponse: '' });
 
             const session = store.getSession(issue.session_id);
-            if (!session) return res.json({ issueId: req.params.id, status: 'no_session', lastResponse: '' });
+            if (!session || isHiddenFrom(session, req.user.id)) return res.json({ issueId: req.params.id, status: 'no_session', lastResponse: '' });
 
             const msgs = store.getSessionSummaryMessages(issue.session_id, 10);
             const lastAssistant = [...msgs].reverse().find(m => m.role === 'assistant');
@@ -3387,7 +3410,11 @@ Steps:
         let pathname = '/';
         try { pathname = new URL(req.url, 'http://localhost').pathname; } catch (_) {}
         if (pathname === '/ws') {
-            wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
+            wss.handleUpgrade(req, socket, head, (ws) => {
+                const token = req.headers.cookie?.split(/;\s*/).find(c => c.startsWith(`${config.COOKIE_NAME}=`))?.slice(config.COOKIE_NAME.length + 1);
+                ws.userId = token ? verifyJwt(decodeURIComponent(token))?.id : null;
+                wss.emit('connection', ws, req);
+            });
         } else if (pathname === '/term') {
             termWss.handleUpgrade(req, socket, head, (ws) => termWss.emit('connection', ws, req));
         } else {
@@ -3420,8 +3447,10 @@ Steps:
     // Broadcast helper
     function wsBroadcast(type, payload) {
         const msg = JSON.stringify({ type, ...payload, timestamp: Date.now() });
+        const sid = payload?.sessionId || payload?.session?.id;
+        const s = sid ? store.getSession(sid) : null;
         for (const ws of wsClients) {
-            if (ws.readyState === 1) ws.send(msg);
+            if (ws.readyState === 1 && !(s && isHiddenFrom(s, ws.userId))) ws.send(msg);
         }
     }
 

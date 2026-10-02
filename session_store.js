@@ -29,6 +29,9 @@ export const SPRINT_STATUSES = [SPRINT_PLANNING, SPRINT_ACTIVE, SPRINT_COMPLETED
 // new column so the ones created before this also disappear.
 const HIDE_AGENT_SESSIONS = "s.user_phone NOT LIKE 'sprint-agent%'";
 
+// A private session is visible to its owner only — no admin, collaborator or share-link bypass.
+export const isHiddenFrom = (session, userId) => !!session?.private && session.owner_id !== userId;
+
 // A feature can be assigned to several devs. `assignees` holds the full list;
 // `assigned_to` holds the first of them, so every existing join, export, mailer and
 // "my work" query keeps reading one id exactly as before. The two are only ever
@@ -345,6 +348,8 @@ class SessionStore {
             // Last DEV/UAT deploy announced by the session ([[DEV_DEPLOYED]] / [[UAT_DEPLOYED]] markers):
             // JSON {env, at}. Drives the "Ask Jev to test it" banner in the workspace.
             "ALTER TABLE sessions ADD COLUMN last_deploy TEXT",
+            // Owner-only session: hidden from admins, collaborators and share links too.
+            "ALTER TABLE sessions ADD COLUMN private INTEGER DEFAULT 0",
             // Tester access scope: 0 = chat access (can chat with the bot, current tester),
             // 1 = sprint-only (can only view & edit the sprint board, no chat / no sessions).
             "ALTER TABLE users ADD COLUMN sprint_only INTEGER DEFAULT 0",
