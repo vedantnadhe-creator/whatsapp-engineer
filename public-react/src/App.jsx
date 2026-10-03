@@ -526,15 +526,7 @@ function Dashboard() {
             }}
           />
         ) : view === 'usage' ? (
-          <UsageView
-            onGoToSession={(sessionId) => {
-              if (!sessionId) return
-              const found = sessions.find(s => s.id === sessionId)
-              if (found) handleSelectSession(found)
-              else { setActiveSession({ id: sessionId }); setIsNewSession(false); navigate(`/s/${sessionId}`) }
-              setView('chat')
-            }}
-          />
+          <UsageView />
         ) : view === 'agents' ? (
           <AgentsView
             agents={agents}

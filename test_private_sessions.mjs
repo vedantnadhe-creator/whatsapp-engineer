@@ -58,11 +58,8 @@ await call(owner, 'PUT', `/api/sessions/${SID}/stage`, { stage: session.stage ||
 await new Promise(r => setTimeout(r, 500));
 check('ws: owner gets the event', wo.got.some(m => m.type === 'session_stage_updated'));
 check('ws: other admin does not', !wa.got.some(m => m.type === 'session_stage_updated'));
-const usageHas = async u => (await call(u, 'GET', '/api/usage?range=week')).json.sessions.some(s => s.id === SID);
-const ownerSeesUsage = await usageHas(owner);
-console.log(`(usage: session ${ownerSeesUsage ? 'has' : 'has NO'} token usage this week)`);
-check('usage: owner sees the session', ownerSeesUsage);
-check('usage: other admin does not see the session', !(await usageHas(otherAdmin)));
+{ const u = (await call(otherAdmin, 'GET', '/api/usage?range=week')).json;
+  check('usage: no per-session or per-person data', !('sessions' in u) && !('users' in u) && !('models' in u)); }
 store.updateSession(SID, { private: 0 });
 check('other admin lists it again', await inList(otherAdmin));
 

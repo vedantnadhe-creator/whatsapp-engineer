@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Gauge, RefreshCw, ArrowUpRight, AlertTriangle, BarChart3, Users, Layers } from 'lucide-react';
+import { Gauge, RefreshCw, AlertTriangle, BarChart3 } from 'lucide-react';
 import { useUsage } from '../hooks/useApi';
 
 // Series colours, validated for colour-blind separation on both themes.
@@ -15,19 +15,6 @@ const RANGES = [
   { key: '7d', label: '7 days' },
   { key: '30d', label: '30 days' },
 ];
-
-const MODEL_NAMES = {
-  'claude-opus-5-5': 'Opus 5.5',
-  'claude-opus-5': 'Opus 5',
-  'claude-opus-4-8': 'Opus 4.8',
-  'claude-opus-4-7': 'Opus 4.7',
-  'claude-opus-4-6': 'Opus 4.6',
-  'claude-sonnet-5-5': 'Sonnet 5.5',
-  'claude-sonnet-5': 'Sonnet 5',
-  'claude-fable-5-1': 'Fable 5.1',
-  'claude-fable-5': 'Fable 5',
-  'claude-haiku-4-5-20251001': 'Haiku 4.5',
-};
 
 // "Tokens" = fresh input + cache writes + output. Cache reads are shown
 // separately: they are huge in agent sessions and count far less against limits.
@@ -177,143 +164,8 @@ function DailyChart({ daily }) {
   );
 }
 
-const th = 'font-medium px-3 py-2';
 
-function PeopleTable({ users, totals, limits, range }) {
-  const grand = tokens(totals.claude) + tokens(totals.codex);
-  const weekly = (prov) => limits?.[prov]?.windows?.find((w) => w.windowMinutes === 10080)?.usedPercent;
-  const rows = [...users].sort((a, b) => (tokens(b.claude) + tokens(b.codex)) - (tokens(a.claude) + tokens(a.codex)));
-  // A person's share of this week's tokens × the account's weekly % ≈ their part of the limit.
-  const ofWeekly = (u, prov) => {
-    const w = weekly(prov);
-    const t = tokens(totals[prov]);
-    return range === 'week' && w != null && t > 0 ? `${((tokens(u[prov]) / t) * w).toFixed(1)}%` : null;
-  };
-  return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-xs">
-        <thead>
-          <tr style={{ color: 'var(--c-text-muted)' }}>
-            <th className={`${th} text-left pl-4`}>Person</th>
-            <th className={`${th} text-right`}>Claude tokens</th>
-            <th className={`${th} text-right`}>Codex tokens</th>
-            <th className={`${th} text-right`}>Cache reads</th>
-            <th className={`${th} text-right`}>Turns</th>
-            <th className={`${th} text-right`}>Sessions</th>
-            <th className={`${th} text-left pr-4 w-[180px]`}>Share</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((u) => {
-            const t = tokens(u.claude) + tokens(u.codex);
-            const share = grand > 0 ? (t / grand) * 100 : 0;
-            const cw = ofWeekly(u, 'claude');
-            const xw = ofWeekly(u, 'codex');
-            return (
-              <tr key={u.userId} style={{ borderTop: '1px solid var(--c-border)' }}>
-                <td className="px-3 py-2 pl-4" style={{ color: u.userId === '_unlinked' ? 'var(--c-text-muted)' : 'var(--c-text)' }}>{u.name}</td>
-                <td className="px-3 py-2 text-right font-mono" style={{ color: 'var(--c-text)' }}>
-                  {fmt(tokens(u.claude))}{cw && <div className="text-[10px]" style={{ color: 'var(--c-text-muted)' }}>≈ {cw} of weekly</div>}
-                </td>
-                <td className="px-3 py-2 text-right font-mono" style={{ color: 'var(--c-text)' }}>
-                  {fmt(tokens(u.codex))}{xw && <div className="text-[10px]" style={{ color: 'var(--c-text-muted)' }}>≈ {xw} of weekly</div>}
-                </td>
-                <td className="px-3 py-2 text-right font-mono" style={{ color: 'var(--c-text-muted)' }}>{fmt(u.claude.cacheRead + u.codex.cacheRead)}</td>
-                <td className="px-3 py-2 text-right font-mono" style={{ color: 'var(--c-text-secondary)' }}>{fmt(u.claude.turns + u.codex.turns)}</td>
-                <td className="px-3 py-2 text-right font-mono" style={{ color: 'var(--c-text-secondary)' }}>{u.sessions}</td>
-                <td className="px-3 py-2 pr-4">
-                  <div className="flex items-center gap-2">
-                    <div className="flex-1 rounded-full overflow-hidden flex" style={{ height: 6, backgroundColor: 'var(--c-surface-3)' }}>
-                      <div style={{ width: `${grand ? (tokens(u.claude) / grand) * 100 : 0}%`, backgroundColor: PROVIDERS.claude.color }} />
-                      <div style={{ width: `${grand ? (tokens(u.codex) / grand) * 100 : 0}%`, backgroundColor: PROVIDERS.codex.color }} />
-                    </div>
-                    <span className="font-mono w-10 text-right" style={{ color: 'var(--c-text-secondary)' }}>{share.toFixed(0)}%</span>
-                  </div>
-                </td>
-              </tr>
-            );
-          })}
-          {!rows.length && <tr><td colSpan={7} className="px-4 py-6 text-center" style={{ color: 'var(--c-text-muted)' }}>No usage in this range.</td></tr>}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-function ModelsTable({ models }) {
-  const rows = [...models].sort((a, b) => tokens(b) - tokens(a));
-  return (
-    <table className="w-full text-xs">
-      <thead>
-        <tr style={{ color: 'var(--c-text-muted)' }}>
-          <th className={`${th} text-left pl-4`}>Model</th>
-          <th className={`${th} text-right`}>Input</th>
-          <th className={`${th} text-right`}>Cache writes</th>
-          <th className={`${th} text-right`}>Output</th>
-          <th className={`${th} text-right pr-4`}>Turns</th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((m) => (
-          <tr key={`${m.provider}|${m.model}`} style={{ borderTop: '1px solid var(--c-border)' }}>
-            <td className="px-3 py-2 pl-4" style={{ color: 'var(--c-text)' }}>
-              <span className="inline-block rounded-sm mr-2 align-middle" style={{ width: 8, height: 8, backgroundColor: PROVIDERS[m.provider].color }} aria-hidden="true" />
-              {MODEL_NAMES[m.model] || m.model}
-            </td>
-            <td className="px-3 py-2 text-right font-mono" style={{ color: 'var(--c-text-secondary)' }}>{fmt(m.input)}</td>
-            <td className="px-3 py-2 text-right font-mono" style={{ color: 'var(--c-text-secondary)' }}>{fmt(m.cacheWrite)}</td>
-            <td className="px-3 py-2 text-right font-mono" style={{ color: 'var(--c-text)' }}>{fmt(m.output)}</td>
-            <td className="px-3 py-2 text-right font-mono pr-4" style={{ color: 'var(--c-text-secondary)' }}>{fmt(m.turns)}</td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  );
-}
-
-function SessionsTable({ sessions, showOwner, onGoToSession }) {
-  return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-xs">
-        <thead>
-          <tr style={{ color: 'var(--c-text-muted)' }}>
-            <th className={`${th} text-left pl-4`}>Session</th>
-            {showOwner && <th className={`${th} text-left`}>Owner</th>}
-            <th className={`${th} text-left`}>Model</th>
-            <th className={`${th} text-right`}>Tokens</th>
-            <th className={`${th} text-right pr-4`}>Last active</th>
-          </tr>
-        </thead>
-        <tbody>
-          {sessions.map((s) => (
-            <tr key={s.id || s.key} style={{ borderTop: '1px solid var(--c-border)' }}>
-              <td className="px-3 py-2 pl-4 max-w-[320px] truncate">
-                {s.id ? (
-                  <button
-                    type="button" onClick={() => onGoToSession?.(s.id)}
-                    className="inline-flex items-center gap-1 cursor-pointer hover:underline text-left truncate max-w-full"
-                    style={{ color: 'var(--c-text)' }}
-                  >
-                    <span className="truncate">{s.task || s.id}</span><ArrowUpRight size={11} aria-hidden="true" style={{ color: 'var(--c-text-muted)' }} />
-                  </button>
-                ) : (
-                  <span style={{ color: 'var(--c-text-muted)' }} title={s.key}>Not a dashboard session ({s.key.slice(0, 8)})</span>
-                )}
-              </td>
-              {showOwner && <td className="px-3 py-2" style={{ color: 'var(--c-text-secondary)' }}>{s.ownerName || '—'}</td>}
-              <td className="px-3 py-2" style={{ color: 'var(--c-text-secondary)' }}>{s.models.map((m) => MODEL_NAMES[m] || m).join(', ')}</td>
-              <td className="px-3 py-2 text-right font-mono" style={{ color: 'var(--c-text)' }}>{fmt(tokens(s))}</td>
-              <td className="px-3 py-2 text-right font-mono pr-4" style={{ color: 'var(--c-text-muted)' }}>{new Date(s.lastAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</td>
-            </tr>
-          ))}
-          {!sessions.length && <tr><td colSpan={5} className="px-4 py-6 text-center" style={{ color: 'var(--c-text-muted)' }}>No sessions in this range.</td></tr>}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-export default function UsageView({ onGoToSession }) {
+export default function UsageView() {
   const [range, setRange] = useState('week');
   const { usage, loading, error, refresh } = useUsage(range);
   const totals = usage?.totals;
@@ -367,18 +219,8 @@ export default function UsageView({ onGoToSession }) {
               {' '}(tokens = input + cache writes + output; cache reads listed separately). Transcripts are kept 30 days.
             </p>
 
-            <Section icon={Users} title={usage.isAdmin ? 'By person' : 'Your usage'}>
-              <PeopleTable users={usage.users} totals={totals} limits={usage.limits} range={range} />
-            </Section>
+            <Section icon={BarChart3} title="Tokens per day (UTC)"><DailyChart daily={usage.daily} /></Section>
 
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-              <Section icon={BarChart3} title="Tokens per day (UTC)"><DailyChart daily={usage.daily} /></Section>
-              <Section icon={Layers} title="By model"><ModelsTable models={usage.models} /></Section>
-            </div>
-
-            <Section icon={ArrowUpRight} title={usage.isAdmin ? 'Heaviest sessions' : 'Your heaviest sessions'}>
-              <SessionsTable sessions={usage.sessions} showOwner={usage.isAdmin} onGoToSession={onGoToSession} />
-            </Section>
           </>
         )}
       </div>

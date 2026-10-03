@@ -247,9 +247,8 @@ export function isIndexReady() {
     return lastScanAt > 0;
 }
 
-// Aggregate usage since `sinceMs`. `sessionsByKey` maps a transcript key
-// (Claude session id / Codex thread id) → { id, task, ownerId, ownerName }.
-export async function getUsage(sinceMs, sessionsByKey) {
+// Account-wide usage since `sinceMs`: totals per provider and tokens per day.
+export async function getUsage(sinceMs) {
     if (!lastScanAt) await refreshIndex();
     else if (Date.now() - lastScanAt > RESCAN_MS) refreshIndex(); // stale-while-revalidate
 
@@ -262,38 +261,11 @@ export async function getUsage(sinceMs, sessionsByKey) {
         t.turns += b.turns;
     };
     const totals = { claude: zero(), codex: zero() };
-    const users = new Map();
-    const sessions = new Map();
-    const models = new Map();
     const daily = new Map();
 
     for (const b of buckets.values()) {
         if (b.hour + 3600000 <= sinceMs || b.turns <= 0) continue;
-        const s = sessionsByKey.get(b.key);
-        const userId = s?.ownerId || '_unlinked';
         add(totals[b.provider], b);
-
-        let u = users.get(userId);
-        if (!u) {
-            u = { userId, name: s ? (s.ownerName || 'Unknown user') : 'Not linked to a dashboard session', claude: zero(), codex: zero(), sessions: new Set() };
-            users.set(userId, u);
-        }
-        add(u[b.provider], b);
-        u.sessions.add(s?.id || b.key);
-
-        const sk = s?.id || `${b.provider}:${b.key}`;
-        let se = sessions.get(sk);
-        if (!se) {
-            se = { id: s?.id || null, key: b.key, task: s?.task || null, ownerId: s?.ownerId || null, ownerName: s?.ownerName || null, private: !!s?.private, provider: b.provider, models: new Set(), lastAt: 0, ...zero() };
-            sessions.set(sk, se);
-        }
-        add(se, b);
-        se.models.add(b.model);
-        se.lastAt = Math.max(se.lastAt, b.hour);
-
-        const mk = `${b.provider}|${b.model}`;
-        if (!models.has(mk)) models.set(mk, { provider: b.provider, model: b.model, ...zero() });
-        add(models.get(mk), b);
 
         const day = new Date(b.hour).toISOString().slice(0, 10);
         if (!daily.has(day)) daily.set(day, { day, claude: 0, codex: 0 });
@@ -303,9 +275,6 @@ export async function getUsage(sinceMs, sessionsByKey) {
     return {
         indexedAt: lastScanAt ? new Date(lastScanAt).toISOString() : null,
         totals,
-        users: [...users.values()].map((u) => ({ ...u, sessions: u.sessions.size })),
-        sessions: [...sessions.values()].map((s) => ({ ...s, models: [...s.models], lastAt: new Date(s.lastAt).toISOString() })),
-        models: [...models.values()],
         daily: [...daily.values()].sort((a, b) => a.day.localeCompare(b.day)),
     };
 }

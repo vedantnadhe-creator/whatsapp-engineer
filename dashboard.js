@@ -622,10 +622,9 @@ a{color:#60a5fa;text-decoration:none}</style></head>
         }
     });
 
-    // Usage — live Claude Code / Codex plan limits plus real token usage per
-    // user, parsed from the CLIs' transcripts (see usage_monitor.js). Limits and
-    // totals are account-wide, so everyone sees them; the per-user and
-    // per-session breakdown is admin-only, others get just their own rows.
+    // Usage — live Claude Code / Codex plan limits plus account-wide token usage
+    // per day, parsed from the CLIs' transcripts (see usage_monitor.js). No
+    // per-person or per-session breakdown, by design.
     const USAGE_RANGES = { '24h': 864e5, '7d': 7 * 864e5, '30d': 30 * 864e5 };
     app.get('/api/usage', requireAuth, async (req, res) => {
         try {
@@ -640,24 +639,8 @@ a{color:#60a5fa;text-decoration:none}</style></head>
                 sinceMs = Number.isFinite(resetMs) ? resetMs - w.windowMinutes * 60000 : Date.now() - (range === 'week' ? 7 * 864e5 : 5 * 36e5);
             } else return res.status(400).json({ error: 'range must be one of session, week, 24h, 7d, 30d' });
 
-            const index = new Map();
-            for (const row of store.getUsageSessionIndex?.() || []) {
-                index.set(row.key, { id: row.id, task: row.name || row.task, ownerId: row.ownerId, ownerName: row.ownerName, private: !!row.private });
-            }
-            const usage = await getUsage(sinceMs, index);
-            const isAdmin = !!req.user.isAdmin;
-            const mine = (ownerId) => isAdmin || ownerId === req.user.id;
-            const sessions = usage.sessions
-                // Private sessions are listed to their owner only (admins included in "others").
-                .filter((s) => mine(s.ownerId) && !(s.private && s.ownerId !== req.user.id))
-                .sort((a, b) => (b.input + b.cacheWrite + b.output) - (a.input + a.cacheWrite + a.output))
-                .slice(0, 50);
-            res.json({
-                range, since: new Date(sinceMs).toISOString(), isAdmin, limits,
-                ...usage,
-                users: usage.users.filter((u) => mine(u.userId)),
-                sessions,
-            });
+            const usage = await getUsage(sinceMs);
+            res.json({ range, since: new Date(sinceMs).toISOString(), limits, ...usage });
         } catch (err) {
             console.error('[Usage]', err);
             res.status(500).json({ error: 'Could not load usage' });

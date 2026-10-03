@@ -573,14 +573,6 @@ class SessionStore {
 
     // Usage page: map CLI transcript ids (Claude session id / Codex thread id)
     // to the dashboard session and its owner.
-    getUsageSessionIndex() {
-        return this.db.prepare(
-            `SELECT s.id, s.claude_session_id key, s.task, s.name, s.owner_id ownerId, u.display_name ownerName, s.private
-             FROM sessions s LEFT JOIN users u ON u.id = s.owner_id
-             WHERE s.claude_session_id IS NOT NULL`
-        ).all();
-    }
-
     getSessionsForUser(userId, limit = 20, offset = 0) {
         return this.db.prepare(
             `SELECT s.*,
