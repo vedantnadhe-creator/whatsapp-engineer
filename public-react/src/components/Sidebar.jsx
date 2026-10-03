@@ -41,6 +41,8 @@ import {
   FolderGit2,
   ChevronLeft,
   Headset,
+  Lock,
+  LockOpen,
 } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
 import {
@@ -80,7 +82,7 @@ function formatTokens(n) {
   return String(n);
 }
 
-function SessionMenu({ session, onClose, onShare, onFork, onMerge, onAddToSprint, onToggleBookmark, onRename, onDelete, playlists = [], isInPlaylist, onTogglePlaylistItem, projects = [], isInProject, onToggleProjectItem, onCreateProjectFromSession }) {
+function SessionMenu({ session, onClose, onTogglePrivate, onShare, onFork, onMerge, onAddToSprint, onToggleBookmark, onRename, onDelete, playlists = [], isInPlaylist, onTogglePlaylistItem, projects = [], isInProject, onToggleProjectItem, onCreateProjectFromSession }) {
   const [showPlaylists, setShowPlaylists] = useState(false);
   const [showProjects, setShowProjects] = useState(false);
   const ref = useRef(null);
@@ -220,6 +222,29 @@ function SessionMenu({ session, onClose, onShare, onFork, onMerge, onAddToSprint
         <Pencil size={14} style={{ color: 'var(--c-text-secondary)' }} />
         Rename
       </button>
+
+      {onTogglePrivate && !!session.is_mine && (
+        <button
+          onClick={(e) => { e.stopPropagation(); onTogglePrivate(session); onClose(); }}
+          className="flex w-full items-start gap-2 px-3 py-1.5 text-sm cursor-pointer text-left"
+          style={itemStyle}
+          title={session.private
+            ? 'Let admins and people you shared it with see this session again'
+            : 'Hide this session from everyone else, admins included. Share links stop working and it leaves the Usage page for others.'}
+          onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'var(--c-surface-2)')}
+          onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+        >
+          {session.private
+            ? <LockOpen size={14} className="mt-0.5 shrink-0" style={{ color: 'var(--c-text-secondary)' }} />
+            : <Lock size={14} className="mt-0.5 shrink-0" style={{ color: 'var(--c-text-secondary)' }} />}
+          <span>
+            {session.private ? 'Make visible to team' : 'Keep session private'}
+            <span className="block text-[11px]" style={{ color: 'var(--c-text-muted)' }}>
+              {session.private ? 'Only you can see it now' : 'Only you will be able to see it'}
+            </span>
+          </span>
+        </button>
+      )}
 
       <button
         onClick={(e) => { e.stopPropagation(); onShare?.(session); onClose(); }}
@@ -421,7 +446,7 @@ function SessionMenu({ session, onClose, onShare, onFork, onMerge, onAddToSprint
   );
 }
 
-function SessionItem({ session, isActive, onSelect, billingMode = 'api', onToggleBookmark, onShareSession, onForkSession, onMergeSession, onAddToSprintSession, onRenameSession, onDeleteSession, playlists = [], isInPlaylist, onTogglePlaylistItem, projects = [], isInProject, onToggleProjectItem, onCreateProjectFromSession }) {
+function SessionItem({ session, isActive, onSelect, billingMode = 'api', onTogglePrivateSession, onToggleBookmark, onShareSession, onForkSession, onMergeSession, onAddToSprintSession, onRenameSession, onDeleteSession, playlists = [], isInPlaylist, onTogglePlaylistItem, projects = [], isInProject, onToggleProjectItem, onCreateProjectFromSession }) {
   const ownerLabel = session.owner_name || session.owner_email || null;
   const [menuOpen, setMenuOpen] = useState(false);
 
@@ -454,6 +479,11 @@ function SessionItem({ session, isActive, onSelect, billingMode = 'api', onToggl
             <span className="font-mono text-xs" style={{ color: 'var(--c-text-muted)' }}>
               {session.id}
             </span>
+            {!!session.private && (
+              <Lock size={11} aria-label="Private session" style={{ color: 'var(--c-text-secondary)' }}>
+                <title>Private: only you can see this session</title>
+              </Lock>
+            )}
             {ownerLabel && (
               <span
                 className="truncate text-[10px] max-w-[80px]"
@@ -566,6 +596,7 @@ function SessionItem({ session, isActive, onSelect, billingMode = 'api', onToggl
           onAddToSprint={onAddToSprintSession}
           onToggleBookmark={onToggleBookmark}
           onRename={onRenameSession}
+          onTogglePrivate={onTogglePrivateSession}
           onDelete={onDeleteSession}
           playlists={playlists}
           isInPlaylist={isInPlaylist}
@@ -657,6 +688,7 @@ function SidebarContent({
   onMergeSession,
   onAddToSprintSession,
   onRenameSession,
+  onTogglePrivateSession,
   onDeleteSession,
   workMode = 'developer',
   onChangeWorkMode,
@@ -1065,6 +1097,7 @@ function SidebarContent({
                 onMergeSession={onMergeSession}
                 onAddToSprintSession={onAddToSprintSession}
                 onRenameSession={onRenameSession}
+                onTogglePrivateSession={onTogglePrivateSession}
                 onDeleteSession={onDeleteSession}
                 playlists={playlists}
                 isInPlaylist={isInPlaylist}

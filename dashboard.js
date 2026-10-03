@@ -653,13 +653,14 @@ a{color:#60a5fa;text-decoration:none}</style></head>
 
             const index = new Map();
             for (const row of store.getUsageSessionIndex?.() || []) {
-                index.set(row.key, { id: row.id, task: row.name || row.task, ownerId: row.ownerId, ownerName: row.ownerName });
+                index.set(row.key, { id: row.id, task: row.name || row.task, ownerId: row.ownerId, ownerName: row.ownerName, private: !!row.private });
             }
             const usage = await getUsage(sinceMs, index);
             const isAdmin = !!req.user.isAdmin;
             const mine = (ownerId) => isAdmin || ownerId === req.user.id;
             const sessions = usage.sessions
-                .filter((s) => mine(s.ownerId))
+                // Private sessions are listed to their owner only (admins included in "others").
+                .filter((s) => mine(s.ownerId) && !(s.private && s.ownerId !== req.user.id))
                 .sort((a, b) => (b.input + b.cacheWrite + b.output) - (a.input + a.cacheWrite + a.output))
                 .slice(0, 50);
             res.json({

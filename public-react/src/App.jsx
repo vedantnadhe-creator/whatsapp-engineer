@@ -3,7 +3,7 @@ import { BrowserRouter, Routes, Route, useParams, useNavigate, useLocation } fro
 import { AuthProvider, useAuth } from './context/AuthContext'
 import SharePage from './pages/SharePage'
 import TerminalPage from './pages/TerminalPage'
-import { useSessions, useStats, useSessionMessages, useModels, usePhones, useUsers, useCron, useAccessRequests, useIssues, useAutonomous, useSprints, useTeamMembers, useAction, useAgents, runAgent, runAgentOrchestrated, getAgentSprint, setAgentSprint, getSessionChildren, startSession, sendMessage, stopSession, forkSession, testForkSession, testSession, mergeSessions, toggleBookmark, updateSessionSprint, getSprintChangelog, requestIssueSummary, getIssueLastResponse, generateSprintChangelog, uploadFile, transcribeAudio, requestAccess, getClaudePrompt, saveClaudePrompt, getLearnings, saveLearnings, getAdminSettings, saveAdminSetting, renameSession, deleteSession, sessionToIssue, apiFetch } from './hooks/useApi'
+import { useSessions, useStats, useSessionMessages, useModels, usePhones, useUsers, useCron, useAccessRequests, useIssues, useAutonomous, useSprints, useTeamMembers, useAction, useAgents, runAgent, runAgentOrchestrated, getAgentSprint, setAgentSprint, getSessionChildren, startSession, sendMessage, stopSession, forkSession, testForkSession, testSession, mergeSessions, toggleBookmark, updateSessionSprint, getSprintChangelog, requestIssueSummary, getIssueLastResponse, generateSprintChangelog, uploadFile, transcribeAudio, requestAccess, getClaudePrompt, saveClaudePrompt, getLearnings, saveLearnings, getAdminSettings, saveAdminSetting, renameSession, setSessionPrivate, deleteSession, sessionToIssue, apiFetch } from './hooks/useApi'
 import useWebSocket from './hooks/useWebSocket'
 import Sidebar from './components/Sidebar'
 import Workspace from './components/Workspace'
@@ -470,6 +470,11 @@ function Dashboard() {
         }}
         onMergeSession={(s) => setMergePrimaryId(s.id)}
         onAddToSprintSession={(s) => setAddToSprintSession(s)}
+        onTogglePrivateSession={async (s) => {
+          await setSessionPrivate(s.id, !s.private)
+          if (activeSession?.id === s.id) setActiveSession((prev) => prev ? { ...prev, private: s.private ? 0 : 1 } : prev)
+          refreshSessions()
+        }}
         onRenameSession={async (sessionId, name) => {
           await renameSession(sessionId, name)
           if (activeSession?.id === sessionId) {

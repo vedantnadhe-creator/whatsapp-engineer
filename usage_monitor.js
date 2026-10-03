@@ -284,7 +284,7 @@ export async function getUsage(sinceMs, sessionsByKey) {
         const sk = s?.id || `${b.provider}:${b.key}`;
         let se = sessions.get(sk);
         if (!se) {
-            se = { id: s?.id || null, key: b.key, task: s?.task || null, ownerId: s?.ownerId || null, ownerName: s?.ownerName || null, provider: b.provider, models: new Set(), lastAt: 0, ...zero() };
+            se = { id: s?.id || null, key: b.key, task: s?.task || null, ownerId: s?.ownerId || null, ownerName: s?.ownerName || null, private: !!s?.private, provider: b.provider, models: new Set(), lastAt: 0, ...zero() };
             sessions.set(sk, se);
         }
         add(se, b);

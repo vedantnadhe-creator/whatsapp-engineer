@@ -20,6 +20,7 @@ await new Promise(r => setTimeout(r, 1500));
 
 const SID = process.argv[2] || store.db.prepare(
     `SELECT s.id FROM sessions s JOIN session_collaborators c ON c.session_id = s.id AND c.user_id != s.owner_id LIMIT 1`).get().id;
+store.updateSession(SID, { private: 0 }); // start from shared, whatever the live flag is
 const session = store.getSession(SID);
 const owner = store.getUserById(session.owner_id);
 const otherAdmin = store.db.prepare('SELECT * FROM users WHERE is_admin = 1 AND id != ? LIMIT 1').get(owner.id);
@@ -59,6 +60,11 @@ await call(owner, 'PUT', `/api/sessions/${SID}/stage`, { stage: session.stage ||
 await new Promise(r => setTimeout(r, 500));
 check('ws: owner gets the event', wo.got.some(m => m.type === 'session_stage_updated'));
 check('ws: other admin does not', !wa.got.some(m => m.type === 'session_stage_updated'));
+const usageHas = async u => (await call(u, 'GET', '/api/usage?range=week')).json.sessions.some(s => s.id === SID);
+const ownerSeesUsage = await usageHas(owner);
+console.log(`(usage: session ${ownerSeesUsage ? 'has' : 'has NO'} token usage this week)`);
+check('usage: owner sees the session', ownerSeesUsage);
+check('usage: other admin does not see the session', !(await usageHas(otherAdmin)));
 check('owner turns it off (200)', (await call(owner, 'PUT', `/api/sessions/${SID}/private`, { private: false })).status === 200);
 check('other admin lists it again', await inList(otherAdmin));
 

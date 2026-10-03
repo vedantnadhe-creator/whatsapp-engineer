@@ -393,6 +393,14 @@ export async function deleteSession(sessionId) {
   return apiFetch(`/api/sessions/${sessionId}`, { method: 'DELETE' });
 }
 
+export async function setSessionPrivate(sessionId, isPrivate) {
+  return apiFetch(`/api/sessions/${sessionId}/private`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ private: isPrivate }),
+  });
+}
+
 export async function renameSession(sessionId, name) {
   return apiFetch(`/api/sessions/${sessionId}/name`, {
     method: 'PUT',
