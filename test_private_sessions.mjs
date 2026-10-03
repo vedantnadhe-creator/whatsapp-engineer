@@ -41,9 +41,7 @@ const wsFor = u => new Promise(res => {
 let failed = 0;
 const check = (name, ok) => { if (!ok) failed++; console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}`); };
 
-check('non-owner cannot set private (403)', (await call(otherAdmin, 'PUT', `/api/sessions/${SID}/private`, { private: true })).status === 403);
-check('non-boolean rejected (400)', (await call(owner, 'PUT', `/api/sessions/${SID}/private`, { private: 'yes' })).status === 400);
-check('owner sets private (200)', (await call(owner, 'PUT', `/api/sessions/${SID}/private`, { private: true })).status === 200);
+store.updateSession(SID, { private: 1 }); // no UI or API for this — set in the DB only
 check('owner still lists it', await inList(owner));
 check('owner reads messages', (await call(owner, 'GET', `/api/sessions/${SID}/messages`)).status === 200);
 for (const [who, u] of [['other admin', otherAdmin], ['collaborator', collaborator]]) {
@@ -65,7 +63,7 @@ const ownerSeesUsage = await usageHas(owner);
 console.log(`(usage: session ${ownerSeesUsage ? 'has' : 'has NO'} token usage this week)`);
 check('usage: owner sees the session', ownerSeesUsage);
 check('usage: other admin does not see the session', !(await usageHas(otherAdmin)));
-check('owner turns it off (200)', (await call(owner, 'PUT', `/api/sessions/${SID}/private`, { private: false })).status === 200);
+store.updateSession(SID, { private: 0 });
 check('other admin lists it again', await inList(otherAdmin));
 
 for (const f of [SNAP, `${SNAP}-wal`, `${SNAP}-shm`]) fs.rmSync(f, { force: true });

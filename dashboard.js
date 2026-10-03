@@ -294,17 +294,6 @@ a{color:#60a5fa;text-decoration:none}</style></head>
         next();
     });
 
-    app.put('/api/sessions/:id/private', requireAuth, (req, res) => {
-        try {
-            const session = store.getSession(req.params.id);
-            if (!session) return res.status(404).json({ error: 'Session not found' });
-            if (session.owner_id !== req.user.id) return res.status(403).json({ error: 'Only the session owner can change this' });
-            if (typeof req.body?.private !== 'boolean') return res.status(400).json({ error: 'private must be true or false' });
-            store.updateSession(session.id, { private: req.body.private ? 1 : 0 });
-            res.json({ success: true, private: req.body.private });
-        } catch (err) { res.status(500).json({ error: err.message }); }
-    });
-
     app.get('/api/sessions', requireAuth, (req, res) => {
         try {
             const page = parseInt(req.query.page) || 1;
