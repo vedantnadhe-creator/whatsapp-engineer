@@ -35,6 +35,7 @@ import { slugify, writeProjectDoc, readProjectDoc, projectContextBanner } from '
 import { logSessionEvent, logProjectEvent, logIssueEvent, logMarkersFromOutput, syncProjectRoster } from './project_events.js';
 import { runMasterAgent, SPAWN_TOOL } from './master_agent.js';
 import { UatCodeReviewer } from './uat_code_reviewer.js';
+import ProjectHandler from './project_handler.js';
 import { getLimits as getUsageLimits, getUsage, refreshIndex as refreshUsageIndex } from './usage_monitor.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -3360,6 +3361,8 @@ Steps:
             resolveModel: resolveModelForRole, testingModel: TESTING_MODEL,
             notify: (userId, text) => myAgent.notify(userId, text),
         }).register(app, requireAuth);
+        // Client projects run off their email (project_handlers.json).
+        new ProjectHandler({ store, engine: executionEngine, notify: (userId, text) => myAgent.notify(userId, text) });
     }
 
     // ── SPA catch-all — serve index.html for any non-API route ──

@@ -9,7 +9,7 @@ import nodemailer from 'nodemailer';
 import config from './config.js';
 
 let _transporter = null;
-function getTransporter() {
+export function getTransporter() {
     if (_transporter) return _transporter;
     _transporter = nodemailer.createTransport({
         host: config.SMTP_HOST,

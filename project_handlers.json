@@ -1,0 +1,13 @@
+{
+    "PRJ-mtmn35l7-0fzq": {
+        "name": "TCS video gen",
+        "scope": "TCS iON Cognitive Skills videos, question sets and question documents",
+        "mailbox": "vedant.nadhe@pluginlive.com",
+        "passwordEnv": "PH_MAIL_PASS_VEDANT_NADHE",
+        "clientDomains": ["tcs.com"],
+        "ownerEmail": "vedantnadhe069@gmail.com",
+        "reviewers": ["vedant.nadhe@pluginlive.com", "kushal.siddesh@pluginlive.com"],
+        "skills": ["tcs-level-video", "video-editing", "remotion-video", "brag"],
+        "model": "claude-opus-5-5"
+    }
+}
