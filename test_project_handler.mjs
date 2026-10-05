@@ -118,5 +118,31 @@ await check('end to end: first mail starts a session, follow-up resumes it, end 
     assert.doesNotMatch(calls[1].task, /Please redo/, 'already-handled mail is not resent');
 });
 
+await check('panel API: status hides mail bodies; pause is admin-only and stops polling', async () => {
+    const settings = new Map();
+    const store = { getSetting: k => settings.get(k), setSetting: (k, v) => settings.set(k, v), updateProject() { }, getSessionProjects: () => [], getProjectSessions: () => [], getProject: () => null };
+    const engine = new EventEmitter(); engine.isRunning = () => false;
+    let polls = 0;
+    const [handler] = loadHandlers();
+    const ph = new ProjectHandler({ store, engine, handlers: [handler], poll: async () => { polls++; return { uidnext: 5, messages: [mail(5, 'T9', 'Topic list', 'SECRET BODY')] }; } });
+    settings.set(`project_handler:${handler.projectId}`, JSON.stringify({ lastUid: 1, threads: {}, seen: [] }));
+    await ph.tick(handler);
+    const st = ph.status(handler);
+    assert.equal(st.threads[0].status, 'waiting');
+    assert.ok(st.lastCheckedAt);
+    assert.doesNotMatch(JSON.stringify(st), /SECRET BODY|PH_MAIL|passwordEnv/);
+
+    const routes = {};
+    const app = { get: (p, a, f) => routes[`GET ${p}`] = f, post: (p, a, f) => routes[`POST ${p}`] = f, put: (p, a, f) => routes[`PUT ${p}`] = f };
+    ph.register(app, null);
+    const call = (key, req) => new Promise(r => { const res = { code: 200, status(c) { this.code = c; return this; }, json(b) { r({ code: this.code, body: b }); } }; routes[key]({ params: { id: handler.projectId }, body: {}, ...req }, res); });
+    assert.equal((await call('PUT /api/projects/:id/handler', { user: { isAdmin: false }, body: { paused: true } })).code, 403);
+    assert.equal((await call('GET /api/projects/:id/handler', { params: { id: 'PRJ-none' }, user: {} })).code, 404);
+    assert.equal((await call('PUT /api/projects/:id/handler', { user: { isAdmin: true, email: 'a' }, body: { paused: true } })).body.paused, true);
+    const before = polls;
+    await ph.tick(handler);
+    assert.equal(polls, before, 'paused handler does not poll');
+});
+
 console.log(failures ? `\n${failures} failed` : '\nall passed');
 process.exit(failures ? 1 : 0);

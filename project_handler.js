@@ -148,6 +148,7 @@ export default class ProjectHandler {
     constructor({ store, engine, notify, poll = runPoll, handlers = loadHandlers() }) {
         Object.assign(this, { store, engine, poll, handlers, notify: notify || (() => { }) });
         this.busy = new Set();
+        this.health = new Map(); // projectId → { lastCheckedAt, lastError } — for the panel only
         if (!handlers.length) return;
         console.log(`[ProjectHandler] watching ${handlers.map(h => `${h.name} (${h.mailbox})`).join(', ')}`);
         engine.on('session_end', ({ sessionId }) => {
@@ -162,6 +163,60 @@ export default class ProjectHandler {
         try { return { lastUid: null, threads: {}, seen: [], ...JSON.parse(this.store.getSetting(`project_handler:${projectId}`) || '{}') }; } catch { return { lastUid: null, threads: {}, seen: [] }; }
     }
     _save(projectId, state) { this.store.setSetting(`project_handler:${projectId}`, JSON.stringify(state)); }
+
+    /** What the project's Mail automation panel shows. Never includes mail bodies or the password. */
+    status(handler) {
+        const state = this._state(handler.projectId);
+        const now = Date.now();
+        const threads = Object.entries(state.threads).map(([id, t]) => ({
+            id, subject: t.subject, sessionId: t.sessionId, note: t.note || null,
+            // Mail waiting on the quiet period (or on its session finishing) is shown as such.
+            status: t.pending.length ? 'waiting' : t.status,
+            pendingCount: t.pending.length,
+            dueAt: t.pending.length ? new Date((t.lastMailAt || now) + QUIET_MS).toISOString() : null,
+            lastMailAt: t.lastMailAt ? new Date(t.lastMailAt).toISOString() : null,
+            startedAt: t.startedAt || null, finishedAt: t.finishedAt || null,
+        })).sort((a, b) => String(b.lastMailAt).localeCompare(String(a.lastMailAt)));
+        return {
+            name: handler.name, mailbox: handler.mailbox, clientDomains: handler.clientDomains, reviewers: handler.reviewers,
+            pollMinutes: TICK_MS / 60_000, quietMinutes: QUIET_MS / 60_000, paused: !!state.paused,
+            ...(this.health.get(handler.projectId) || { lastCheckedAt: null, lastError: null }),
+            threads,
+        };
+    }
+
+    register(app, requireAuth) {
+        const find = (req, res) => {
+            const h = this.handlers.find(x => x.projectId === req.params.id);
+            if (!h) res.status(404).json({ error: 'This project has no mail automation' });
+            return h;
+        };
+        const adminOnly = (req, res) => {
+            if (req.user?.isAdmin) return true;
+            res.status(403).json({ error: 'Only admins can change mail automation' });
+            return false;
+        };
+        app.get('/api/projects/:id/handler', requireAuth, (req, res) => {
+            const h = find(req, res);
+            if (h) res.json(this.status(h));
+        });
+        app.post('/api/projects/:id/handler/check', requireAuth, (req, res) => {
+            const h = find(req, res);
+            if (!h || !adminOnly(req, res)) return;
+            this.tick(h); // runs in the background; the panel polls for the result
+            res.json({ success: true });
+        });
+        app.put('/api/projects/:id/handler', requireAuth, (req, res) => {
+            const h = find(req, res);
+            if (!h || !adminOnly(req, res)) return;
+            if (typeof req.body?.paused !== 'boolean') return res.status(400).json({ error: 'paused must be true or false' });
+            const state = this._state(h.projectId);
+            state.paused = req.body.paused;
+            this._save(h.projectId, state);
+            logProjectEvent(this.store, h.projectId, `📧 Mail automation ${state.paused ? 'paused' : 'resumed'} by ${req.user.displayName || req.user.email}`);
+            res.json(this.status(h));
+        });
+    }
 
     _findThread(sessionId) {
         for (const handler of this.handlers) {
@@ -179,10 +234,12 @@ export default class ProjectHandler {
         this.busy.add(handler.projectId);
         try {
             const state = this._state(handler.projectId);
+            if (state.paused) return;
             if (state.lastUid == null) {
                 // First run: start from now. Old mail is history, not a to-do list.
                 state.lastUid = (await this.poll(handler, [])).uidnext;
                 this._save(handler.projectId, state);
+                this.health.set(handler.projectId, { lastCheckedAt: new Date().toISOString(), lastError: null });
                 return;
             }
             const res = await this.poll(handler, ['--since-uid', String(state.lastUid),
@@ -197,8 +254,10 @@ export default class ProjectHandler {
                 if (t.status === 'running' && !this.engine.isRunning(t.sessionId)) await this._settle(handler, threadId);
             }
             for (const threadId of dueThreads(state, id => this.engine.isRunning(id))) await this._dispatch(handler, threadId);
+            this.health.set(handler.projectId, { lastCheckedAt: new Date().toISOString(), lastError: null });
         } catch (err) {
             console.error(`[ProjectHandler] ${handler.name}: ${err.message}`);
+            this.health.set(handler.projectId, { ...this.health.get(handler.projectId), lastError: err.message });
         } finally {
             this.busy.delete(handler.projectId);
         }

@@ -3362,7 +3362,7 @@ Steps:
             notify: (userId, text) => myAgent.notify(userId, text),
         }).register(app, requireAuth);
         // Client projects run off their email (project_handlers.json).
-        new ProjectHandler({ store, engine: executionEngine, notify: (userId, text) => myAgent.notify(userId, text) });
+        new ProjectHandler({ store, engine: executionEngine, notify: (userId, text) => myAgent.notify(userId, text) }).register(app, requireAuth);
     }
 
     // ── SPA catch-all — serve index.html for any non-API route ──

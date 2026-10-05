@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import {
+  Mail,
   ListTodo,
   Plus,
   Menu,
@@ -45,9 +46,10 @@ import {
 import { useTheme } from '../context/ThemeContext';
 import {
   usePlaylists, createPlaylist, renamePlaylist, deletePlaylist, addToPlaylist, removeFromPlaylist,
-  useProjects, createProject, updateProject, deleteProject, addToProject, removeFromProject,
+  useProjects, createProject, updateProject, deleteProject, addToProject, removeFromProject, useProjectHandler,
 } from '../hooks/useApi';
 import { ProjectList, ProjectFormModal, ProjectDocModal } from './Projects';
+import { ProjectHandlerModal } from './ProjectHandlerPanel';
 
 const STATUS_COLORS = {
   running: 'var(--c-status-running)',
@@ -709,9 +711,12 @@ function SidebarContent({
   const { projects, refresh: refreshProjects } = useProjects();
   const [projectForm, setProjectForm] = useState(null); // { project } | { session } while open
   const [docProject, setDocProject] = useState(null);
+  const [showHandler, setShowHandler] = useState(false);
   const browsingProjects = sessionFilter === 'projects';
   const openProjectId = sessionFilter.startsWith('prj:') ? sessionFilter.slice(4) : null;
   const openProject = openProjectId ? (projects || []).find(p => p.id === openProjectId) : null;
+  const { handler: projectHandler, reload: reloadHandler } = useProjectHandler(openProjectId);
+  const handlerNeedsYou = (projectHandler?.threads || []).some(t => t.status === 'review' || t.status === 'needs_input');
   const canManageProject = (project) => project.created_by === user?.id || !!user?.isAdmin;
   // A task started inside the project lands in the session list before the project rows
   // know about it, so the count on the cards would read one short until a remount.
@@ -997,6 +1002,18 @@ function SidebarContent({
               >
                 <Plus size={12} /> Task
               </button>
+              {projectHandler && (
+                <button
+                  onClick={() => setShowHandler(true)}
+                  className="relative cursor-pointer p-1"
+                  style={{ color: projectHandler.paused ? 'var(--c-text-muted)' : 'var(--c-text-secondary)' }}
+                  title={`Mail automation — watching ${projectHandler.mailbox}${handlerNeedsYou ? ' · something is waiting for review' : ''}`}
+                  aria-label="Mail automation"
+                >
+                  <Mail size={13} />
+                  {handlerNeedsYou && <span className="absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full" style={{ backgroundColor: '#22c55e' }} />}
+                </button>
+              )}
               <button
                 onClick={() => setDocProject(openProject)}
                 className="cursor-pointer p-1"
@@ -1100,6 +1117,15 @@ function SidebarContent({
           sessionLabel={projectForm.session ? (projectForm.session.name || projectForm.session.task || projectForm.session.id) : null}
           onClose={() => setProjectForm(null)}
           onSubmit={submitProjectForm}
+        />
+      )}
+      {showHandler && projectHandler && openProject && (
+        <ProjectHandlerModal
+          projectId={openProject.id}
+          projectName={openProject.name}
+          initial={projectHandler}
+          canManage={!!user?.isAdmin}
+          onClose={() => { setShowHandler(false); reloadHandler(); }}
         />
       )}
       {docProject && <ProjectDocModal project={docProject} onClose={() => setDocProject(null)} />}

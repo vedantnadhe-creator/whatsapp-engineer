@@ -1002,3 +1002,28 @@ export async function removeQueueItem(id) {
 export async function openMyAgent() {
   return apiFetch('/api/my/agent', { method: 'POST' });
 }
+
+// Mail automation (project_handler.js) — 404 when the project has none.
+export async function getProjectHandler(id) {
+  return apiFetch(`/api/projects/${id}/handler`);
+}
+export async function checkProjectHandler(id) {
+  return apiFetch(`/api/projects/${id}/handler/check`, { method: 'POST' });
+}
+export async function setProjectHandlerPaused(id, paused) {
+  return apiFetch(`/api/projects/${id}/handler`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ paused }) });
+}
+
+/** Loads the project's mail automation; `handler` stays null when it has none. */
+export function useProjectHandler(projectId) {
+  // Keyed by project so switching projects never shows the previous one's automation.
+  const [loaded, setLoaded] = useState({ projectId: null, handler: null });
+  const reload = useCallback(() => {
+    if (!projectId) return Promise.resolve();
+    return getProjectHandler(projectId)
+      .then((handler) => setLoaded({ projectId, handler }))
+      .catch(() => setLoaded({ projectId, handler: null }));
+  }, [projectId]);
+  useEffect(() => { reload(); }, [reload]);
+  return { handler: loaded.projectId === projectId ? loaded.handler : null, reload };
+}
