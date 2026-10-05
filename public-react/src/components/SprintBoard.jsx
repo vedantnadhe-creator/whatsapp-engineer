@@ -347,7 +347,7 @@ export default function SprintBoard({
   // "Next sprint" = the soonest planned sprint (earliest start date), else the active one.
   const nextSprint = useMemo(() => {
     const planned = [...sprints]
-      .filter(s => s.status === 'planning')
+      .filter(s => s.status === 'planning' && !isIdeaBin(s))
       .sort((a, b) => String(a.start_date || '9999').localeCompare(String(b.start_date || '9999')))
     return planned[0] || sprints.find(s => s.status === 'active') || sprints[0] || null
   }, [sprints])
@@ -439,6 +439,9 @@ export default function SprintBoard({
   }, [features])
 
   const activeSprint = sprints.find(s => s.id === activeSprintId)
+  // Ideas works like Backlog: features parked there are carried into a real sprint.
+  const isRolloverView = isBacklogView || isIdeaBin(activeSprint)
+  const moveTargets = useMemo(() => sprints.filter(s => s.id !== activeSprintId), [sprints, activeSprintId])
 
   const handleCreateSprint = async () => {
     if (!newSprintName.trim()) return
@@ -725,8 +728,8 @@ export default function SprintBoard({
           </div>
         )}
 
-        {/* Backlog rollover — carry parked features (and their subtasks) into a sprint */}
-        {isBacklogView && features.length > 0 && !isTester && (
+        {/* Backlog / Ideas rollover — carry parked features (and their subtasks) into a sprint */}
+        {isRolloverView && features.length > 0 && !isTester && (
           <div className="flex items-center gap-2 flex-wrap">
             <label className="flex items-center gap-1.5 text-[11px] cursor-pointer" style={{ color: 'var(--c-text-secondary)' }}>
               <input type="checkbox" checked={allSelected} onChange={toggleSelectAll} className="cursor-pointer" />
@@ -741,15 +744,15 @@ export default function SprintBoard({
               className="text-[11px] px-2 py-1 rounded cursor-pointer outline-none"
               style={{ backgroundColor: 'var(--c-surface)', color: 'var(--c-text)', border: '1px solid var(--c-border)' }}
             >
-              {sprints.length === 0 && <option value="">No sprints yet</option>}
-              {sprints.map(s => (
+              {moveTargets.length === 0 && <option value="">No sprints yet</option>}
+              {moveTargets.map(s => (
                 <option key={s.id} value={s.id}>{s.name}{s.id === nextSprint?.id ? ' (next)' : ''}</option>
               ))}
             </select>
             <button
               onClick={handleMoveToSprint}
               disabled={movingToSprint || selectedIds.length === 0 || !moveTargetId}
-              title="Move the selected backlog features into the chosen sprint"
+              title="Move the selected features into the chosen sprint"
               className="text-[11px] px-2 py-1 rounded cursor-pointer flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"
               style={{ backgroundColor: 'var(--c-accent)', color: '#fff' }}
             >{movingToSprint ? <Loader2 size={12} className="animate-spin" /> : <ArrowRight size={12} />} Move to sprint</button>
@@ -832,9 +835,9 @@ export default function SprintBoard({
             {filteredFeatures.map((f, idx) => (
               <FeatureRow
                 key={f.id} f={f} idx={idx} members={members} isTester={isTester}
-                expanded={expandedId === f.id} isBacklogView={isBacklogView}
+                expanded={expandedId === f.id} isBacklogView={isBacklogView} canSend={isRolloverView}
                 selected={selectedIds.includes(f.id)} onSelect={toggleSelected}
-                sprints={sprints} onMoveToSprint={moveOneToSprint}
+                sprints={moveTargets} onMoveToSprint={moveOneToSprint}
                 onToggle={() => setExpandedId(expandedId === f.id ? null : f.id)}
                 onUpdate={onUpdateIssue} onDelete={onDeleteIssue} onCreateIssue={onCreateIssue}
                 onStartSession={handleStartSession} busyStart={busyStart === f.id}
@@ -912,7 +915,7 @@ export default function SprintBoard({
 }
 
 // ── Feature row ──────────────────────────────────────────────────────────────
-function FeatureRow({ f, idx, members, isTester, expanded, isBacklogView, selected, onSelect, sprints, onMoveToSprint, onToggle, onUpdate, onDelete, onCreateIssue, onStartSession, busyStart, onGoToSession, model, refreshIssues, tagOptions = [], user }) {
+function FeatureRow({ f, idx, members, isTester, expanded, isBacklogView, canSend, selected, onSelect, sprints, onMoveToSprint, onToggle, onUpdate, onDelete, onCreateIssue, onStartSession, busyStart, onGoToSession, model, refreshIssues, tagOptions = [], user }) {
   const dev = devStatusMeta(f.dev_status)
   const upd = (patch) => onUpdate(f.id, patch)
   const [askJev, setAskJev] = useState(false)   // "Ask Jev to test" dialog for this feature
@@ -927,8 +930,8 @@ function FeatureRow({ f, idx, members, isTester, expanded, isBacklogView, select
       <tr className="group" style={{ verticalAlign: 'middle', backgroundColor: rowBg }}>
         <td className="px-2 py-2 whitespace-nowrap" style={cellBorder}>
           <div className="flex items-center gap-1">
-            {/* Backlog rows are selectable so several can be carried into a sprint at once. */}
-            {isBacklogView && !isTester && (
+            {/* Backlog / Ideas rows are selectable so several can be carried into a sprint at once. */}
+            {canSend && !isTester && (
               <input
                 type="checkbox"
                 checked={selected}
@@ -1019,11 +1022,9 @@ function FeatureRow({ f, idx, members, isTester, expanded, isBacklogView, select
         <td className="px-2 py-2 min-w-[180px]" style={cellBorder}><EditText value={f.qa_comments} onCommit={(v) => upd({ qa_comments: v })} placeholder="—" /></td>
         <td className="px-2 py-2 whitespace-nowrap" style={cellBorder}>
           <div className="flex items-center gap-1">
-            {!isTester && (
-              isBacklogView
-                // Supersedes the old restore-to-its-own-sprint icon: the list includes the
-                // sprint it came from, so "put it back" is still one pick.
-                ? (
+            {/* Supersedes the old restore-to-its-own-sprint icon: the list includes the
+                sprint it came from, so "put it back" is still one pick. */}
+            {!isTester && canSend && (
                   <select
                     value=""
                     onChange={(e) => { if (e.target.value) { onMoveToSprint(f.id, e.target.value) } }}
@@ -1037,8 +1038,9 @@ function FeatureRow({ f, idx, members, isTester, expanded, isBacklogView, select
                       <option key={s.id} value={s.id} style={{ color: 'var(--c-text)', backgroundColor: 'var(--c-surface)' }}>{s.name}</option>
                     ))}
                   </select>
-                )
-                : <button onClick={() => upd({ is_backlog: 1 })} title="Move to backlog" className="p-1 rounded cursor-pointer hover:bg-[var(--c-surface-2)] opacity-0 group-hover:opacity-100" style={{ color: 'var(--c-text-muted)' }}><Archive size={14} /></button>
+            )}
+            {!isTester && !isBacklogView && (
+                <button onClick={() => upd({ is_backlog: 1 })} title="Move to backlog" className="p-1 rounded cursor-pointer hover:bg-[var(--c-surface-2)] opacity-0 group-hover:opacity-100" style={{ color: 'var(--c-text-muted)' }}><Archive size={14} /></button>
             )}
             {!isTester && <button onClick={() => { if (confirm('Delete this feature?')) onDelete(f.id) }} title="Delete" className="p-1 rounded cursor-pointer hover:bg-[var(--c-surface-2)] opacity-0 group-hover:opacity-100" style={{ color: '#f87171' }}><Trash2 size={14} /></button>}
           </div>
