@@ -17,7 +17,7 @@ export const TABS = {
 };
 
 // Allowed values, mirrored from SprintBoard.jsx so the sheet matches the board.
-export const DEV_STATUS = ['todo', 'in_progress', 'dev_completed', 'done'];
+export const DEV_STATUS = ['todo', 'design_in_progress', 'design_completed', 'in_progress', 'dev_completed', 'done'];
 export const QA_STATUS = ['', 'testing', 'pass', 'fail'];
 export const TYPES = ['epic', 'feature', 'task', 'bug', 'improvement'];
 export const BUG_SEVERITY = ['normal', 'critical'];
@@ -95,7 +95,7 @@ const pick = (val, allowed, fallback) => {
 export const normalizeType = (v) => pick(v, TYPES, 'feature');
 export const normalizeDevStatus = (v) => {
     const raw = String(v ?? '').trim().toLowerCase().replace(/[\s-]+/g, '_');
-    const alias = { not_started: 'todo', to_do: 'todo', wip: 'in_progress', inprogress: 'in_progress', complete: 'done', completed: 'done', dev_complete: 'dev_completed' };
+    const alias = { not_started: 'todo', to_do: 'todo', wip: 'in_progress', inprogress: 'in_progress', complete: 'done', completed: 'done', dev_complete: 'dev_completed', in_progress_design: 'design_in_progress', 'in_progress_(design)': 'design_in_progress', completed_design: 'design_completed', 'completed_(design)': 'design_completed' };
     return pick(alias[raw] || raw, DEV_STATUS, 'todo');
 };
 export const normalizeQaStatus = (v) => {

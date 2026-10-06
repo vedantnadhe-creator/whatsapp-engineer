@@ -1136,7 +1136,7 @@ class SessionStore {
         const issue = this.getFeatureBySession(sessionId);
         if (!issue) return null;
         if (status === 'qa_pass') {
-            this.db.prepare(`UPDATE issues SET qa_status = 'pass', dev_status = CASE WHEN dev_status IN ('todo','in_progress') THEN 'dev_completed' ELSE dev_status END, status = 'completed', completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(issue.id);
+            this.db.prepare(`UPDATE issues SET qa_status = 'pass', dev_status = CASE WHEN dev_status IN ('todo','design_in_progress','design_completed','in_progress') THEN 'dev_completed' ELSE dev_status END, status = 'completed', completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(issue.id);
         } else if (status === 'dev_completed') {
             this.db.prepare(`UPDATE issues SET dev_status = 'dev_completed', status = 'in_progress', updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(issue.id);
         } else { // in_progress
@@ -1303,7 +1303,7 @@ class SessionStore {
      * the disagreement gets mentioned instead of hidden.
      */
     getIssuesAssignedTo(userId, { status = 'active' } = {}) {
-        const where = status === 'all' ? '' : "AND i.dev_status IN ('todo', 'in_progress')";
+        const where = status === 'all' ? '' : "AND i.dev_status IN ('todo', 'design_in_progress', 'design_completed', 'in_progress')";
         return this.db.prepare(
             `SELECT i.id, i.title, i.description, i.type, i.status, i.dev_status, i.priority, i.deadline,
                     i.open_bugs, i.critical_bugs, i.is_backlog, i.sprint_id,
@@ -1450,7 +1450,7 @@ class SessionStore {
         ).all(sprintId);
         const total = rows.length;
         const done = rows.filter(r => r.dev_status === 'done').length;
-        const inProgress = rows.filter(r => r.dev_status === 'in_progress' || r.dev_status === 'dev_completed').length;
+        const inProgress = rows.filter(r => ['design_in_progress', 'design_completed', 'in_progress', 'dev_completed'].includes(r.dev_status)).length;
         const todo = total - done - inProgress;
         // Sprint % = average of each feature's lifecycle completion (QA-driven), not raw Dev%.
         const avgPercent = total ? Math.round(rows.reduce((s, r) => s + this.featureCompletion(r), 0) / total) : 0;

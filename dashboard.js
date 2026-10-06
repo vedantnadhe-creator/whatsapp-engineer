@@ -2426,7 +2426,7 @@ The user may ask follow-up questions about the changelog — answer based on the
             if (updates.status === 'completed') updates.completed_at = new Date().toISOString();
             // Keep the kanban status in sync when a manager flips Dev Status on the sprint board.
             if (updates.dev_status !== undefined) {
-                const map = { todo: 'todo', in_progress: 'in_progress', dev_completed: 'in_progress', done: 'completed' };
+                const map = { todo: 'todo', design_in_progress: 'in_progress', design_completed: 'in_progress', in_progress: 'in_progress', dev_completed: 'in_progress', done: 'completed' };
                 updates.status = map[updates.dev_status] || updates.status || 'todo';
                 if (updates.dev_status === 'done') {
                     updates.completed_at = new Date().toISOString();
@@ -2444,7 +2444,7 @@ The user may ask follow-up questions about the changelog — answer based on the
 
             // Project doc: sprint moves and PRDs are milestones the next session needs.
             if (updates.dev_status !== undefined) {
-                const label = { todo: 'To Do', in_progress: 'In Progress', dev_completed: 'Dev Completed', done: 'Done' }[updates.dev_status] || updates.dev_status;
+                const label = { todo: 'To Do', design_in_progress: 'In Progress (Design)', design_completed: 'Completed (Design)', in_progress: 'In Progress', dev_completed: 'Dev Completed', done: 'Done' }[updates.dev_status] || updates.dev_status;
                 logIssueEvent(store, issue, `📋 "${issue.title}" → ${label}`);
             }
             if (updates.prd_url) logIssueEvent(store, issue, `📄 PRD for "${issue.title}": ${updates.prd_url}`);

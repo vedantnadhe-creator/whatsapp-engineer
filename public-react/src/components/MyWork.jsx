@@ -10,7 +10,7 @@ import { MultiPillSelect } from './SprintBoard'
 // Sort keys for "Assigned to me". Sprints compare naturally ("Sprint 9" < "Sprint 41");
 // rows with no sprint always sort last, whichever way the column is sorted.
 const PRIORITY_RANK = { urgent: 0, high: 1, medium: 2, low: 3 }
-const DEV_RANK = { todo: 0, in_progress: 1, dev_completed: 2 }
+const DEV_RANK = { todo: 0, design_in_progress: 1, design_completed: 2, in_progress: 3, dev_completed: 4 }
 const SORTS = {
   title: (a, b) => a.title.localeCompare(b.title),
   person: (a, b) => (a.user_name || '').localeCompare(b.user_name || ''),

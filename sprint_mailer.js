@@ -24,6 +24,8 @@ const FROM = `"OliBot Sprint Status" <${config.SMTP_USER}>`;
 
 const DEV_STATUS = {
     todo: { label: 'To Do', color: '#94a3b8' },
+    design_in_progress: { label: 'In Progress (Design)', color: '#c084fc' },
+    design_completed: { label: 'Completed (Design)', color: '#8b5cf6' },
     in_progress: { label: 'In Progress', color: '#f59e0b' },
     dev_completed: { label: 'Dev Completed', color: '#3b82f6' },
     done: { label: 'Done', color: '#22c55e' },

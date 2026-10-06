@@ -13,6 +13,9 @@ export const memberName = (m) => m?.display_name || m?.displayName || (m?.email 
 // ── Option sets ────────────────────────────────────────────────────────────
 export const DEV_STATUS = [
   { v: 'todo', label: 'To Do', color: 'var(--c-text-muted)' },
+  // Design runs before dev; both design stages count as 0% complete, like To Do.
+  { v: 'design_in_progress', label: 'In Progress (Design)', color: '#c084fc' },
+  { v: 'design_completed', label: 'Completed (Design)', color: '#8b5cf6' },
   { v: 'in_progress', label: 'In Progress', color: '#f59e0b' },
   { v: 'dev_completed', label: 'Dev Completed', color: '#3b82f6' },
   { v: 'done', label: 'Done', color: '#22c55e' },
